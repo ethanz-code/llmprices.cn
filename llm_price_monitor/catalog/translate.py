@@ -29,7 +29,7 @@ BATCH_SIZE = 30
 
 
 def ai_available(config: AIConfig) -> bool:
-    return bool(config.enabled and config.base_url and config.api_key and config.models)
+    return bool(config.base_url and config.api_key and config.models)
 
 
 def chat_json(config: AIConfig, system: str, user: str, client: httpx.Client | None) -> dict[str, Any]:

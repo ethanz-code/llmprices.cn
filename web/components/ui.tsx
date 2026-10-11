@@ -271,10 +271,13 @@ export function Check({
   disabled?: boolean;
   children: ReactNode;
 }) {
+  const autoId = useId();
   return (
-    <label className={`check${disabled ? " is-disabled" : ""}`}>
+    <label className={`check${disabled ? " is-disabled" : ""}`} htmlFor={autoId}>
       <input
         type="checkbox"
+        id={autoId}
+        name={autoId}
         checked={checked}
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
@@ -298,6 +301,8 @@ export function Sel({
   style,
   title,
   ariaLabel,
+  id,
+  name,
 }: {
   value?: string;
   defaultValue?: string;
@@ -306,12 +311,19 @@ export function Sel({
   disabled?: boolean;
   style?: React.CSSProperties;
   title?: string;
-  /** 无可见标签时提供可访问名称（同时消除浏览器"表单字段缺 id/name"提示） */
+  /** 无可见标签时提供可访问名称 */
   ariaLabel?: string;
+  /** 显式指定字段 id；缺省时自动生成，保证表单字段始终可寻址（消除浏览器 id/name 提示） */
+  id?: string;
+  name?: string;
 }) {
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
     <span className="sel-wrap" style={style}>
       <select
+        id={fieldId}
+        name={name ?? fieldId}
         className="sel"
         title={title}
         aria-label={ariaLabel}
@@ -433,6 +445,8 @@ export function Input({
   autoComplete,
   ariaLabel,
   title,
+  id,
+  name,
 }: {
   value?: string;
   defaultValue?: string;
@@ -448,12 +462,19 @@ export function Input({
   autoComplete?: string;
   ariaLabel?: string;
   title?: string;
+  /** 显式指定字段 id；缺省时自动生成，保证表单字段始终可寻址（消除浏览器 id/name 提示） */
+  id?: string;
+  name?: string;
 }) {
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
     <span className="input-wrap" style={style}>
       {prefix}
       <input
         ref={inputRef}
+        id={fieldId}
+        name={name ?? fieldId}
         className="input"
         value={value}
         defaultValue={defaultValue}

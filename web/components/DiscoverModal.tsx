@@ -365,14 +365,15 @@ export function DiscoverModal({
                       setSelected(new Set());
                     }}
                     style={{
-                      border: "1px solid var(--border)",
+                      border: "none",
                       borderRadius: 999,
                       padding: "4px 12px",
                       fontSize: 12.5,
                       cursor: "pointer",
-                      background: active ? "var(--accent-text)" : "transparent",
-                      color: active ? "var(--bg, #fff)" : "var(--text-2)",
-                      borderColor: active ? "var(--accent-text)" : "var(--border)",
+                      background: active
+                        ? "var(--accent-text)"
+                        : "color-mix(in srgb, var(--text) 6%, transparent)",
+                      color: active ? "var(--accent-contrast)" : "var(--text-2)",
                     }}
                   >
                     {item.label}
@@ -387,7 +388,6 @@ export function DiscoverModal({
             style={{
               borderRadius: 8,
               overflow: "hidden",
-              border: "1px solid var(--border)",
               maxHeight: "min(48vh, 430px)",
               overflowY: "auto",
             }}

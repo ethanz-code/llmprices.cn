@@ -47,7 +47,7 @@ def ai_stream_fallback(config: AIConfig, system: str, user: str, *, max_tokens: 
             except httpx.HTTPStatusError as exc:
                 action, error_text = _stream_status_failure(
                     exc, model=model, scene=scene, duration_ms=int((time.monotonic() - started) * 1000),
-                    thinking_flip_possible=config.enable_thinking is False, enable_thinking=enable_thinking,
+                    thinking_flip_possible=True, enable_thinking=enable_thinking,
                     prompt_excerpt=user,
                 )
                 if action == "retry":
@@ -327,7 +327,7 @@ def ai_stream_messages_fallback(
             except httpx.HTTPStatusError as exc:
                 action, error_text = _stream_status_failure(
                     exc, model=model, scene=scene, duration_ms=int((time.monotonic() - started) * 1000),
-                    thinking_flip_possible=config.enable_thinking is False, enable_thinking=enable_thinking,
+                    thinking_flip_possible=True, enable_thinking=enable_thinking,
                     prompt_excerpt=prompt_excerpt, on_model_failure=notify_failure,
                 )
                 if action == "retry":
@@ -344,7 +344,7 @@ def ai_stream_messages_fallback(
                     log_ai_request(scene=scene, model=model, status="error", duration_ms=duration_ms, error="流式输出中断｜" + error_text, prompt_excerpt=prompt_excerpt)
                     notify_failure(model, "流式输出中断｜" + error_text)
                     raise AIExtractionError(f"流式输出中断：{error_text}") from exc
-                if "enable_thinking" in error_text and config.enable_thinking is False and enable_thinking is None:
+                if "enable_thinking" in error_text and enable_thinking is None:
                     learn_thinking_required(model)
                     log_ai_request(scene=scene, model=model, status="param_retry", duration_ms=duration_ms, error="模型要求开启思考，已自动开启并用同一模型重试｜" + error_text, prompt_excerpt=prompt_excerpt)
                     continue
@@ -369,7 +369,7 @@ def ai_stream_messages_fallback(
 def ai_stream(config: AIConfig, model: str, system: str, user: str, *, max_tokens: int | None = None, enable_thinking: bool | None = None, timeout: float | None = None) -> Iterator[str]:
     """流式对话：逐段产出模型输出文本；四种接口结构都走各自的 stream 模式，HTTP 错误原样抛出。
 
-    enable_thinking 供换模型重试链路覆盖配置值（翻参重试）；None 表示按配置，且只对带该参数的接口结构生效。
+    enable_thinking 供换模型重试链路覆盖请求体里的值（翻参重试）；None 表示按请求体默认值，且只对带该参数的接口结构生效。
     timeout 覆盖单次请求超时，不传用 config.timeout。
     """
     url, headers, body = ai_request(config, model, system, user, max_tokens=max_tokens, json_mode=False)

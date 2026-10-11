@@ -32,6 +32,8 @@ from .errors import (
     provider_error_detail,
 )
 from .state import (
+    AI_MAX_INPUT_CHARS,
+    AI_MAX_TOKENS,
     MIN_USABLE_MAX_TOKENS,
     AiLogHook,
     _MODEL_MAX_TOKENS_LIMIT,
@@ -90,6 +92,8 @@ __all__ = [
     "AIBudgetExhaustedError",
     "AIPriceExtractor",
     "AI_EXTRACT_BATCH_SIZE",
+    "AI_MAX_INPUT_CHARS",
+    "AI_MAX_TOKENS",
     "AiLogHook",
     "EVIDENCE_CHAR_LADDER",
     "MIN_USABLE_MAX_TOKENS",

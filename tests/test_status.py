@@ -113,7 +113,7 @@ def test_fetch_site_status_falls_back_to_ai_for_plain_text():
             return httpx.Response(200, text="<html><body><script>var s = '维护中';</script></body></html>")
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"items": [{"name": "渠道A", "status": "维护中"}]})}}]})
 
-    ai = AIConfig(enabled=True, base_url="https://ai.test/v1", models=("test-model",), api_key="k")
+    ai = AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k")
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         record = fetch_site_status(spec, client, 10.0, "ua/1", ai=ai)
     assert record["parse"] == "ai"
@@ -131,7 +131,7 @@ def test_ai_extract_status_sends_status_prompt_and_parses_json():
 
     cache: dict[str, dict] = {}
     ai = AIConfig(
-        enabled=True, base_url="https://ai.test/v1", models=("test-model",), api_key="k",
+        base_url="https://ai.test/v1", models=("test-model",), api_key="k",
         cache=SimpleNamespace(cache_get=cache.get, cache_put=lambda key, value: cache.update({key: value})),
     )
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -156,7 +156,7 @@ def test_ai_extract_status_falls_back_to_next_model(monkeypatch):
             return httpx.Response(500, json={"error": {"message": "boom"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"items": []}'}}]})
 
-    ai = AIConfig(enabled=True, base_url="https://ai.test/v1", models=("bad-model", "good-model"), api_key="k")
+    ai = AIConfig(base_url="https://ai.test/v1", models=("bad-model", "good-model"), api_key="k")
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         result = ai_extract_status(ai, "<html>渠道全部正常</html>", "https://demo.test/status", client=client)
     assert result == {"items": []}
@@ -420,7 +420,7 @@ def test_webapi_status_endpoints(tmp_path: Path, monkeypatch):
     config_path.write_text(json.dumps({
         # 关闭后台调度：测试环境不发起任何定时采集与官方价同步
         "settings": {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0}},
-        "ai": {"enabled": False},
+        "ai": {},
         "sites": [_site_raw_config(None)],
     }), encoding="utf-8")
 

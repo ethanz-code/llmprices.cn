@@ -1,9 +1,6 @@
 """独立 AI 任务：连通性体检（ping）、公告正文提取、token 字段分析。"""
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import httpx
 
 import llm_price_monitor.ai as _ai
@@ -12,7 +9,7 @@ from .api_format import ai_content, ai_request, json_content
 from .client import ai_http_client
 from .errors import AIExtractionError
 from .pool import _thinking_restricted
-from .state import learn_thinking_required
+from .state import AI_MAX_INPUT_CHARS, learn_thinking_required
 
 def ping_model(config: AIConfig, model: str, *, client: httpx.Client | None = None, timeout: float | None = None) -> str:
     """发送一次最小对话请求验证 AI 配置连通性，返回模型回复文本；HTTP/网络错误原样抛出。
@@ -43,8 +40,8 @@ def infer_token_fields(config: AIConfig, sample: str) -> dict[str, str]:
     sample = sample.strip()
     if not config.base_url or not config.models:
         raise AIExtractionError("AI 未配置，无法分析响应案例")
-    if len(sample) > config.max_input_chars:
-        sample = sample[: config.max_input_chars]
+    if len(sample) > AI_MAX_INPUT_CHARS:
+        sample = sample[:AI_MAX_INPUT_CHARS]
     system = (
         "你是接口响应结构分析器。用户会贴一段 token 续签接口的响应 JSON 案例。"
         "找出新的访问令牌（access_token / token / id_token 之类）和刷新令牌（refresh_token 之类）各自所在的字段路径，"
@@ -80,7 +77,7 @@ def extract_notice_content(config: AIConfig, raw_text: str, *, client: httpx.Cli
         "只能使用原始响应中出现的内容，禁止凭常识补全。站点没有发布任何公告时，content 返回空字符串。"
         '必须只返回 JSON：{"content": "公告正文"}，不要解释。'
     )
-    user = f"公告接口原始响应：\n{text[:config.max_input_chars]}"
+    user = f"公告接口原始响应：\n{text[:AI_MAX_INPUT_CHARS]}"
     own = client is None
     client = client or ai_http_client(config)
     try:

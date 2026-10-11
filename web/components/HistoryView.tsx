@@ -19,9 +19,9 @@ function KindTag({ kind }: { kind: string }) {
 
 /** 卡片上的小圆角按钮："详情""N 个分组"共用。 */
 const pillStyle: React.CSSProperties = {
-  border: "1px solid var(--border)",
+  border: "none",
   borderRadius: 999,
-  background: "transparent",
+  background: "color-mix(in srgb, var(--text) 6%, transparent)",
   color: "var(--text-2)",
   fontSize: 12,
   padding: "1px 10px",

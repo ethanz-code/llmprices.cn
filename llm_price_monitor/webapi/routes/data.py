@@ -49,7 +49,7 @@ def build_router(store: Store) -> APIRouter:
         site_completeness = {
             site.id: sum(
                 (
-                    bool(site.auth_token or site.cookie or site.cookies),
+                    bool(site.auth_token),
                     bool(site.networks),
                 )
             )
@@ -106,7 +106,6 @@ def build_router(store: Store) -> APIRouter:
             "sites": [
                 {
                     "id": site.id,
-                    "adapter": site.adapter,
                     "models": [target.name for target in site.models],
                     "url": site.network.get("url"),
                     "enabled": site.enabled,

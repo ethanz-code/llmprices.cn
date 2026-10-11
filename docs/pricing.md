@@ -256,10 +256,8 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 
 ```json
 {
-  "enabled": true,
   "base_url": "https://.../compatible-mode/v1",
   "models": ["qwen3.8-flash"],
-  "max_tokens": 16000,
   "price_model": "qwen3.8-flash"
 }
 ```
@@ -276,8 +274,8 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 | 字段 | 说明 |
 | --- | --- |
 | `id` | 站点标识 |
-| `adapter` | 采集方式，只有 `standard`；旧值 `browser` / `network` / `rate_base` 载入时自动归一为 `standard`（rate_base 双地址退化为单地址） |
 | `models` | 已废弃：目标模型统一在「检测模型」（`settings.monitor_models`）配置，站点级字段加载时静默丢弃 |
+| `adapter` / `auth_header` / `auth_prefix` / `cookie` / `cookies` | 已废弃：加载与保存时静默丢弃。采集只有一套标准适配器；注入头名固定 `Authorization: Bearer`（自定义头走 `auth_inject`）；Cookie 统一写 `request_headers.Cookie` 或用 `auth_inject`。旧 `model_list_url` 会收编为 `network.url` |
 | `network.url` | 价格接口完整 URL |
 | `network.ratio_url` | 可选倍率接口，返回 `{pricing: [{provider, model_display, rate}]}`；命中内嵌基准价表后按 实售价 = 基准价(USD) × rate 折算（模型级倍率优先，缺失回退厂商级），输出人民币（CNY） |
 | `network.params` / `network.headers` | 请求细节；header 值支持 `${ENV_VAR}` 展开 |
@@ -296,7 +294,7 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 
 ### 站点认证与续签
 
-- `auth_token`：站点级认证凭证，实际怎么带进采集请求由 `auth_inject` 决定；没配时按老行为注入 `Authorization: Bearer <token>`（`auth_header` / `auth_prefix` 可改）。各接口 headers 里不用手写认证头——写死会覆盖注入的凭证且换新追不上，保存认证时会被自动移除。
+- `auth_token`：站点级认证凭证，实际怎么带进采集请求由 `auth_inject` 决定；没配时按老行为注入 `Authorization: Bearer <token>`（注入头名与前缀固定，自定义头走 `auth_inject`）。各接口 headers 里不用手写认证头——写死会覆盖注入的凭证且换新追不上，保存认证时会被自动移除。
 - `auth_inject`：凭证注入规则，决定 token 以什么头送到价格、渠道状态、公告三处请求（管理面板里是「认证与续签 → 凭证注入」三行）。值里可引用 `${access_token}` / `${refresh_token}`，续签换新后自动展开成新值；头名填 `cookie` 就是塞进 Cookie；没配的处不注入：
 
   ```json
@@ -346,7 +344,7 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 
 AI 兜底并不是"每个响应都丢给 AI 分析"：
 
-- 每站每次采集**最多调用一次** AI；证据先按目标模型名递归预筛（只留含目标模型的对象），再截断到 `max_input_chars`
+- 每站每次采集**最多调用一次** AI；证据先按目标模型名递归预筛（只留含目标模型的对象），再截断到固定输入上限（6 万字符）
 - 同样的证据有缓存命中，不重复调用；管理面板"测试"默认干跑，完全不调 AI、零费用
 - 结果过三重校验，不闭环就降级：模型名必须出现在证据中（否则 `unavailable`）；`confirmed` 要求网络证据与价格数值同时闭环（否则 `candidate`）；`rule_only` 必须携带真实计费规则（否则视为 `unavailable`）
 

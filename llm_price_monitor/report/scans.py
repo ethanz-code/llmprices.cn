@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from llm_price_monitor import tasklog
-from llm_price_monitor.adapters import ADAPTERS
+from llm_price_monitor.adapters import NetworkAdapter
 from llm_price_monitor.config import AuthRequiredError, MonitorConfig, PriceMonitorError, SiteSpec
 from llm_price_monitor.status import diff_status
 from llm_price_monitor.store import Store, latest_key, latest_site_prefix, split_latest_key
@@ -132,12 +132,7 @@ def _scan_prices(
     for done_count, spec in enumerate(enabled_specs, 1):
         # 每站开始即落一行：整轮拖长时能直接看出卡在哪个站、卡在站点内哪一步之后
         tasklog.emit(f"[{spec.id}] 开始采集（第 {done_count}/{enabled_count} 站）")
-        adapter = ADAPTERS.get(spec.adapter)
-        if adapter is None:
-            errors.append({"site_id": spec.id, "error": f"未知适配器: {spec.adapter}"})
-            site_status[spec.id] = {"status": "error", "error": f"未知适配器: {spec.adapter}", "checked_at": time.time()}
-            tasklog.emit(f"[{spec.id}] 价格采集失败：未知适配器 {spec.adapter}", "error")
-            continue
+        adapter = NetworkAdapter()
         # 多地址站点：主地址 + networks 附加地址依次采集；同一模型重复命中时主地址优先
         # 分组白名单：status.groups 配置了就只保留选中分组的记录（含续签重采路径）
         whitelist = [str(item) for item in spec.status["groups"]] if isinstance(spec.status.get("groups"), list) else []

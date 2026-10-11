@@ -19,10 +19,9 @@ from llm_price_monitor.report import is_transport_error
 
 _log = logging.getLogger("llm_price_monitor.webapi.tasks")
 
-# 持久化的任务条数与单任务日志行数默认上限：可在系统设置里用 max_task_runs / max_task_log_lines 覆盖；
-# max_task_runs 是清理界限，超出即淘汰最旧任务
-DEFAULT_MAX_TASK_RUNS = 100
-DEFAULT_MAX_LOG_LINES = 500
+# 持久化的任务条数与单任务日志行数上限：MAX_TASK_RUNS 是清理界限，超出即淘汰最旧任务
+MAX_TASK_RUNS = 100
+MAX_TASK_LOG_LINES = 500
 
 # 落盘时保留完整日志的最近任务数：快照最多留 100 条任务、每条日志可到 500 行，
 # 全量落盘会让 tasks 文档膨胀到十几 MB；更早的任务只留一条归档说明（内存里日志不裁）
@@ -42,17 +41,6 @@ _JOURNAL_MSG_MAX = 500
 _journal: list[dict[str, Any]] = []
 
 
-def _limits() -> tuple[int, int]:
-    """当前生效的任务条数与日志行数上限：读 store 里的系统设置，未配置时回默认值。"""
-    store = _store
-    if store is None:
-        return DEFAULT_MAX_TASK_RUNS, DEFAULT_MAX_LOG_LINES
-    raw = store.get_document("settings") or {}
-    max_runs = raw.get("max_task_runs")
-    max_logs = raw.get("max_task_log_lines")
-    runs = max_runs if isinstance(max_runs, int) and not isinstance(max_runs, bool) and max_runs >= 1 else DEFAULT_MAX_TASK_RUNS
-    logs = max_logs if isinstance(max_logs, int) and not isinstance(max_logs, bool) and max_logs >= 1 else DEFAULT_MAX_LOG_LINES
-    return runs, logs
 
 # 全量采集与三类拆分采集写同一份价格快照/状态时序，彼此互斥（读-改-写不能并发）；
 # 单站测试采集（collect-test）不进组：只写本站数据行，允许与全局采集并行（共享文档
@@ -114,7 +102,7 @@ def _persist() -> None:
     if store is None:
         return
     with _lock:
-        max_runs, _ = _limits()
+        max_runs = MAX_TASK_RUNS
         items = sorted(_tasks.values(), key=lambda item: str(item["started_at"]), reverse=True)
         snapshot = [dict(item, logs=list(item["logs"])) for item in items[:max_runs]]
         for index, entry in enumerate(snapshot):
@@ -142,7 +130,7 @@ def _append_log(task_id: str, message: str, level: str) -> None:
         entry = _tasks.get(task_id)
         if entry is None:
             return
-        _, max_lines = _limits()
+        max_lines = MAX_TASK_LOG_LINES
         logs = entry["logs"]
         if len(logs) >= max_lines and not entry.get("rolled"):
             # 滚动窗口前先插一条提示，避免长任务后半段日志静默丢失却无迹可查

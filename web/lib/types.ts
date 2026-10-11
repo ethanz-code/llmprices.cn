@@ -223,7 +223,6 @@ export interface DiscoveryData {
 
 export interface SiteMeta {
   id: string;
-  adapter: string;
   models: string[];
   url?: string;
   enabled: boolean;
@@ -246,14 +245,9 @@ interface NetworkEndpoint {
 /** 站点完整配置（与 config/default-seed.json 的 sites 段同构，存储于 SQLite sites 表）。 */
 export interface SiteConfig {
   id: string;
-  adapter?: string;
   /** 已废弃：目标模型统一在 settings.monitor_models（站点管理页顶部）配置 */
   models?: string[];
   auth_token?: string | null;
-  auth_header?: string | null;
-  auth_prefix?: string | null;
-  cookie?: string | null;
-  cookies?: Record<string, string> | null;
   network?: {
     url?: string | null;
     /** 倍率接口：返回 {pricing: [{provider, model_display, rate}]}，基准价 × rate 折算实售价。

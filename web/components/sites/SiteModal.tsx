@@ -88,7 +88,6 @@ function setOptionalDict(target: Record<string, unknown>, key: string, text: str
 function applyForm(base: SiteConfig, form: SiteFormState): SiteConfig {
   const next: SiteConfig = {
     ...base,
-    adapter: "standard",
     id: form.id.trim(),
     network: networkFromForm(base, form),
   };
@@ -123,17 +122,14 @@ function applyForm(base: SiteConfig, form: SiteFormState): SiteConfig {
  *  完全没配过才按老行为回显（Authorization: Bearer <access token>），且站点真有 token 才回显。
  *  没配认证的站点什么都不注入，也就不显示规则，免得看到一条永远发不出去的头。 */
 function injectFromConfig(
-  config: Pick<SiteConfig, "auth_token" | "auth_header" | "auth_prefix" | "auth_inject">,
+  config: Pick<SiteConfig, "auth_token" | "auth_inject">,
 ): Record<InjectTarget, InjectRule> {
   const hasToken = typeof config.auth_token === "string" && config.auth_token.trim() !== "";
   const hasInjectRules =
     config.auth_inject !== null && typeof config.auth_inject === "object" && Object.keys(config.auth_inject).length > 0;
   const legacy: InjectRule | null =
     hasToken && !hasInjectRules
-      ? {
-          header: typeof config.auth_header === "string" && config.auth_header.trim() ? config.auth_header.trim() : "Authorization",
-          value: `${typeof config.auth_prefix === "string" ? config.auth_prefix : "Bearer "}\${access_token}`,
-        }
+      ? { header: "Authorization", value: `Bearer \${access_token}` }
       : null;
   const none: InjectRule = { header: "", value: "" };
   return Object.fromEntries(
@@ -261,14 +257,11 @@ function shortenUrlText(text: string, max = 46): string {
 /** 表单已覆盖的顶层字段：之外的进「仅在 JSON 里维护」清单，让"配了但表单没输入框"的配置在界面上看得见 */
 const FORM_COVERED_KEYS = new Set([
   "id",
-  "adapter",
   "enabled",
   "network",
   "status",
   "notice",
   "auth_token",
-  "auth_header",
-  "auth_prefix",
   "token_refresh",
   "auth_inject",
   "headless",

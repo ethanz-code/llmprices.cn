@@ -121,7 +121,7 @@ export function ShareSiteButton({
             <img
               src={imgUrl}
               alt={`${siteName} 实时状况分享图`}
-              style={{ width: "100%", borderRadius: 10, border: "1px solid var(--border)" }}
+              style={{ width: "100%", borderRadius: 10 }}
             />
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
               <Btn onClick={() => setOpen(false)}>关闭</Btn>

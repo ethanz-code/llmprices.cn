@@ -43,7 +43,7 @@ NEWAPI_ONEAPI_PRICING_GUIDANCE = """你正在分析中转站的价格接口响�
 
 # 证据超长被供应商拒绝时，按阶梯收紧单条证据文本上限逐级重试；None 表示不限制。
 EVIDENCE_CHAR_LADDER: tuple[int | None, ...] = (None, 240_000, 96_000, 40_000, 16_000)
-# 抽取按模型分批的下限：实际批大小随 config.max_tokens 折算（1200 tokens/条安全余量，
+# 抽取按模型分批的下限：实际批大小随输出预算 AI_MAX_TOKENS 折算（1200 tokens/条安全余量，
 # 4000 预算=4/批、16000=12/批），见 extract()。批太大输出会在 max_tokens 中途截断成
 # 非法 JSON，批太小则调用次数与重复系统提示翻倍。
 AI_EXTRACT_BATCH_SIZE = 4
@@ -363,8 +363,6 @@ expected_models：
         expected_models: list[str] | None = None,
         page_sources: list[dict[str, str]] | None = None,
     ) -> list[PriceRecord]:
-        if not self.config.enabled:
-            raise AIExtractionError("价格监控 AI 已禁用")
         ai_model = self.config.pick_model()
         if not self.config.base_url or not ai_model:
             raise AIExtractionError("配置文件 ai.base_url 或 ai.models 未配置")
@@ -376,7 +374,7 @@ expected_models：
         # 批大小随输出预算走：一条完整记录约 300~700 tokens（分组多更肥），按 1200/条折减给
         # 思考型模型留余量——max_tokens=4000 → 4 条/批（旧默认），16000 → 12 条/批；
         # 批越大，每批重复发送的系统提示与规则（数 K tokens）和调用开销省得越多
-        batch_size = max(AI_EXTRACT_BATCH_SIZE, min(12, int(self.config.max_tokens or 16000) // 1200))
+        batch_size = max(AI_EXTRACT_BATCH_SIZE, min(12, _ai.AI_MAX_TOKENS // 1200))
         # 整轮预算按并行波次折算再封顶：批间 AI_EXTRACT_CONCURRENCY 路并行，墙钟预算
         # 是「批次数 × 600s」串行口径的 1/并发数；封顶保证硬超时（900s）不抢先作废整站
         batch_count = max(1, -(-len(expected) // batch_size))
@@ -458,8 +456,6 @@ expected_models：
         不值得烧一次 AI），解析或校验失败抛 AIExtractionError，调用方按既定设计回落
         无别名的直采定价。
         """
-        if not self.config.enabled:
-            raise AIExtractionError("价格监控 AI 已禁用")
         if not self.config.base_url or not self.config.pick_model():
             raise AIExtractionError("配置文件 ai.base_url 或 ai.models 未配置")
         expected = [name for name in dict.fromkeys(expected_models or [target.name for target in spec.models]) if name]

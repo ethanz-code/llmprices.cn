@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
 from collections.abc import Iterator
 from dataclasses import replace
@@ -595,7 +594,7 @@ def build_router(store: Store) -> APIRouter:
             return False, ""
         config = ai_from_raw(raw, cache=None)
         model = config.pick_model()
-        if config.enabled is False or not config.base_url or not model:
+        if not config.base_url or not model:
             return False, ""
         return True, model
 
@@ -617,28 +616,6 @@ def build_router(store: Store) -> APIRouter:
             return
         store.record_quota(ip, time.strftime("%Y-%m-%d"))
 
-    # 每 IP 每小时限速的滑动窗口：分类与回答都在烧 LLM 调用，日限额之外再挡高频刷请求
-    ask_hits: dict[str, list[float]] = {}
-    ask_hits_lock = threading.Lock()
-
-    def throttle(request: Request) -> None:
-        """每 IP 每小时提问上限：settings.assistant_hourly_limit（默认 10，0 表示不限制），超出直接 429。"""
-        limit = settings_from_raw(store.get_document("settings") or {}, resolve_env=False).assistant_hourly_limit
-        if limit <= 0:
-            return
-        ip = client_ip(request)
-        now = time.time()
-        with ask_hits_lock:  # 同步路由跑线程池，读-判-写必须整体原子
-            if len(ask_hits) > 1024:  # 时间窗只进不出，攒大了压缩一次：窗口内已无记录的 IP 直接清掉
-                alive = {key: [hit for hit in hits if now - hit < 3600] for key, hits in ask_hits.items()}
-                ask_hits.clear()
-                ask_hits.update({key: hits for key, hits in alive.items() if hits})
-            recent = [t for t in ask_hits.get(ip, []) if now - t < 3600]
-            if len(recent) >= limit:
-                raise HTTPException(status_code=429, detail="这一小时的提问次数用完了，请稍后再试")
-            recent.append(now)
-            ask_hits[ip] = recent
-
     @router.get("/api/assistant/status")
     def status() -> dict[str, Any]:
         """前端据此决定是否显示 AI 助手入口。"""
@@ -656,14 +633,13 @@ def build_router(store: Store) -> APIRouter:
             return "data"
 
     def ask_preflight(request: Request, body: AskBody, question: str) -> tuple[str, list[HistoryTurn], Any, str]:
-        """ask 与 ask_stream 共用的前置链：校验→限速→日配额→AI 可用→前置分类。
+        """ask 与 ask_stream 共用的前置链：校验→日配额→AI 可用→前置分类。
 
         配额只查不计数，回答成功后由各端点自行 record_quota；
         返回 (分类动作, 会话轮次, AI 配置, 客户端 IP)。
         """
         if not question:
             raise HTTPException(status_code=400, detail="问题不能为空")
-        throttle(request)
         ip = client_ip(request)
         consume_quota(ip)  # 放在 gate 之前，配额用完就不再烧分类调用
         available, _ = ai_ready()

@@ -141,14 +141,15 @@ export function DiscoverTable({ data }: { data: DiscoveryData }) {
                 aria-pressed={active}
                 onClick={() => setFilter(item.key)}
                 style={{
-                  border: "1px solid var(--border)",
+                  border: "none",
                   borderRadius: 999,
                   padding: "5px 14px",
                   fontSize: 13,
                   cursor: "pointer",
-                  background: active ? "var(--accent-text)" : "transparent",
-                  color: active ? "var(--bg, #fff)" : "var(--text-2)",
-                  borderColor: active ? "var(--accent-text)" : "var(--border)",
+                  background: active
+                    ? "var(--accent-text)"
+                    : "color-mix(in srgb, var(--text) 6%, transparent)",
+                  color: active ? "var(--accent-contrast)" : "var(--text-2)",
                 }}
               >
                 {item.label}

@@ -17,6 +17,7 @@ import httpx
 from llm_price_monitor.adapters import build_request_kwargs, http_error_message, resolve_endpoint
 from llm_price_monitor.timeline import TIMELINE_KEYS
 from llm_price_monitor.ai import (
+    AI_MAX_INPUT_CHARS,
     AIExtractionError,
     fit_text,
     ai_content,
@@ -207,7 +208,7 @@ def ai_extract_status(
 页面地址：{url}
 
 网页内容：
-{fit_text(text, config.max_input_chars)}"""
+{fit_text(text, AI_MAX_INPUT_CHARS)}"""
     own = client is None
     client = client or ai_http_client(config)
     try:

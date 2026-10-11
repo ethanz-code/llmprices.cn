@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from llm_price_monitor.adapters import ADAPTERS, NetworkAdapter, headers as _headers, network_pricing_records as _network_pricing_records, parse_base_price_entries
+from llm_price_monitor.adapters import NetworkAdapter, headers as _headers, network_pricing_records as _network_pricing_records, parse_base_price_entries
 from llm_price_monitor.ai import (
     AIExtractionError,
     AIPriceExtractor,
@@ -20,9 +20,9 @@ from llm_price_monitor.ai import (
 )
 from llm_price_monitor.config import AIConfig, ModelTarget, PriceMonitorError, SiteSpec, load_config, sites_from_raw
 from llm_price_monitor.evidence import decode_response_body as _decode_response_body, is_preferred_response_url as _is_preferred_response_url, repair_mojibake as _repair_mojibake, slim_pricing_payload as _slim_pricing_payload, target_page_text as _target_page_text
-from llm_price_monitor.report import GROUP_REMOVED_MISSES, _persist_scan_results, classify, fingerprint, record_dict, run_once, summary_row as _summary_row
+from llm_price_monitor.report import GROUP_REMOVED_MISSES, _persist_scan_results, classify, fingerprint, record_dict, run_once
 from llm_price_monitor.store import Store
-from llm_price_monitor.useragent import BROWSER_USER_AGENTS, choose_user_agent
+from llm_price_monitor.useragent import DEFAULT_BROWSER_USER_AGENT, choose_user_agent
 from llm_price_monitor.tracker import PriceRecord
 
 
@@ -174,7 +174,6 @@ def test_parse_micro_usd_entries_matches_targets_via_full_or_short_id():
 def test_ai_request_slims_newapi_pricing_evidence():
     spec = SiteSpec(
         id="wild",
-        adapter="browser",
         network={"url": "https://wild.test/api/pricing"},
         models=(ModelTarget("gpt-5.6-sol"),),
     )
@@ -426,9 +425,9 @@ def test_no_price_placeholder_never_persists_and_carry_marks_auth(tmp_path: Path
 def test_monitor_records_error_without_stopping_other_sites(tmp_path: Path):
     config = load_config(_write_config(tmp_path, {
         "settings": {"history_file": str(tmp_path / "history.jsonl"), "latest_file": str(tmp_path / "latest.json"), "event_file": str(tmp_path / "events.jsonl")},
-        "sites": [{"id": "bad", "adapter": "missing", "models": []}]
+        "sites": [{"id": "bad", "network": {"url": "https://bad.test/api/pricing"}, "models": []}]
     }))
-    report = run_once(config, client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))))
+    report = run_once(config, client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(500, text="boom"))))
     assert report.records == []
     assert report.errors[0]["site_id"] == "bad"
 
@@ -641,12 +640,12 @@ def test_network_adapter_uses_ai_alias_before_newapi_calculation(monkeypatch):
         models=(ModelTarget("informal-gpt"),),
         network={"url": "https://demo.test/api/pricing"},
     )
-    ai = AIConfig(enabled=True, base_url="https://ai.test/v1", models=("test-model",), api_key="key")
+    ai = AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="key")
     client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
         "group_ratio": {"default": 1},
         "data": [{"model_name": "openai/gpt-5.6-sol", "enable_groups": ["default"], "model_ratio": 0.5, "completion_ratio": 2}],
     })))
-    records = NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0], ai)
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT, ai)
     assert records[0].price_status == "confirmed"
     assert records[0].metadata["observed_model"] == "openai/gpt-5.6-sol"
 
@@ -666,7 +665,7 @@ def test_browser_adapter_requires_ai_for_non_newapi_json():
     )
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(PriceMonitorError, match="未配置可用 AI"):
-        NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0])
+        NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT)
     assert requests
 
 
@@ -686,7 +685,7 @@ def test_browser_adapter_passes_params_and_headers():
         },
     )
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    records = NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0])
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT)
     assert records[0].input_price == 1 and records[0].output_price == 2
 
 
@@ -709,8 +708,8 @@ def test_network_page_response_is_sent_to_ai_without_dom_or_browser(monkeypatch)
         text="<html><body>demo-model 输入价格 ¥1/M 输出价格 ¥2/M</body></html>",
         headers={"content-type": "text/html; charset=utf-8"},
     )))
-    ai = AIConfig(enabled=True, base_url="https://ai.test/v1", models=("test-model",), api_key="key")
-    records = NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0], ai)
+    ai = AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="key")
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT, ai)
     assert records[0].input_price == 1
     assert "demo-model" in seen["page_text"]
     assert seen["payload"] is None
@@ -727,7 +726,7 @@ def test_browser_adapter_headers_sent_literally():
         network={"url": "https://demo.test/api/pricing", "headers": {"Authorization": "Bearer tk-secret"}},
     )
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    records = NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0])
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT)
     assert records[0].input_price == 1
 
 
@@ -1259,7 +1258,7 @@ def test_ai_stream_error_carries_response_body(monkeypatch):
 
     real_client = httpx.Client
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
-    config = AIConfig(base_url="https://ai.test/v1", models=("m-a",), api_key="k", enable_thinking=False)
+    config = AIConfig(base_url="https://ai.test/v1", models=("m-a",), api_key="k")
     with pytest.raises(AIExtractionError) as exc_info:
         list(ai_stream_fallback(config, "", "hi", scene="测试"))
     # 透出的是解析后的报错要点，不是整段 JSON 原文
@@ -1532,7 +1531,8 @@ def test_ai_max_tokens_range_error_retries_with_clamped_budget(monkeypatch):
             return httpx.Response(400, json={"error": {"message": "Range of max_tokens should be [1, 2000]"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
 
-    config = AIConfig(base_url="https://ai.test/v1", models=("m-a",), api_key="k", max_tokens=4000)
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)  # 预算收到旧口径，断言按小批规模推
+    config = AIConfig(base_url="https://ai.test/v1", models=("m-a",), api_key="k")
     model, _ = request_with_model_fallback(config, "", "hi", scene="测试", client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert model == "m-a"
     assert bodies == [4000, 2000]
@@ -1591,7 +1591,7 @@ def test_ai_thinking_required_persists_and_preloads(monkeypatch):
             return httpx.Response(400, json={"error": {"message": "The value of the enable_thinking parameter is restricted to True."}})
         return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
 
-    config = AIConfig(base_url="https://ai.test/v1", models=("think-only",), api_key="k", enable_thinking=False)
+    config = AIConfig(base_url="https://ai.test/v1", models=("think-only",), api_key="k")
     request_with_model_fallback(config, "", "hi", scene="测试", client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert saved == ["think-only"]
     assert flags == [False, True]  # 先白发一次 400，翻参后成功
@@ -1716,7 +1716,7 @@ def test_ai_extract_batch_loop_stops_at_budget(monkeypatch):
 
     extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret"))
     spec = SiteSpec(
-        id="demo", adapter="browser", network={"url": "https://demo.test/pricing"},
+        id="demo", network={"url": "https://demo.test/pricing"},
         models=tuple(ModelTarget(name) for name in ("m1", "m2", "m3", "m4", "m5")),
     )
     with pytest.raises(AIExtractionError) as exc_info:
@@ -1747,7 +1747,8 @@ def test_ai_extract_budget_scales_with_batch_waves(monkeypatch):
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(result)}}]})
 
     # max_tokens=4000 → 4 条/批，5 个模型正好 2 批
-    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret", max_tokens=4000))
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret"))
     real_fallback = ai_mod.request_with_model_fallback
 
     def spy_fallback(*args, **kwargs):
@@ -1756,7 +1757,7 @@ def test_ai_extract_budget_scales_with_batch_waves(monkeypatch):
 
     monkeypatch.setattr(ai_mod, "request_with_model_fallback", spy_fallback)
     spec = SiteSpec(
-        id="demo", adapter="browser", network={"url": "https://demo.test/pricing"},
+        id="demo", network={"url": "https://demo.test/pricing"},
         models=tuple(ModelTarget(name) for name in ("m1", "m2", "m3", "m4", "m5")),
     )
     responses = [{"url": "https://demo.test/api/price", "status": 200, "resource_type": "fetch",
@@ -1795,10 +1796,11 @@ def test_ai_extract_budget_capped_under_site_hard_timeout(monkeypatch):
 
     monkeypatch.setattr(ai_mod, "request_with_model_fallback", spy_fallback)
     spec = SiteSpec(
-        id="demo", adapter="browser", network={"url": "https://demo.test/pricing"},
+        id="demo", network={"url": "https://demo.test/pricing"},
         models=tuple(ModelTarget(name) for name in (f"m{i}" for i in range(17))),
     )
-    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret", max_tokens=4000))
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret"))
     extractor.extract(
         spec, "",
         [{"url": "https://demo.test/api/price", "status": 200, "resource_type": "fetch",
@@ -1844,11 +1846,13 @@ def test_ai_extract_budget_exhaustion_keeps_completed_batches(monkeypatch):
         }], "cross_validation": {"status": "matched", "conflicts": []}}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(result)}}]})
 
+    # max_tokens=4000 → 4 条/批：5 个模型拆 2 批，第一批把时钟推过总预算后第二批被入口拦下
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret"))
+
     try:
-        # max_tokens=4000 → 4 条/批：5 个模型拆 2 批，第一批把时钟推过总预算后第二批被入口拦下
-        extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret", max_tokens=4000))
         spec = SiteSpec(
-            id="demo", adapter="browser", network={"url": "https://demo.test/pricing"},
+            id="demo", network={"url": "https://demo.test/pricing"},
             models=tuple(ModelTarget(name) for name in ("demo-model", "m2", "m3", "m4", "m5")),
         )
         records = extractor.extract(
@@ -1882,7 +1886,7 @@ def test_ai_extract_switches_model_on_bad_models_shape(monkeypatch):
 
     extractor = AIPriceExtractor(config)
     spec = SiteSpec(
-        id="demo", adapter="browser", network={"url": "https://demo.test/pricing"},
+        id="demo", network={"url": "https://demo.test/pricing"},
         models=tuple(ModelTarget(name) for name in ("demo-model",)),
     )
     records = extractor.extract(
@@ -1945,22 +1949,6 @@ def test_ai_api_key_comes_from_config(tmp_path: Path):
     assert config.ai.api_key == "secret"
 
 
-def test_ai_config_loads_bounded_non_thinking_output(tmp_path: Path):
-    config = load_config(_write_config(tmp_path, {
-        "ai": {
-            "base_url": "https://config-ai.test/v1",
-            "models": ["config-model"],
-            "max_tokens": 4000,
-            "enable_thinking": False,
-        },
-        "settings": {},
-        "sites": [{"id": "demo", "adapter": "standard", "model_list_url": "https://demo.test/pricing", "models": []}],
-    }))
-
-    assert config.ai.max_tokens == 4000
-    assert config.ai.enable_thinking is False
-
-
 def test_id_only_site_is_an_disabled_placeholder(tmp_path: Path):
     config = load_config(_write_config(tmp_path, {
         "settings": {},
@@ -1968,7 +1956,6 @@ def test_id_only_site_is_an_disabled_placeholder(tmp_path: Path):
     }))
 
     assert config.sites[0].id == "placeholder"
-    assert config.sites[0].adapter == "standard"
     assert config.sites[0].enabled is False
 
 
@@ -1987,10 +1974,10 @@ def test_target_model_aliases_select_one_page_card():
 def test_browser_adapter_requires_explicit_target_model():
     with pytest.raises(PriceMonitorError, match="未配置目标模型 models"):
         NetworkAdapter().collect(
-            SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing"}),
+            SiteSpec(id="demo", network={"url": "https://demo.test/pricing"}),
             httpx.Client(),
             1,
-            BROWSER_USER_AGENTS[0],
+            DEFAULT_BROWSER_USER_AGENT,
             AIConfig(base_url="https://ai.test/v1", models=("test-model",)),
         )
 
@@ -2014,38 +2001,10 @@ def test_site_request_headers_are_loaded_and_merged(tmp_path: Path):
     assert headers["user-agent"] == "UA-test"
 
 
-def test_user_agent_is_fixed_by_default_and_can_be_randomized_once(tmp_path: Path, monkeypatch):
+def test_user_agent_is_fixed_by_default(tmp_path: Path):
     config = load_config(_write_config(tmp_path, {"settings": {}, "sites": [{"id": "demo", "adapter": "standard", "model_list_url": "https://demo.test/pricing", "models": []}]}))
-    assert choose_user_agent(config) == BROWSER_USER_AGENTS[0]
-    monkeypatch.setattr("llm_price_monitor.useragent.secrets.choice", lambda values: values[-1])
-    randomized = load_config(_write_config(tmp_path, {"settings": {"random_user_agent": True}, "sites": [{"id": "demo", "adapter": "standard", "model_list_url": "https://demo.test/pricing", "models": []}]}))
-    selected = choose_user_agent(randomized)
-    assert "Macintosh" in selected
-    assert "Chrome/153.0.0.0" in selected
-
-
-def test_random_user_agent_can_limit_platforms_and_versions(tmp_path: Path):
-    config = load_config(_write_config(tmp_path, {
-        "settings": {
-            "user_agent": BROWSER_USER_AGENTS[0],
-            "random_user_agent": True,
-            "user_agent_platforms": ["windows"],
-            "user_agent_chrome_versions": ["150.0.0.0", "151.0.0.0", "152.0.0.0"],
-        },
-        "sites": [{"id": "demo", "adapter": "standard", "model_list_url": "https://demo.test/pricing", "models": []}],
-    }))
-    selected = choose_user_agent(config)
-    assert "Windows NT 10.0; Win64; x64" in selected
-    assert any(f"Chrome/{version}" in selected for version in ("150.0.0.0", "151.0.0.0", "152.0.0.0"))
-
-
-def test_random_user_agent_rejects_invalid_platform(tmp_path: Path):
-    config = load_config(_write_config(tmp_path, {
-        "settings": {"random_user_agent": True, "user_agent_platforms": ["android"]},
-        "sites": [{"id": "demo", "adapter": "standard", "model_list_url": "https://demo.test/pricing", "models": []}],
-    }))
-    with pytest.raises(ValueError, match="user_agent_platforms"):
-        choose_user_agent(config)
+    assert choose_user_agent(config) == DEFAULT_BROWSER_USER_AGENT
+    assert choose_user_agent(config, override="UA-custom") == "UA-custom"
 
 
 def test_browser_probe_reports_no_discoverable_price_data(tmp_path: Path, monkeypatch):
@@ -2064,7 +2023,7 @@ def test_browser_adapter_requires_network_url(tmp_path: Path):
         "sites": [{"id": "demo", "adapter": "standard"}],
     }))
     with pytest.raises(PriceMonitorError, match="未配置 network.url"):
-        NetworkAdapter().collect(config.sites[0], httpx.Client(), 1, BROWSER_USER_AGENTS[0], config.ai)
+        NetworkAdapter().collect(config.sites[0], httpx.Client(), 1, DEFAULT_BROWSER_USER_AGENT, config.ai)
 
 
 def test_site_config_rejects_base_url(tmp_path: Path):
@@ -2073,15 +2032,6 @@ def test_site_config_rejects_base_url(tmp_path: Path):
             "settings": {},
             "sites": [{"id": "demo", "adapter": "standard", "base_url": "https://demo.test", "model_list_url": "https://demo.test/pricing"}],
         }))
-
-
-def test_site_config_normalizes_legacy_adapter_values(tmp_path: Path):
-    for legacy in ("browser", "network"):
-        config = load_config(_write_config(tmp_path, {
-            "settings": {},
-            "sites": [{"id": "demo", "adapter": legacy, "model_list_url": "https://demo.test/pricing", "models": []}],
-        }))
-        assert config.sites[0].adapter == "standard"
 
 
 def test_site_config_rejects_removed_direct_adapters(tmp_path: Path):
@@ -2130,7 +2080,7 @@ def test_ai_extractor_uses_page_and_response_evidence_without_auth_values():
     extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="ai-secret"))
     client = httpx.Client(transport=httpx.MockTransport(handler))
     records = extractor.extract(
-                SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing?token=page-secret"}, models=(ModelTarget("demo-model"),)),
+                SiteSpec(id="demo", network={"url": "https://demo.test/pricing?token=page-secret"}, models=(ModelTarget("demo-model"),)),
                 "demo-model Input 5 Output 30 USD/1M tokens",
                 [
                     {"url": "https://demo.test/api/v9/price?token=api-secret", "status": 200, "resource_type": "fetch", "content_type": "application/json", "payload": {"model_name": "demo-model", "input": 5, "output": 30, "Authorization": "auth-secret", "Cookie": "session=cookie-secret"}},
@@ -2154,7 +2104,6 @@ def test_ai_extractor_uses_page_and_response_evidence_without_auth_values():
 def test_ai_request_keeps_model_list_evidence_for_ai():
     spec = SiteSpec(
         id="hao",
-        adapter="browser",
         network={"url": "https://hao.test/zh/models"},
         models=(ModelTarget("gpt-5.6-sol"),),
     )
@@ -2181,7 +2130,7 @@ def test_ai_request_keeps_model_list_evidence_for_ai():
 
 
 def test_network_evidence_requires_price_like_number_not_model_metadata():
-    spec = SiteSpec(id="hao", adapter="browser", network={"url": "https://hao.test/zh/models"}, models=(ModelTarget("gpt-5.6-sol"),))
+    spec = SiteSpec(id="hao", network={"url": "https://hao.test/zh/models"}, models=(ModelTarget("gpt-5.6-sol"),))
 
     body = _ai_request_body(
         spec,
@@ -2202,7 +2151,6 @@ def test_network_evidence_requires_price_like_number_not_model_metadata():
 def test_model_list_response_keeps_all_target_model_objects():
     spec = SiteSpec(
         id="sudocode",
-        adapter="browser",
         network={"url": "https://sudocode.test/pricing"},
         models=(ModelTarget("gpt-5.6-sol"), ModelTarget("claude-fable-5")),
     )
@@ -2229,7 +2177,7 @@ def test_model_list_response_keeps_all_target_model_objects():
 
 
 def test_page_text_stops_at_next_display_model_heading():
-    spec = SiteSpec(id="hao", adapter="browser", network={"url": "https://hao.test/zh/models"}, models=(ModelTarget("gpt-5.6-sol"),))
+    spec = SiteSpec(id="hao", network={"url": "https://hao.test/zh/models"}, models=(ModelTarget("gpt-5.6-sol"),))
     page_text = (
         "openai/gpt-5.6-sol 上下文 372K 输入 Token $0.75/M 输出 Token $4.5/M "
         "OpenAI: GPT-5.6 Terra 1.5折 OpenAI: GPT-5.6 Terra"
@@ -2244,7 +2192,7 @@ def test_page_text_stops_at_next_display_model_heading():
 
 
 def test_page_evidence_preserves_raw_quote_without_inventing_price_mapping():
-    spec = SiteSpec(id="hao", adapter="browser", network={"url": "https://hao.test/zh/models"}, models=(ModelTarget("gpt-5.6-sol"),))
+    spec = SiteSpec(id="hao", network={"url": "https://hao.test/zh/models"}, models=(ModelTarget("gpt-5.6-sol"),))
 
     request_content = _ai_request_body(
         spec,
@@ -2306,7 +2254,6 @@ def test_positional_price_array_missing_group_ratio_marks_rule_only():
 def test_ai_request_uses_model_list_only():
     spec = SiteSpec(
         id="hao",
-        adapter="browser",
         network={"url": "https://hao.test/zh/models"},
         models=(ModelTarget("gpt-5.6-sol"),),
     )
@@ -2344,7 +2291,7 @@ def test_confirmed_accepts_model_list_page_and_network_evidence():
     }
 
     records = extractor._records(
-        SiteSpec(id="hao", adapter="browser", network={"url": "https://hao.test/zh/models"}),
+        SiteSpec(id="hao", network={"url": "https://hao.test/zh/models"}),
         result,
         "gpt-5.6-sol Input $1/M Output $2/M",
         "result-hash",
@@ -2359,7 +2306,7 @@ def test_confirmed_accepts_model_list_page_and_network_evidence():
 def test_ai_result_keeps_canonical_model_and_observed_aliases():
     extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",)))
     records = extractor._records(
-        SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing"}),
+        SiteSpec(id="demo", network={"url": "https://demo.test/pricing"}),
         {
             "models": [{
                 "model": "claude-fable-5",
@@ -2446,7 +2393,7 @@ def test_ai_result_merges_context_tiers_and_keeps_unified_default_rule():
         "cross_validation": {"status": "none", "conflicts": []},
     }
     records = extractor._records(
-        SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing"}),
+        SiteSpec(id="demo", network={"url": "https://demo.test/pricing"}),
         result,
         "demo-model input 1 output 6",
         "hash",
@@ -2476,7 +2423,7 @@ def test_ai_rule_only_status_is_preserved_for_grouped_prices():
     }
 
     records = extractor._records(
-        SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing"}),
+        SiteSpec(id="demo", network={"url": "https://demo.test/pricing"}),
         result,
         "demo-model",
         "hash",
@@ -2499,7 +2446,7 @@ def test_ai_extractor_rejects_unseen_api_evidence_url():
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(result)}}]})
 
     extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="secret"))
-    records = extractor.extract(SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing"}, models=(ModelTarget("demo-model"),)), "demo-model 1 2", [{"url": "https://demo.test/api/price", "status": 200, "content_type": "application/json", "payload": {"model_name": "demo-model"}}], client=httpx.Client(transport=httpx.MockTransport(handler)))
+    records = extractor.extract(SiteSpec(id="demo", network={"url": "https://demo.test/pricing"}, models=(ModelTarget("demo-model"),)), "demo-model 1 2", [{"url": "https://demo.test/api/price", "status": 200, "content_type": "application/json", "payload": {"model_name": "demo-model"}}], client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert records[0].price_status == "candidate"
 
 
@@ -2520,7 +2467,7 @@ def test_ai_extractor_does_not_treat_unrelated_json_as_price_evidence():
     extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",)))
 
     records = extractor._records(
-        SiteSpec(id="demo", adapter="browser", network={"url": "https://demo.test/pricing"}),
+        SiteSpec(id="demo", network={"url": "https://demo.test/pricing"}),
         result,
         "demo-model Input $1/M Output $2/M",
         "result-hash",
@@ -2904,7 +2851,9 @@ def test_backfill_rule_price_fills_top_level_from_representative_tier():
 
 
 def test_run_once_persists_per_site_collect_status(tmp_path: Path, monkeypatch):
-    def collect(*_args):
+    def collect(self, spec, *_args):
+        if spec.id == "bad":
+            raise PriceMonitorError("模拟站点采集失败")
         return [PriceRecord("demo-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {})]
 
     monkeypatch.setattr(NetworkAdapter, "collect", collect)
@@ -2912,7 +2861,7 @@ def test_run_once_persists_per_site_collect_status(tmp_path: Path, monkeypatch):
         "settings": {"history_file": str(tmp_path / "history.jsonl"), "latest_file": str(tmp_path / "latest.json"), "event_file": str(tmp_path / "events.jsonl"), "monitor_models": ["demo-model"]},
         "sites": [
             {"id": "good", "enabled": True},
-            {"id": "bad", "adapter": "missing", "enabled": True},
+            {"id": "bad", "network": {"url": "https://bad.test/api/pricing"}, "enabled": True},
             {"id": "off", "enabled": False},
         ],
     }))
@@ -2921,7 +2870,7 @@ def test_run_once_persists_per_site_collect_status(tmp_path: Path, monkeypatch):
 
     status = store.get_document("collect_status")
     assert status["good"]["status"] == "ok" and status["good"]["checked_at"] > 0
-    assert status["bad"]["status"] == "error" and "未知适配器" in status["bad"]["error"]
+    assert status["bad"]["status"] == "error" and "模拟站点采集失败" in status["bad"]["error"]
     assert status["off"]["status"] == "disabled"
 
     # 单站点采集（如 /api/collect?site_id=…）不应冲掉其他站点的状态
@@ -2931,7 +2880,7 @@ def test_run_once_persists_per_site_collect_status(tmp_path: Path, monkeypatch):
     run_once(single, store=store, client=httpx.Client())
     status = store.get_document("collect_status")
     assert status["good"]["status"] == "ok"
-    assert status["bad"]["status"] == "error" and "未知适配器" in status["bad"]["error"]
+    assert status["bad"]["status"] == "error" and "模拟站点采集失败" in status["bad"]["error"]
     assert status["off"]["status"] == "disabled"
 
 
@@ -2993,7 +2942,7 @@ def test_site_collect_health_tracks_latest_round(tmp_path: Path, monkeypatch):
     assert store.get_document("site_collect_health") == {}
 
 
-def test_rate_base_site_normalizes_to_standard_on_load():
+def test_rate_base_legacy_site_loads_with_single_url():
     raw = {
         "id": "legacy",
         "adapter": "rate_base",
@@ -3004,7 +2953,6 @@ def test_rate_base_site_normalizes_to_standard_on_load():
         },
     }
     (spec,) = sites_from_raw([raw])
-    assert spec.adapter == "standard"
     assert spec.network["url"] == "https://example.com/api/rates"
     assert "base_price_url" not in spec.network
 
@@ -3019,7 +2967,6 @@ def test_sites_from_raw_accepts_extra_networks():
         ],
     }
     (spec,) = sites_from_raw([raw])
-    assert spec.adapter == "standard"
     assert len(spec.networks) == 1
     assert spec.networks[0]["url"] == "https://example.com/api/pricing"
     assert spec.networks[0]["params"] == {"page": "1"}
@@ -3037,7 +2984,7 @@ def test_standard_adapter_discovers_prices_in_referenced_js_chunk():
             return httpx.Response(200, text=chunk)
         return httpx.Response(200, text=page)
 
-    records = ADAPTERS["standard"].collect(spec, httpx.Client(transport=httpx.MockTransport(handler)), 5, BROWSER_USER_AGENTS[0])
+    records = NetworkAdapter().collect(spec, httpx.Client(transport=httpx.MockTransport(handler)), 5, DEFAULT_BROWSER_USER_AGENT)
     by_model = {record.model: record for record in records}
     assert by_model["gpt-5.6-sol"].input_price == 5
     assert by_model["gpt-5.6-sol"].output_price == 30
@@ -3065,7 +3012,7 @@ def test_standard_adapter_applies_ratio_url_to_base_prices():
             return httpx.Response(200, text=chunk)
         return httpx.Response(200, text=page)
 
-    records = ADAPTERS["standard"].collect(spec, httpx.Client(transport=httpx.MockTransport(handler)), 5, BROWSER_USER_AGENTS[0])
+    records = NetworkAdapter().collect(spec, httpx.Client(transport=httpx.MockTransport(handler)), 5, DEFAULT_BROWSER_USER_AGENT)
     (record,) = records
     assert (record.input_price, record.output_price) == (1.5, 9.0)
     assert record.unit == "CNY/1M tokens"
@@ -3991,8 +3938,9 @@ def test_auth_inject_without_credential_reports_error():
 
 
 def test_legacy_config_injects_authorization_and_ignores_endpoint_auth():
-    """没配 auth_inject 的存量站点按老行为注入 Authorization（auth_header/auth_prefix 可改），
-    接口里写死的 Authorization 让位、非认证头照常带上；没配 auth_token 的站点不受影响。"""
+    """没配 auth_inject 的存量站点按老行为注入 Authorization: Bearer <token>（auth_header/auth_prefix
+    已退役，注入头名与前缀固定），接口里写死的 Authorization 让位、非认证头照常带上；
+    没配 auth_token 的站点不受影响。"""
     from llm_price_monitor.adapters import build_request_kwargs, resolve_endpoint
 
     (unified,) = sites_from_raw([{
@@ -4005,17 +3953,6 @@ def test_legacy_config_injects_authorization_and_ignores_endpoint_auth():
     merged = build_request_kwargs(entry, unified, "ua/1", 5, target="price")["headers"]
     assert merged["Authorization"] == "Bearer at_site"  # 站点令牌为准
     assert merged["referer"] == "https://demo.test"  # 非认证头照常带上
-
-    (custom,) = sites_from_raw([{
-        "id": "custom",
-        "models": ["m"],
-        "auth_token": "at_site",
-        "auth_header": "X-Api-Key",
-        "auth_prefix": "",
-        "network": {"url": "https://demo.test/pricing"},
-    }])
-    entry = resolve_endpoint(custom.network, spec=custom, label="network")
-    assert build_request_kwargs(entry, custom, "ua/1", 5, target="price")["headers"]["X-Api-Key"] == "at_site"
 
     (legacy,) = sites_from_raw([{
         "id": "legacy",
@@ -4270,7 +4207,7 @@ def test_network_adapter_dispatches_sub2api_shapes_without_ai():
         auth_inject={"price": {"header": "Authorization", "value": "Bearer ${access_token}"}},
     )
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    records = NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0])
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT)
     assert records[0].model == "gpt-6-sol"
     assert records[0].price_status == "confirmed"
 
@@ -4286,7 +4223,7 @@ def test_network_adapter_dispatches_sub2api_shapes_without_ai():
         auth_inject={"price": {"header": "Authorization", "value": "Bearer ${access_token}"}},
     )
     client_swe = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=swe_payload)))
-    assert NetworkAdapter().collect(spec_swe, client_swe, 5, BROWSER_USER_AGENTS[0]) == []
+    assert NetworkAdapter().collect(spec_swe, client_swe, 5, DEFAULT_BROWSER_USER_AGENT) == []
 
 
 def test_product_library_price_records_parses_302ai():
@@ -4359,7 +4296,7 @@ def test_network_adapter_dispatches_product_library_without_ai():
 
     spec = SiteSpec(id="302", models=(ModelTarget("kimi-k3"),), network={"url": "https://dash-api.302.ai/products/list"})
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    assert NetworkAdapter().collect(spec, client, 5, BROWSER_USER_AGENTS[0]) == []
+    assert NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT) == []
 
 
 def test_build_request_kwargs_keeps_url_query_when_params_empty():
@@ -4416,13 +4353,8 @@ def test_canonical_site_config_slims_and_unifies_auth():
     old_token, new_token = _fake_jwt(exp=1000), _fake_jwt(exp=2000)
     config = {
         "id": "x",
-        "adapter": "standard",
         "enabled": True,
         "auth_token": None,
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-        "cookie": None,
-        "cookies": {},
         "network": {"url": "https://x.test/api/pricing", "params": {}, "headers": {"Authorization": f"Bearer {old_token}", "referer": "https://x.test"}},
         "status": {"url": "https://x.test/api/metrics", "headers": {"Authorization": f"Bearer {new_token}"}},
         "notice": {"url": "https://x.test/api/notice"},
@@ -4538,13 +4470,14 @@ def _ai_extract_handler(seen_batches: list[list[str]], *, fail_second: bool = Fa
     return handler
 
 
-def test_ai_extract_splits_expected_models_into_batches_of_four():
+def test_ai_extract_splits_expected_models_into_batches_of_four(monkeypatch: pytest.MonkeyPatch):
     spec = SiteSpec(id="demo", network={"url": "https://demo.test/pricing"})
     targets = [f"model-{index:02d}" for index in range(17)]
     seen_batches: list[list[str]] = []
     handler = _ai_extract_handler(seen_batches)
     # max_tokens=4000 → 4 条/批（旧默认口径，批大小随 max_tokens 折算）
-    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k", max_tokens=4000))
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k"))
     records = extractor.extract(
         spec, "", [],
         client=httpx.Client(transport=httpx.MockTransport(handler)),
@@ -4555,13 +4488,14 @@ def test_ai_extract_splits_expected_models_into_batches_of_four():
     assert sorted(record.model for record in records) == targets
 
 
-def test_ai_extract_batch_failure_fails_whole_round():
+def test_ai_extract_batch_failure_fails_whole_round(monkeypatch: pytest.MonkeyPatch):
     spec = SiteSpec(id="demo", network={"url": "https://demo.test/pricing"})
     targets = [f"model-{index:02d}" for index in range(5)]
     seen_batches: list[list[str]] = []
     handler = _ai_extract_handler(seen_batches, fail_second=True)
     # max_tokens=4000 → 4 条/批，5 个模型才拆成 2 批，第二批失败才会发生
-    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k", max_tokens=4000))
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k"))
     with pytest.raises(AIExtractionError):
         extractor.extract(
             spec, "", [],
@@ -4630,7 +4564,7 @@ def test_ai_extract_aliases_single_call_filtered_and_cached():
     expected = ["gpt-6-luna", "ghost-model", "gpt-6-sol", "kimi-k3"]
     cache = _FakeAliasCache()
     extractor = AIPriceExtractor(AIConfig(
-        enabled=True, base_url="https://ai.test/v1", models=("test-model",), api_key="k", cache=cache,
+        base_url="https://ai.test/v1", models=("test-model",), api_key="k", cache=cache,
     ))
     details = extractor.extract_aliases(
         spec, responses, client=httpx.Client(transport=httpx.MockTransport(handler)), expected_models=expected,
@@ -4658,7 +4592,7 @@ def test_ai_extract_aliases_empty_site_names_skips_ai():
         return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
 
     spec = SiteSpec(id="demo", network={"url": "https://demo.test/api/pricing"})
-    extractor = AIPriceExtractor(AIConfig(enabled=True, base_url="https://ai.test/v1", models=("test-model",), api_key="k"))
+    extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k"))
     details = extractor.extract_aliases(
         spec,
         [{"url": "https://demo.test/api/pricing", "resource_type": "fetch", "payload": {"data": []}}],
@@ -4667,15 +4601,6 @@ def test_ai_extract_aliases_empty_site_names_skips_ai():
     )
     assert details == {}
     assert calls["n"] == 0
-
-
-def test_ai_config_rejects_max_tokens_below_4000():
-    from llm_price_monitor.config import ai_from_raw
-
-    with pytest.raises(ValueError, match="最低 4000"):
-        ai_from_raw({"base_url": "https://ai.test/v1", "models": ["m"], "api_key": "k", "max_tokens": 3999}, cache=None)
-    config = ai_from_raw({"base_url": "https://ai.test/v1", "models": ["m"], "api_key": "k", "max_tokens": 4000}, cache=None)
-    assert config.max_tokens == 4000
 
 
 def test_request_fallback_switches_model_on_invalid_output(monkeypatch):
@@ -4711,7 +4636,8 @@ def test_request_fallback_budget_retry_on_truncated_output(monkeypatch):
     rows: list[dict] = []
     monkeypatch.setattr(ai_mod, "ai_log_hook", lambda **fields: rows.append(fields))
 
-    config = AIConfig(base_url="https://ai.test/v1", models=("thinker",), api_key="k", max_tokens=4000)
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    config = AIConfig(base_url="https://ai.test/v1", models=("thinker",), api_key="k")
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -4746,7 +4672,8 @@ def test_request_fallback_no_budget_retry_below_limit(monkeypatch):
 
     monkeypatch.setattr(ai_mod.random, "shuffle", lambda value: None)
 
-    config = AIConfig(base_url="https://ai.test/v1", models=("bad-model", "good-model"), api_key="k", max_tokens=4000)
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    config = AIConfig(base_url="https://ai.test/v1", models=("bad-model", "good-model"), api_key="k")
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -4775,7 +4702,8 @@ def test_request_fallback_empty_answer_with_full_budget_skips_budget_retry(monke
 
     monkeypatch.setattr(ai_mod.random, "shuffle", lambda value: None)
 
-    config = AIConfig(base_url="https://ai.test/v1", models=("blank-thinker", "good-model"), api_key="k", max_tokens=4000)
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
+    config = AIConfig(base_url="https://ai.test/v1", models=("blank-thinker", "good-model"), api_key="k")
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -4906,7 +4834,7 @@ def test_request_fallback_amplify_skips_when_learned_ceiling_too_close(monkeypat
     monkeypatch.setattr(ai_mod, "_MODEL_MAX_TOKENS_LIMIT", {"qwen-turbo": 16384})
     rows: list[dict] = []
     monkeypatch.setattr(ai_mod, "ai_log_hook", lambda **fields: rows.append(fields))
-    config = AIConfig(base_url="https://ai.test/v1", models=("qwen-turbo", "next-model"), api_key="k", max_tokens=16000)
+    config = AIConfig(base_url="https://ai.test/v1", models=("qwen-turbo", "next-model"), api_key="k")
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -4937,7 +4865,7 @@ def test_request_fallback_detects_truncation_at_learned_ceiling(monkeypatch):
     monkeypatch.setattr(ai_mod.random, "shuffle", lambda value: None)
     monkeypatch.setattr(ai_mod, "_MODEL_MAX_TOKENS_LIMIT", {"capped": 8192})
     monkeypatch.setattr(ai_mod, "ai_log_hook", lambda **fields: None)
-    config = AIConfig(base_url="https://ai.test/v1", models=("capped", "good-model"), api_key="k", max_tokens=16000)
+    config = AIConfig(base_url="https://ai.test/v1", models=("capped", "good-model"), api_key="k")
     sent: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

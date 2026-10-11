@@ -1,7 +1,6 @@
 """AI 兜底抽取与可疑结果判定：超长页分块、逐档证据校验、防幻觉丢弃。"""
 from __future__ import annotations
 
-import json
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -9,6 +8,8 @@ from typing import Any
 import httpx
 
 from llm_price_monitor.ai import (
+    AI_MAX_INPUT_CHARS,
+    AI_MAX_TOKENS,
     AIExtractionError,
     ai_content,
     json_content,
@@ -248,7 +249,7 @@ def _ai_extract(
     deadline 是整页提取的总时长上界（time.monotonic() 时刻），到点后没跑的段记警告放弃。
     """
     warnings: list[str] = []
-    chunks = _split_for_ai(text, ai_config.max_input_chars)
+    chunks = _split_for_ai(text, AI_MAX_INPUT_CHARS)
 
     def extract_chunk(chunk: str, depth: int = 0) -> list[dict[str, Any]]:
         """单段提取；JSON 输出装不下整段模型时对半拆段重试（大表一个回复塞不下）。"""
@@ -256,8 +257,8 @@ def _ai_extract(
             _model, response = request_with_model_fallback(
                 ai_config,
                 _AI_SYSTEM_PROMPT,
-                clip(chunk, ai_config.max_input_chars),
-                max_tokens=max(ai_config.max_tokens, _AI_EXTRACT_MAX_TOKENS),
+                clip(chunk, AI_MAX_INPUT_CHARS),
+                max_tokens=max(AI_MAX_TOKENS, _AI_EXTRACT_MAX_TOKENS),
                 client=client,
                 scene="定价页价格抽取",
                 deadline=deadline,

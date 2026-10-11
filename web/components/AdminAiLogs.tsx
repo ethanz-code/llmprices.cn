@@ -290,7 +290,7 @@ function LogDetailModal({ log, onClose }: { log: AiLog; onClose: () => void }) {
         {promptExcerpt && (
           <div>
             <div style={{ color: "var(--text-3)", marginBottom: 4 }}>发送内容</div>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", maxHeight: 220, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            <div style={{ background: "var(--panel-2)", borderRadius: 10, padding: "10px 12px", maxHeight: 220, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
               {promptExcerpt}
             </div>
           </div>
@@ -298,7 +298,7 @@ function LogDetailModal({ log, onClose }: { log: AiLog; onClose: () => void }) {
         {responseExcerpt && (
           <div>
             <div style={{ color: "var(--text-3)", marginBottom: 4 }}>模型回复</div>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", maxHeight: 220, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+            <div style={{ background: "var(--panel-2)", borderRadius: 10, padding: "10px 12px", maxHeight: 220, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
               {responseExcerpt}
             </div>
           </div>

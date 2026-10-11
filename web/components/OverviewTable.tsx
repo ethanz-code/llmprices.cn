@@ -459,7 +459,7 @@ function ModelPicker({
       <IconChevronDown size={13} className={`chev${open ? " is-flip" : ""}`} />
       {open && (
         <div className="pick-menu" style={{ maxWidth: "min(360px, 90vw)" }} ref={menuRef} role="listbox">
-          <div style={{ padding: "4px 4px 8px", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+          <div style={{ padding: "4px 4px 8px", marginBottom: 4 }}>
             <Input
               value={filter}
               onChange={setFilter}

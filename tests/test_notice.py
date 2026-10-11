@@ -105,7 +105,7 @@ def test_fetch_site_notice_html_data_kept_verbatim(monkeypatch):
         return httpx.Response(200, json={"success": True, "message": "", "data": html})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        record = fetch_site_notice(spec, client, 10.0, "ua/1", ai=AIConfig(enabled=True))
+        record = fetch_site_notice(spec, client, 10.0, "ua/1", ai=AIConfig())
     assert record["parse"] == "json"
     assert record["content"] == html
 
@@ -142,7 +142,7 @@ def test_fetch_site_notice_single_object_data(monkeypatch):
         })
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        record = fetch_site_notice(spec, client, 10.0, "ua/1", ai=AIConfig(enabled=True))
+        record = fetch_site_notice(spec, client, 10.0, "ua/1", ai=AIConfig())
     assert record["parse"] == "status"
     assert "维护通知" in record["content"]
     assert "<p>今晚升级。</p>" in record["content"]
@@ -324,7 +324,7 @@ def test_fetch_site_notice_ai_fallback(monkeypatch):
         return httpx.Response(200, json={"html": "<p>维护公告：今晚升级。</p>"})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        record = fetch_site_notice(spec, client, 10.0, "ua/1", ai=AIConfig(enabled=True))
+        record = fetch_site_notice(spec, client, 10.0, "ua/1", ai=AIConfig())
     assert record["parse"] == "ai"
     assert "维护公告" in record["content"]
 
@@ -333,13 +333,13 @@ def test_extract_notice_content_parses_json_reply():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": [{"message": {"content": '{"content": "公告正文"}'}}]})
 
-    ai = AIConfig(enabled=True, base_url="https://ai.test/v1", api_key="k", models=("m1",))
+    ai = AIConfig(base_url="https://ai.test/v1", api_key="k", models=("m1",))
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert extract_notice_content(ai, '{"announcements": []}', client=client) == "公告正文"
 
 
 def test_extract_notice_content_disabled_returns_none():
-    assert extract_notice_content(AIConfig(enabled=False), "anything") is None
+    assert extract_notice_content(AIConfig(), "anything") is None
 
 
 # ---------- run_once 集成 ----------
@@ -444,7 +444,7 @@ def test_webapi_notice_endpoints(tmp_path: Path, monkeypatch):
     config_path.write_text(json.dumps({
         # 关闭后台调度：测试环境不发起任何定时采集与官方价同步
         "settings": {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0}},
-        "ai": {"enabled": False},
+        "ai": {},
         "sites": [_site_raw_config(None)],
     }), encoding="utf-8")
 

@@ -2,18 +2,11 @@
   "settings": {
     "timeout": 45,
     "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
-    "random_user_agent": false,
-    "user_agent_platforms": [],
-    "user_agent_chrome_versions": [],
-    "user_agent_version_window": 2,
     "retention_price_days": 90,
     "retention_visit_days": 90,
     "retention_status_days": 90,
     "retention_ai_log_days": 7,
-    "max_task_runs": 100,
-    "max_task_log_lines": 500,
     "assistant_daily_limit": 10,
-    "assistant_hourly_limit": 10,
     "fallback_proxy": null,
     "schedule": {
       "price": 180,
@@ -25,7 +18,6 @@
     }
   },
   "ai": {
-    "enabled": true,
     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "models": [
       "qwen3.8-flash",
@@ -37,8 +29,6 @@
       "deepseek-v4-flash-0731"
     ],
     "timeout": 180,
-    "max_input_chars": 60000,
-    "max_tokens": 16000,
     "price_model": "qwen3.8-flash",
     "proxy": null
   },

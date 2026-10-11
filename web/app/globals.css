@@ -1,11 +1,13 @@
 :root {
-  /* 亮色对齐 Artificial Analysis：纯白页底、纯中性灰（不带色温）、发丝边框分层卡片；
+  /* 亮色分层靠底色深浅、不靠描边：页面浅灰底、卡片纯白、嵌套区块与输入填充 #f5f5f5，
+     三档灰阶承担全部层级（对齐「检测模型」输入框的填充式分层）；中性灰不带色温。
      全站唯一强调色 AA 橙 #ff7018（与橘猫毛色同族），只出现在交互与关键数据上 */
-  --bg: #ffffff;
+  --bg: #f3f4f6;
   --panel: #ffffff;
   --panel-2: #f5f5f5;
-  --border: #d9d9d9;
-  --border-strong: #a3a3a3;
+  /* 残留发丝线只做表格行分隔等功能性场景：透明度与暗色对齐（8% / 18%），不再是实灰线 */
+  --border: rgba(31, 31, 31, 0.08);
+  --border-strong: rgba(31, 31, 31, 0.18);
   --text: #1f1f1f;
   --text-2: #595959;
   --text-3: #8c8c8c;
@@ -16,9 +18,9 @@
   /* 品牌 logo 底：奶油暖白（favicon 同值；刻意不随主题切换——favicon 是静态文件，站内与其保持一致） */
   --logo-bg: #fff3e4;
   --header-bg: rgba(255, 255, 255, 0.85);
-  /* 卡片：白底上靠发丝边框分层（AA 式），无投影 */
+  /* 卡片：白底色块在浅灰页底上自然分层，无边框无投影（与暗色同一套逻辑） */
   --shadow-panel: none;
-  --card-border: 1px solid var(--border);
+  --card-border: none;
   /* 输入类控件（.sel/.input）：无边框填充底，静态只靠底色分层，聚焦才换强调描边+光晕 */
   --field-bg: var(--panel-2);
   --field-bg-hover: #ececec;
@@ -227,7 +229,6 @@ body > main {
   position: relative;
   padding-bottom: 28px;
   margin-bottom: 32px;
-  border-bottom: 1px solid var(--border);
 }
 
 /* 页头标题：无衬线粗黑体紧凑排布，对齐控制台的标题层级（不做展示型大字） */
@@ -247,7 +248,7 @@ body > main {
   text-wrap: pretty;
 }
 
-/* 页顶数据摘要条：一行真实数字（mono）+ 灰标签，细线收底，给首屏一个轻的锚点 */
+/* 页顶数据摘要条：一行真实数字（mono）+ 灰标签，靠留白与字号立住，不画线 */
 .page-digest {
   display: flex;
   align-items: baseline;
@@ -255,7 +256,6 @@ body > main {
   gap: 8px 24px;
   padding-bottom: 14px;
   margin-bottom: 24px;
-  border-bottom: 1px solid var(--border);
 }
 
 .page-digest-item {
@@ -290,7 +290,6 @@ body > main {
 
 .rank-list-head {
   padding: 0 10px 8px;
-  border-bottom: 1px solid var(--border);
   font-size: 12px;
   font-weight: 500;
   color: var(--text-2);
@@ -302,14 +301,9 @@ body > main {
 
 .rank-row {
   padding: 11px 10px;
-  border-bottom: 1px solid var(--border);
   color: inherit;
   text-decoration: none;
   transition: background var(--dur-fast) var(--ease);
-}
-
-.rank-row:last-child {
-  border-bottom: 0;
 }
 
 .rank-row:hover {
@@ -407,17 +401,11 @@ body > main {
   margin-top: 32px;
 }
 
-/* 白卡基座：发丝描边加大圆角，亮暗都靠描边+轻投影分层；结构分隔靠内部发丝线 */
+/* 白卡基座：白底色块在浅灰页底上分层（暗色靠抬升底色），无边框无投影；结构分隔靠内部色带 */
 .panel {
   background: var(--panel);
-  border: var(--card-border);
   border-radius: 12px;
   box-shadow: var(--shadow-panel);
-}
-
-/* 系统设置分组：节与节之间用发丝线分隔 */
-.settings-section + .settings-section {
-  border-top: 1px solid var(--border);
 }
 
 /* 设置面板容器：y 轴只留一层小内边距，首尾元素各自贴边，不与分组边距叠加。
@@ -446,7 +434,8 @@ body > main {
   margin: 0 -28px;
   padding: 12px 28px;
   background: var(--panel);
-  border-top: 1px solid var(--border);
+  /* 与滚动内容之间用一道向上的软投影分隔，不再画线 */
+  box-shadow: 0 -8px 20px -14px rgba(0, 0, 0, 0.35);
   border-radius: 0 0 8px 8px;
 }
 
@@ -478,7 +467,7 @@ body > main {
   flex-wrap: wrap;
   padding: 10px 16px; /* 与 .dtable 首尾列的 16px 对齐：面板无边框，内缩必须一致 */
   background: var(--panel);
-  box-shadow: inset 0 1px 0 var(--border); /* 只留与表格之间的一条分隔线，两侧不再画边框 */
+  box-shadow: 0 -8px 20px -14px rgba(0, 0, 0, 0.35); /* 与滚动内容之间用向上的软投影分隔 */
   border-radius: 0 0 8px 8px;
 }
 
@@ -560,14 +549,21 @@ body > main {
   white-space: nowrap;
   text-align: left;
   padding: 10px 12px;
-  /* 分隔线用 inset 阴影而非 border：collapsed border 下不会脱落 */
-  /* 表头不铺色块：透明底 + 一条比行线重的规线，层级靠字重与留白立起来 */
-  box-shadow: inset 0 -1px 0 var(--border-strong);
-  background: transparent;
+  /* 表头改用 panel-2 色带分层（颜色替代线条）：与输入控件同一套填充语言 */
+  background: var(--panel-2);
   font-size: 11px;
   font-weight: 550;
   letter-spacing: 0.04em;
   color: var(--text-3);
+}
+
+/* 表头色带贴面板顶时随圆角裁齐；色带在面板中部时呈现为嵌入色条，同样成立 */
+.dtable thead th:first-child {
+  border-top-left-radius: 12px;
+}
+
+.dtable thead th:last-child {
+  border-top-right-radius: 12px;
 }
 
 /* 可排序列头：右侧预留排序图标槽位，文字最多到槽位为止，不与右上角图标重叠 */
@@ -878,7 +874,7 @@ body > main {
 
 .pager-page.on {
   color: var(--accent-text);
-  border-color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .pager-gap {
@@ -994,23 +990,13 @@ body > main {
 }
 
 .btn-ghost {
-  background: var(--panel);
-  border-color: var(--border);
+  /* 与输入控件同一套填充语言：中性填充底承担「按钮」身份，白卡与浅灰页底上都可见 */
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text);
 }
 
 .btn-ghost:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--panel-2);
-}
-
-/* 亮色下白按钮与卡片同材质：半透白让页底蓝微微透出，hover 才补足不透明度 */
-html:not([data-theme="dark"]) .btn-ghost {
-  background: rgba(255, 255, 255, 0.78);
-}
-
-html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.95);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .btn-text {
@@ -1097,7 +1083,6 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
 
 .modal {
   background: var(--panel);
-  border: 1px solid var(--border);
   border-radius: 10px;
   width: 100%;
   max-height: 86vh;
@@ -1204,7 +1189,6 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   height: 20px;
   border-radius: 9999px;
   background: var(--tone-gray-bg);
-  border: 1px solid var(--border);
   position: relative;
   cursor: pointer;
   transition: background-color var(--dur);
@@ -1223,8 +1207,9 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  /* 亮核白钮 + 一点投影：两个主题、两种状态都看得清，不靠描边 */
+  background: var(--accent-contrast);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   transition:
     transform var(--dur),
     background-color var(--dur);
@@ -1259,7 +1244,8 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   width: 16px;
   height: 16px;
   border-radius: 4px;
-  border: 1px solid var(--border-strong);
+  /* 未勾选态用中性填充色承担「空框」身份，勾选后亮品牌色 */
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   display: grid;
   place-items: center;
   margin-top: 2px;
@@ -1367,7 +1353,6 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   overflow-y: auto;
   padding: 4px;
   border-radius: 8px;
-  border: 1px solid var(--border);
   background: var(--panel);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14);
 }
@@ -1552,7 +1537,8 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
 .tline li {
   position: relative;
   padding: 0 0 16px 20px;
-  border-left: 1px solid var(--border);
+  /* 时间线脊线是结构而非边框：降为一档弱墨色，让位给状态圆点 */
+  border-left: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
 }
 
 .tline li:last-child {
@@ -1749,7 +1735,6 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   right: 0;
   width: 220px;
   background: var(--panel);
-  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
@@ -1791,7 +1776,6 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
 }
 
 .nav-pop-theme {
-  border-top: 1px solid var(--border);
   margin-top: 8px;
   padding: 10px 4px 2px;
   display: grid;
@@ -1802,7 +1786,7 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   color: var(--text-2);
   border-radius: 4px;
@@ -1812,12 +1796,12 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   font-family: inherit;
   transition:
     color var(--dur),
-    border-color var(--dur);
+    background-color var(--dur);
 }
 
 .nav-pop-theme-item.active {
   color: var(--accent-text);
-  border-color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 /* 桌面主题切换：单图标触发器 + 右对齐下拉（三选） */
@@ -1880,21 +1864,12 @@ html:not([data-theme="dark"]) .nav-pop {
   gap: 14px;
 }
 
+/* 亮色卡片一律实色白底：浅灰页底上靠明度差分层，不再走毛玻璃 */
 .stat-card {
   padding: 20px 22px 19px;
   min-width: 0;
   background: var(--panel);
-  border: var(--card-border);
   border-radius: 12px;
-  box-shadow: var(--shadow-panel);
-}
-
-/* 亮色模式：统计卡片与面板用毛玻璃分层；暗色保持实色底 */
-html:not([data-theme="dark"]) .stat-card,
-html:not([data-theme="dark"]) .panel {
-  background: rgba(255, 255, 255, 0.75);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .stat-label {
@@ -1987,7 +1962,8 @@ html:not([data-theme="dark"]) .panel {
   gap: 2px;
   padding: 4px;
   border-radius: 9999px;
-  background: color-mix(in srgb, var(--panel-2) 72%, transparent);
+  /* 白玻璃胶囊：浅灰页底上靠明度差浮起 */
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
@@ -2118,11 +2094,10 @@ html:not([data-theme="dark"]) .panel {
   margin-top: 30px;
 }
 
-/* 右侧"最新事件"侧栏（AA 的 LAUNCH 侧栏位） */
+/* 右侧"最新事件"侧栏：与主栏靠留白分栏，不画竖线 */
 .hero-side {
   position: relative;
-  border-left: 1px solid var(--border);
-  padding-left: 24px;
+  padding-left: 0;
   display: grid;
   gap: 14px;
   align-self: stretch;
@@ -2187,30 +2162,10 @@ html:not([data-theme="dark"]) .panel {
 }
 
 .landing-section {
-  /* 统一分区节奏：发丝线分隔 + 一致的上下留白（72px 对齐 Linear 的留白档）；
-     线条由 ::before 承担，滚动进入时展开 */
+  /* 统一分区节奏：只靠留白分区（72px 对齐 Linear 的留白档），分界处由爪印小节标点 */
   position: relative;
   margin-top: 32px;
   padding-top: 72px;
-}
-
-.landing-section::before,
-.landing-cta::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: var(--border);
-  transform: scaleX(0);
-  transform-origin: left center;
-  transition: transform 1.1s var(--ease) 0.1s;
-}
-
-.reveal.is-in .landing-section::before,
-.reveal.is-in .landing-cta::before {
-  transform: scaleX(1);
 }
 
 /* 滚动进入：整节淡入上移，一次触发不回退 */
@@ -2357,7 +2312,7 @@ html:not([data-theme="dark"]) .panel {
 .article-toc a + a::before {
   content: "·";
   margin-right: 4px;
-  color: var(--border);
+  color: var(--text-3);
 }
 
 .article-toc a:hover {
@@ -2383,14 +2338,12 @@ html:not([data-theme="dark"]) .panel {
   font-family: var(--mono);
   font-size: 12.5px;
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 5px;
   padding: 1px 6px;
 }
 
 .article-body pre {
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 13px 15px;
   margin: 0 0 14px;
@@ -2417,7 +2370,8 @@ html:not([data-theme="dark"]) .panel {
 
 .article-body th,
 .article-body td {
-  border: 1px solid var(--border);
+  border: none;
+  border-bottom: 1px solid var(--border);
   padding: 7px 11px;
   text-align: left;
   vertical-align: top;
@@ -2444,7 +2398,6 @@ html:not([data-theme="dark"]) .panel {
 .article-back {
   margin-top: 44px;
   padding-top: 20px;
-  border-top: 1px solid var(--border);
 }
 
 /* 文章列表卡片：标题行左文右日期，摘要在下 */
@@ -2458,11 +2411,11 @@ html:not([data-theme="dark"]) .panel {
   padding: 22px 24px;
   color: inherit;
   text-decoration: none;
-  transition: border-color var(--dur) var(--ease);
+  transition: background-color var(--dur) var(--ease);
 }
 
 .article-card:hover {
-  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--panel-2) 45%, var(--panel));
 }
 
 .article-card-head {
@@ -2974,8 +2927,8 @@ html:not([data-theme="dark"]) .panel {
   letter-spacing: 0.02em;
   white-space: nowrap;
   color: var(--text-2);
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
   opacity: 0;
   pointer-events: none;
   transition: opacity 160ms linear;
@@ -3201,14 +3154,15 @@ html:not([data-theme="dark"]) .panel {
   background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
-/* 快照表面板头：活数据的时间戳，把素表格变成「此刻的快照」 */
+/* 快照表面板头：活数据的时间戳，把素表格变成「此刻的快照」；panel-2 色带替代分隔线 */
 .snap-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 11px 16px;
-  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 12px 12px 0 0;
 }
 
 .snap-head-title {
@@ -3231,7 +3185,7 @@ html:not([data-theme="dark"]) .panel {
   color: var(--text-3);
 }
 
-/* Bento 产品介绍：1 大（主价值可点）+ 3 小（能力一句话），panel 发丝线卡一套语言 */
+/* Bento 产品介绍：1 大（主价值可点）+ 3 小（能力一句话），白底色块卡一套语言 */
 .bento-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3244,26 +3198,17 @@ html:not([data-theme="dark"]) .panel {
   gap: 10px;
   padding: 26px 28px;
   background: var(--panel);
-  border: var(--card-border);
   border-radius: 12px;
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
   color: inherit;
   text-decoration: none;
   transition:
-    border-color var(--dur) var(--ease),
-    transform var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease);
+    background-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
 }
 
 .bento-card:hover {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  background: color-mix(in srgb, var(--panel-2) 45%, var(--panel));
   transform: translateY(-2px);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent),
-    0 12px 40px color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 /* 入场 stagger：随区块 reveal 后各卡依次浮入（reduced-motion 下由全局降级接管） */
@@ -3273,8 +3218,7 @@ html:not([data-theme="dark"]) .panel {
   transition:
     opacity 0.6s var(--ease),
     transform 0.6s var(--ease),
-    border-color var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease);
+    background-color var(--dur) var(--ease);
 }
 
 .reveal.is-in .bento-card {
@@ -3478,28 +3422,17 @@ html:not([data-theme="dark"]) .panel {
   gap: 10px;
   padding: 20px 22px;
   background: var(--panel);
-  border: var(--card-border);
   border-radius: 12px;
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
   color: inherit;
   text-decoration: none;
   transition:
-    background var(--dur) linear,
-    border-color var(--dur) var(--ease),
-    transform var(--dur) var(--ease),
-    box-shadow var(--dur) var(--ease);
+    background-color var(--dur) linear,
+    transform var(--dur) var(--ease);
 }
 
 .site-card:hover {
   background: color-mix(in srgb, var(--panel-2) 55%, var(--panel));
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
   transform: translateY(-2px);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent),
-    0 12px 40px color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .site-card--off {
@@ -3548,9 +3481,13 @@ html:not([data-theme="dark"]) .panel {
 .site-card--more {
   align-items: center;
   justify-content: center;
-  background: none;
-  border-style: dashed;
+  /* 「更多」卡用品牌色淡底发出邀请，颜色替代虚线框 */
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
   box-shadow: none;
+}
+
+.site-card--more:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .site-card-more-label {
@@ -3647,12 +3584,11 @@ html:not([data-theme="dark"]) .panel {
   animation: rise-in 600ms var(--ease) both;
 }
 
-/* ---- 页脚（紧凑单区） ---- */
+/* ---- 页脚（紧凑单区）：与正文靠留白分层，不画线 ---- */
 .site-footer {
   position: relative;
   /* 页脚在 .page 之外，装饰贴边时防止横向撑出滚动条 */
   overflow-x: clip;
-  border-top: 1px solid var(--border);
   margin-top: 40px;
 }
 
@@ -3702,13 +3638,12 @@ button.footer-icon {
   gap: 14px;
 }
 
-/* 白底内衬是二维码的 quiet zone，被页脚底色包住也扫得上 */
+/* 白底内衬是二维码的 quiet zone，扫得上即可 */
 .site-footer-qr img {
   width: 84px;
   height: 84px;
   padding: 6px;
   border-radius: 4px;
-  border: 1px solid var(--border);
   background: #fff;
 }
 
@@ -3741,7 +3676,6 @@ button.footer-icon {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  border-top: 1px solid var(--border);
 }
 
 .site-footer-meta-links {
@@ -3792,11 +3726,10 @@ button.footer-icon {
   top: 76px;
   /* 吸顶间距跟随导航显隐切换时平滑过渡，曲线与导航滑回动画一致 */
   transition: top 0.35s cubic-bezier(0.22, 1, 0.36, 1);
-  /* 毛玻璃 + 发丝边框：材质对齐导航胶囊，页头光晕从底下柔和透出不生硬 */
+  /* 毛玻璃白底：材质对齐导航胶囊，无边框 */
   background: color-mix(in srgb, var(--panel) 84%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: var(--card-border);
   border-radius: 12px;
   padding: 10px;
   display: grid;
@@ -3948,7 +3881,9 @@ html:not([data-theme="dark"]) .admin-rail a.active::before {
   justify-content: space-between;
   gap: 12px;
   padding: 13px 20px;
-  border-bottom: 1px solid var(--border);
+  /* 面板头用 panel-2 色带替代底部细线 */
+  background: var(--panel-2);
+  border-radius: 12px 12px 0 0;
 }
 
 .dash-panel-title {
@@ -3995,23 +3930,18 @@ html:not([data-theme="dark"]) .admin-rail a.active::before {
   color: var(--text-3);
 }
 
-/* 事件流：紧凑单行列表，不再占满一屏 */
+/* 事件流：紧凑单行列表，行与行靠间距呼吸，不再画线 */
 .dash-events {
   padding: 4px 16px;
   display: grid;
-  gap: 0;
+  gap: 2px;
 }
 
-/* 面板里的事件行用发丝线分隔，替代一排描边小盒 */
-/* 面板里的事件行不带描边盒（避免盒套盒），改用发丝线分行 */
+/* 面板里的事件行不带描边盒（避免盒套盒），行身份由 hover 底色承担 */
 .dash-events .event-card {
   border-radius: 0;
   padding: 9px 18px;
   background: transparent;
-}
-
-.dash-events .event-card + .event-card {
-  border-top: 1px solid var(--border);
 }
 
 /* 整行可点的事件卡：复用历史页的去边框 hover 材质，链接态去下划线 */
@@ -4059,7 +3989,6 @@ a.event-card {
 .admin-rail-logout {
   margin-top: 8px;
   border: none;
-  border-top: 1px solid var(--border);
   border-radius: 0;
   background: transparent;
   color: var(--text-3);
@@ -4077,7 +4006,6 @@ a.event-card {
 
 /* 概览入门清单 */
 .guide {
-  border: var(--card-border);
   border-radius: 12px;
   background: var(--panel);
   box-shadow: var(--shadow-panel);
@@ -4109,11 +4037,6 @@ a.event-card {
   align-items: center;
   gap: 14px;
   padding: 16px 0;
-  border-top: 1px solid var(--border);
-}
-
-.guide-list li:first-child {
-  border-top: none;
 }
 
 .guide-icon {
@@ -4153,7 +4076,6 @@ a.event-card {
   display: flex;
   align-items: center;
   gap: 6px;
-  border-top: 1px solid var(--border);
   margin: 0;
   padding-top: 14px;
   color: var(--text-3);
@@ -4176,7 +4098,6 @@ a.event-card {
   gap: 6px;
   justify-items: start;
   background: var(--panel);
-  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 30px 28px 26px;
   box-shadow: 0 16px 48px rgba(15, 26, 38, 0.1);
@@ -4239,7 +4160,6 @@ a.event-card {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--panel-2);
-  border: 1px solid var(--border);
   font-size: 11px;
 }
 
@@ -4285,7 +4205,6 @@ a.event-card {
 }
 
 .setup-keys-group {
-  border-top: 1px solid var(--border);
   padding-top: 14px;
   display: grid;
   gap: 10px;
@@ -4317,7 +4236,6 @@ a.event-card {
   justify-content: space-between;
   gap: 16px;
   padding: 14px 0;
-  border-top: 1px solid var(--border);
 }
 
 .setup-done-title {
@@ -4382,11 +4300,9 @@ a.event-card {
     gap: 6px;
   }
 
-  /* 退出登录去掉竖排的顶部分隔线，改为竖线分隔 */
+  /* 退出登录去掉分隔线，横排里就是右侧一个安静的链接 */
   .admin-rail-logout {
     margin-top: 0;
-    border-top: none;
-    border-left: 1px solid var(--border);
     padding: 6px 10px;
     white-space: nowrap;
     flex-shrink: 0;
@@ -4597,9 +4513,6 @@ a.event-card {
   }
 
   .hero-side {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding-left: 0;
     padding-top: 20px;
   }
 
@@ -4674,8 +4587,6 @@ a.event-card {
 
 .markdown-doc h1 {
   font-size: 26px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
 }
 
 .markdown-doc h2 {
@@ -4735,14 +4646,12 @@ a.event-card {
   font-family: var(--mono);
   font-size: 12.5px;
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 6px;
 }
 
 .markdown-doc pre {
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 14px 16px;
   overflow-x: auto;
@@ -4768,7 +4677,8 @@ a.event-card {
 
 .markdown-doc th,
 .markdown-doc td {
-  border: 1px solid var(--border);
+  border: none;
+  border-bottom: 1px solid var(--border);
   padding: 7px 12px;
   text-align: left;
   vertical-align: top;
@@ -5124,14 +5034,12 @@ a.event-card {
   font-family: var(--mono);
   font-size: 12px;
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
 }
 
 .notice-body pre {
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px 14px;
   overflow-x: auto;
@@ -5157,7 +5065,8 @@ a.event-card {
 
 .notice-body th,
 .notice-body td {
-  border: 1px solid var(--border);
+  border: none;
+  border-bottom: 1px solid var(--border);
   padding: 6px 10px;
   text-align: left;
   vertical-align: top;
@@ -5229,15 +5138,9 @@ a.event-card {
   font-size: 12px;
   color: var(--text-3);
   background: var(--panel-2);
-  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0 6px;
   line-height: 1.7;
-}
-
-/* 历史折叠区：条目之间发丝线分隔 */
-.notice-history {
-  border-top: 1px solid var(--border);
 }
 
 .notice-history > summary {
@@ -5281,7 +5184,6 @@ a.event-card {
 
 .notice-history .notice-item {
   padding: 14px 0 4px;
-  border-top: 1px solid var(--border);
 }
 
 .notice-history .notice-item:first-child {
@@ -5403,7 +5305,7 @@ a.event-card {
   justify-content: center;
 }
 
-/* FAQ 收进一张整卡：发丝线分项，与全页卡片同语言，不再是一列悬浮文字 */
+/* FAQ 收进一张整卡：问答对之间靠间距呼吸，不再画分隔线 */
 .faq-list {
   max-width: 780px;
   margin: 0 auto;
@@ -5411,13 +5313,8 @@ a.event-card {
   gap: 0;
   padding: 4px 24px;
   background: var(--panel);
-  border: var(--card-border);
   border-radius: 12px;
   box-shadow: var(--shadow-panel);
-}
-
-.faq-item + .faq-item {
-  border-top: 1px solid var(--border);
 }
 
 .faq-item .faq-question {
@@ -5553,8 +5450,6 @@ a.event-card {
 
 @media (prefers-reduced-motion: reduce) {
   .reveal,
-  .landing-section::before,
-  .landing-cta::before,
   .faq-body {
     transition: none;
     animation: none;
@@ -5569,11 +5464,6 @@ a.event-card {
     opacity: 1;
     transform: none;
     transition: none;
-  }
-
-  .landing-section::before,
-  .landing-cta::before {
-    transform: none;
   }
 }
 
@@ -5682,9 +5572,7 @@ a.event-card {
   height: 100dvh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  border: 0;
-  border-left: 1px solid var(--border);
-  /* 贴边全高直角面板 */
+  /* 贴边全高直角面板，与页面之间靠投影分层，不画描边 */
   border-radius: 0;
   /* 不透明实体面板：对话区不被底下的页面内容干扰 */
   background: var(--panel);
@@ -5697,8 +5585,6 @@ a.event-card {
 .ai-drawer-left {
   right: auto;
   left: 0;
-  border-left: 0;
-  border-right: 1px solid var(--border);
   border-radius: 0;
   box-shadow: 20px 0 52px rgba(0, 0, 0, 0.2);
 }
@@ -5708,7 +5594,8 @@ a.event-card {
   align-items: center;
   gap: 11px;
   padding: 14px 14px 12px 16px;
-  border-bottom: 1px solid var(--border);
+  /* 头部用 panel-2 色带分区，不再画线 */
+  background: var(--panel-2);
 }
 
 .ai-drawer-title {
@@ -5719,7 +5606,7 @@ a.event-card {
 .ai-drawer-title strong {
   display: block;
   font-size: 14.5px;
-  color: var(--text-1);
+  color: var(--text);
 }
 
 .ai-drawer-title span {
@@ -5749,7 +5636,7 @@ a.event-card {
 }
 
 .ai-drawer-btn:hover {
-  color: var(--text-1);
+  color: var(--text);
   background: var(--tone-gray-bg);
 }
 
@@ -5790,7 +5677,7 @@ a.event-card {
   margin: 4px 0 0;
   font-size: 14.5px;
   font-weight: 620;
-  color: var(--text-1);
+  color: var(--text);
 }
 
 .ai-greet span {
@@ -5807,21 +5694,19 @@ a.event-card {
 .ai-suggest button {
   text-align: left;
   padding: 9px 14px;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: none;
   border-radius: 4px;
-  background: none;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text-2);
   font-size: 13px;
   cursor: pointer;
   transition:
     color var(--dur),
-    border-color var(--dur),
     background var(--dur);
 }
 
 .ai-suggest button:hover {
   color: var(--accent-text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
@@ -5860,16 +5745,15 @@ a.event-card {
   border-radius: 4px;
   /* 淡橙底保留"我的消息"识别度，文字回归正文色，明暗主题都不刺眼 */
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--text-1);
+  color: var(--text);
   font-weight: 520;
 }
 
 .ai-msg-assistant {
   align-self: flex-start;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   border-radius: 4px;
-  background: color-mix(in srgb, var(--text-1) 3%, transparent);
-  color: var(--text-1);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
 }
 
 /* pre-wrap 继承自 .ai-msg（为用户消息的换行保留）：markdown 输出里块级元素间
@@ -5908,7 +5792,7 @@ a.event-card {
 .ai-markdown code {
   padding: 1px 5px;
   border-radius: 0;
-  background: color-mix(in srgb, var(--text-1) 8%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12.5px;
 }
@@ -5916,10 +5800,9 @@ a.event-card {
 .ai-markdown pre {
   margin: 6px 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
   border-radius: 0;
   overflow-x: auto;
-  background: color-mix(in srgb, var(--text-1) 5%, transparent);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 .ai-markdown pre code {
@@ -5938,13 +5821,14 @@ a.event-card {
 .ai-markdown th,
 .ai-markdown td {
   padding: 5px 10px;
-  border: 1px solid var(--border);
+  border: none;
+  border-bottom: 1px solid var(--border);
   text-align: left;
 }
 
 .ai-markdown th {
   font-weight: 620;
-  background: color-mix(in srgb, var(--text-1) 5%, transparent);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 .ai-markdown a {
@@ -5992,19 +5876,20 @@ a.event-card {
   display: flex;
   gap: 9px;
   padding: 13px 14px;
-  border-top: 1px solid var(--border);
+  /* 输入区用 panel-2 色带分区，输入框在本体上垫白 */
+  background: var(--panel-2);
 }
 
 .ai-drawer-input input {
   flex: 1;
   min-width: 0;
   padding: 10px 15px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: none;
-  color: var(--text-1);
+  border: none;
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
   font-size: 13.5px;
-  transition: border-color var(--dur);
+  transition: box-shadow var(--dur);
 }
 
 .ai-drawer-input input::placeholder {
@@ -6013,7 +5898,7 @@ a.event-card {
 
 .ai-drawer-input input:focus {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .ai-drawer-input button {
@@ -6055,16 +5940,18 @@ a.event-card {
 .ai-history-item {
   display: flex;
   align-items: stretch;
-  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  overflow: hidden;
 }
 
 .ai-history-item:hover {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--text) 9%, transparent);
 }
 
-.ai-history-active {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+.ai-history-active,
+.ai-history-item.ai-history-active:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .ai-history-open {
@@ -6076,7 +5963,7 @@ a.event-card {
   padding: 9px 12px;
   border: 0;
   background: none;
-  color: var(--text-1);
+  color: var(--text);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
@@ -6098,7 +5985,6 @@ a.event-card {
   place-items: center;
   width: 34px;
   border: 0;
-  border-left: 1px solid var(--border);
   background: none;
   color: var(--text-3);
   cursor: pointer;
@@ -6108,7 +5994,7 @@ a.event-card {
 }
 
 .ai-history-del:hover {
-  color: var(--text-1);
+  color: var(--text);
   background: var(--tone-gray-bg);
 }
 
@@ -6137,7 +6023,7 @@ a.event-card {
 }
 
 .ai-history-clear:hover {
-  color: var(--text-1);
+  color: var(--text);
 }
 
 @media (max-width: 768px) {
@@ -6186,7 +6072,6 @@ a.event-card {
 .calc-row + .calc-row {
   margin-top: 14px;
   padding-top: 14px;
-  border-top: 1px solid var(--border);
 }
 
 .calc-head {
@@ -6677,7 +6562,7 @@ a.event-card {
   }
 }
 
-/* 首页区块分隔线正中的小爪印：随分隔线一起在滚动进入时浮现 */
+/* 首页区块分界处的小爪印：滚动进入时浮现，替代分隔线做节拍点 */
 .landing-section::after {
   content: "";
   position: absolute;

@@ -298,7 +298,7 @@ export function Calculator({
           />
           {source === "site" && (
             <span className="sel-wrap calc-site" style={{ marginLeft: "auto" }}>
-              <select className="sel" aria-label="选择站点" value={site} onChange={(event) => pickSite(event.target.value)}>
+              <select name="calc-site" className="sel" aria-label="选择站点" value={site} onChange={(event) => pickSite(event.target.value)}>
                 <option value="">{calculator.sitePlaceholder}</option>
                 {siteOptions.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -378,6 +378,7 @@ export function Calculator({
             <span className="calc-field-label">{calculator.usageSelect}</span>
             <span className="sel-wrap">
               <select
+                name="calc-token-preset"
                 className="sel"
                 aria-label="选择用量档位"
                 value={String(totalTokens)}

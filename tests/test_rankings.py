@@ -139,7 +139,7 @@ def _minimal_config(tmp_path: Path) -> Path:
             "event_file": str(tmp_path / "var" / "events.jsonl"),
             "schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0},
         },
-        "ai": {"enabled": False},
+        "ai": {},
         "sites": [],
     }), encoding="utf-8")
     (tmp_path / "var").mkdir(exist_ok=True)

@@ -531,8 +531,11 @@ export function AssistantDock() {
             }}
           >
             <input
+              name="ai-message"
+              autoComplete="off"
               value={input}
               placeholder="问问 AI：比价、走势、渠道状态…"
+              aria-label="问问 AI"
               onChange={(event) => setInput(event.target.value)}
               disabled={pending}
             />

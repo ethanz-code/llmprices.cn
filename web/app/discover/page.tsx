@@ -74,7 +74,6 @@ export default async function DiscoverPage() {
           marginTop: 28,
           padding: "18px 24px",
           background: "var(--panel)",
-          border: "var(--card-border)",
           borderRadius: 12,
           display: "flex",
           flexWrap: "wrap",

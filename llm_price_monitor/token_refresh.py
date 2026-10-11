@@ -151,10 +151,10 @@ def _with_access_token(spec: SiteSpec, access_token: str) -> SiteSpec:
     return replace(
         spec,
         auth_token=access_token,
-        network=_synced_endpoint(spec.network, access_token, spec.auth_header),
-        networks=tuple(_synced_endpoint(entry, access_token, spec.auth_header) for entry in spec.networks),
-        status=_synced_endpoint(spec.status, access_token, spec.auth_header),
-        notice=_synced_endpoint(spec.notice, access_token, spec.auth_header),
+        network=_synced_endpoint(spec.network, access_token, "Authorization"),
+        networks=tuple(_synced_endpoint(entry, access_token, "Authorization") for entry in spec.networks),
+        status=_synced_endpoint(spec.status, access_token, "Authorization"),
+        notice=_synced_endpoint(spec.notice, access_token, "Authorization"),
     )
 
 
@@ -163,14 +163,13 @@ def persist_refreshed_config(store: Any, site_id: str, access_token: str, refres
     config = store.get_site_config(site_id)
     if config is None:
         return
-    auth_header = str(config.get("auth_header") or "Authorization")
     updated = {
         **config,
         "auth_token": access_token,
-        "network": _synced_endpoint(config.get("network") or {}, access_token, auth_header),
-        "networks": [_synced_endpoint(entry, access_token, auth_header) for entry in (config.get("networks") or [])],
-        "status": _synced_endpoint(config.get("status") or {}, access_token, auth_header),
-        "notice": _synced_endpoint(config.get("notice") or {}, access_token, auth_header),
+        "network": _synced_endpoint(config.get("network") or {}, access_token, "Authorization"),
+        "networks": [_synced_endpoint(entry, access_token, "Authorization") for entry in (config.get("networks") or [])],
+        "status": _synced_endpoint(config.get("status") or {}, access_token, "Authorization"),
+        "notice": _synced_endpoint(config.get("notice") or {}, access_token, "Authorization"),
         "token_refresh": {**(config.get("token_refresh") or {}), "refresh_token": refresh_token},
     }
     store.upsert_site(site_id, updated)

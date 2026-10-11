@@ -39,7 +39,22 @@ class ModelTarget:
     name: str
 
 
-DEPRECATED_SITE_FIELDS = frozenset({"note", "preferred_response_url_patterns", "ratio_base_price", "model_list_url", "currency", "models"})  # 已废弃的站点字段：加载/保存时静默丢弃；目标模型统一走 settings.monitor_models
+# 纯描述性的废弃字段：是否残留不影响站点是不是"占位站"
+COSMETIC_SITE_FIELDS = frozenset({"note", "currency", "adapter", "preferred_response_url_patterns", "ratio_base_price"})
+
+DEPRECATED_SITE_FIELDS = frozenset({
+    "note",
+    "preferred_response_url_patterns",
+    "ratio_base_price",
+    "model_list_url",
+    "currency",
+    "models",  # 目标模型统一走 settings.monitor_models
+    "adapter",  # 适配器注册表只剩 standard，字段连同旧值 browser/network/rate_base 一并退役
+    "auth_header",  # 注入头名固定 Authorization，自定义头走 auth_inject
+    "auth_prefix",  # 注入值前缀固定 Bearer
+    "cookie",  # Cookie 统一走 request_headers.Cookie 或 auth_inject
+    "cookies",
+})  # 已废弃的站点字段：加载/保存时静默丢弃
 
 # 凭证注入的三个目标：价格采集（含附加地址、倍率接口、Headless）、渠道状态、站点公告
 AUTH_INJECT_TARGETS = ("price", "status", "notice")
@@ -49,15 +64,12 @@ REFRESH_TOKEN_VAR = "${refresh_token}"
 
 # 站点级字段的默认值：与默认相同就不落库，读取时由 SiteSpec 默认值兜底
 SITE_FIELD_DEFAULTS: dict[str, Any] = {
-    "adapter": "standard",
-    "auth_header": "Authorization",
-    "auth_prefix": "Bearer ",
     "enabled": True,
 }
 
 
 def slim_site_config(config: dict[str, Any]) -> dict[str, Any]:
-    """去掉站点配置里的空值与默认值字段（auth_token: null、auth_header: "Authorization"、空的 params 等）。
+    """去掉站点配置里的空值与默认值字段（auth_token: null、enabled: true、空的 params 等）。
 
     这些键写出来只是噪音：认证三项本来就是站点级通用配置，null/空容器读取时走默认值。
     旧配置里显式写了这些字段的，保存或整理一次后自动瘦身。
@@ -89,7 +101,7 @@ def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[
     notes: list[str] = []
     slimmed = slim_site_config(config)
     if slimmed != config:
-        notes.append("去掉空值与默认值字段（auth_token: null、默认 auth_header/auth_prefix、空容器等）")
+        notes.append("去掉空值与默认值字段（auth_token: null、默认 enabled、空容器等）")
     config = slimmed
 
     refresh = config.get("token_refresh")
@@ -171,13 +183,8 @@ def schedule_from_raw(raw: Any) -> dict[str, float]:
 @dataclass(frozen=True)
 class SiteSpec:
     id: str
-    adapter: str = "standard"  # 旧值 browser/network/rate_base 载入时归一为 standard
     models: tuple[ModelTarget, ...] = ()
     auth_token: str | None = None
-    auth_header: str = "Authorization"
-    auth_prefix: str = "Bearer "
-    cookie: str | None = None
-    cookies: dict[str, str] = field(default_factory=dict)
     request_headers: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
     network: dict[str, Any] = field(default_factory=dict)
@@ -201,10 +208,6 @@ class MonitorSettings:
     wxpusher_app_token: str | None = None
     wxpusher_uid: str | None = None
     user_agent: str = DEFAULT_BROWSER_USER_AGENT
-    random_user_agent: bool = False
-    user_agent_platforms: tuple[str, ...] = ()
-    user_agent_chrome_versions: tuple[str, ...] = ()
-    user_agent_version_window: int = 2
     # 数据保留天数：超期由对应采集任务/接口顺带清理；价格与站点事件永不清理
     retention_price_days: int = 90
     retention_visit_days: int = 90
@@ -213,13 +216,8 @@ class MonitorSettings:
     retention_ai_log_days: int = 7
     # 「报错判定」勾成不算失败的 AI 报错组（分组键见 store.ai_error_kind）：不计失败、不进成功率分母
     ai_ignored_errors: tuple[str, ...] = ()
-    # 任务记录保留条数（清理界限，超出淘汰最旧）与单任务日志滚动行数上限
-    max_task_runs: int = 100
-    max_task_log_lines: int = 500
     # AI 助手每 IP 每天提问次数上限；0 表示不限制
     assistant_daily_limit: int = 10
-    # AI 助手每 IP 每小时提问次数上限（防单访客高频刷问题）；0 表示不限制
-    assistant_hourly_limit: int = 10
     # 通用监控目标模型：全部站点统一按这份清单采集（站点管理页配置），必须列出明确模型名
     monitor_models: tuple[str, ...] = ()
     # 从监控清单里被手动移除过的模型：目录刷新自动补模型时跳过，避免删掉又被加回
@@ -234,7 +232,6 @@ class MonitorSettings:
 
 @dataclass(frozen=True)
 class AIConfig:
-    enabled: bool = True
     base_url: str = ""
     models: tuple[str, ...] = ()
     api_key: str | None = None
@@ -242,9 +239,6 @@ class AIConfig:
     # AI 请求显式代理地址；留空直连（绕开本地 Clash 等环境代理掐长连接，见 ai.ai_http_client）
     proxy: str | None = None
     timeout: float = 180.0
-    max_input_chars: int = 60000
-    max_tokens: int = 16000
-    enable_thinking: bool = False
     cache: AIResultCache | None = None
     # 价格提取的固定起始模型；留空=每批随机选（多模型分摊用量）。
     # 提取数值依赖模型读法，随机轮换会让同一站点价格轮间漂移，追求稳定就固定一个。
@@ -260,8 +254,8 @@ class AIConfig:
 
     @property
     def usable(self) -> bool:
-        """发起 AI 请求的最低条件：已启用、有地址、模型池非空。"""
-        return bool(self.enabled and self.base_url and self.models)
+        """发起 AI 请求的最低条件：有地址、模型池非空。"""
+        return bool(self.base_url and self.models)
 
 
 @dataclass(frozen=True)
@@ -274,7 +268,7 @@ class MonitorConfig:
 def settings_from_raw(raw: dict[str, Any], *, resolve_env: bool) -> MonitorSettings:
     raw = raw if isinstance(raw, dict) else {}
     values: dict[str, Any] = {key: raw[key] for key in MonitorSettings.__dataclass_fields__ if key in raw}
-    for key in ("user_agent_platforms", "user_agent_chrome_versions", "ai_ignored_errors", "monitor_models", "monitor_models_dismissed"):
+    for key in ("ai_ignored_errors", "monitor_models", "monitor_models_dismissed"):
         if key in values:
             value = values[key]
             if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
@@ -291,10 +285,7 @@ def settings_from_raw(raw: dict[str, Any], *, resolve_env: bool) -> MonitorSetti
         or values["monitor_model_max_age_months"] < 0
     ):
         raise ValueError("settings.monitor_model_max_age_months 必须是不小于 0 的整数（月，0 表示不自动清理）")
-    for key in ("max_task_runs", "max_task_log_lines"):
-        if key in values and (not isinstance(values[key], int) or isinstance(values[key], bool) or values[key] < 1):
-            raise ValueError(f"settings.{key} 必须是不小于 1 的整数")
-    for key in ("assistant_daily_limit", "assistant_hourly_limit"):
+    for key in ("assistant_daily_limit",):
         if key in values and (not isinstance(values[key], int) or isinstance(values[key], bool) or values[key] < 0):
             raise ValueError(f"settings.{key} 必须是不小于 0 的整数（0 表示不限制）")
     fallback_proxy = str(values.get("fallback_proxy") or "").strip() or None
@@ -326,27 +317,16 @@ def ai_from_raw(raw: dict[str, Any], *, cache: AIResultCache | None) -> AIConfig
         if parsed_proxy.scheme not in {"http", "https"} or not parsed_proxy.netloc:
             raise ValueError("配置文件 ai.proxy 必须是完整的 http(s) 代理 URL，留空表示直连")
     timeout = float(raw.get("timeout", 180))
-    max_input_chars = int(raw.get("max_input_chars", 60000))
-    max_tokens = int(raw.get("max_tokens", 16000))
     price_model = str(raw.get("price_model") or "").strip()
     if not timeout > 0:
         raise ValueError("配置文件 ai.timeout 必须是大于 0 的数字（秒）")
-    if max_input_chars < 1:
-        raise ValueError("配置文件 ai.max_input_chars 必须是不小于 1 的整数")
-    if max_tokens < 4000:
-        # 抽取按 8 个模型一批规划输出预算，低于 4000 单批 JSON 必然被截断。
-        raise ValueError("配置文件 ai.max_tokens 最低 4000：低于该值抽取输出必然截断")
     return AIConfig(
-        enabled=bool(raw.get("enabled", True)),
         base_url=base_url,
         models=tuple(dict.fromkeys(item.strip() for item in raw_models if item.strip())),
         api_key=api_key or None,
         api_format=api_format,
         proxy=proxy,
         timeout=timeout,
-        max_input_chars=max_input_chars,
-        max_tokens=max_tokens,
-        enable_thinking=bool(raw.get("enable_thinking", False)),
         price_model=price_model,
         cache=cache,
     )
@@ -475,6 +455,9 @@ def sites_from_raw(values: list[Any], *, models: tuple[ModelTarget, ...] = ()) -
     """
     sites = []
     for raw_value in values:
+        # 占位判定按原始键算：note/adapter 这类纯描述的废弃字段不算内容，
+        # 只剩 id（最多带描述）的才是"先占个位的停用站点"
+        placeholder = not (set(raw_value) - {"id"} - COSMETIC_SITE_FIELDS)
         value = {key: item for key, item in raw_value.items() if key not in DEPRECATED_SITE_FIELDS}
         site_id = value.get("id", "<unknown>")
         if "base_url" in value:
@@ -501,10 +484,11 @@ def sites_from_raw(values: list[Any], *, models: tuple[ModelTarget, ...] = ()) -
         if not isinstance(network, dict):
             raise ValueError(f"站点 {site_id} 的 network 必须是对象")
         network_url = network.get("url")
-        adapter = str(value.get("adapter") or "standard")
-        if adapter in {"browser", "network", "rate_base"}:
-            adapter = "standard"  # 旧配置值归一；rate_base 双地址退化为 network.url 单地址
         network = {key: item for key, item in network.items() if key != "base_price_url"}
+        if not network_url and isinstance(raw_value.get("model_list_url"), str) and raw_value["model_list_url"].strip():
+            # 旧配置的 model_list_url 就是采集地址：新结构没有 URL 时收编为 network.url，老配置直接可用
+            network_url = raw_value["model_list_url"].strip()
+            network = {**network, "url": network_url}
         if isinstance(network_url, dict):
             # 旧 rate_base 的对象形态：归一时只保留主 URL
             inner_url = network_url.get("url")
@@ -569,7 +553,6 @@ def sites_from_raw(values: list[Any], *, models: tuple[ModelTarget, ...] = ()) -
         _validate_auth_inject(raw_auth_inject, site_id)
         site_values = {
             **value,
-            "adapter": adapter,
             "models": models,
             "request_headers": request_headers,
             "network": network,
@@ -578,7 +561,7 @@ def sites_from_raw(values: list[Any], *, models: tuple[ModelTarget, ...] = ()) -
             "notice": raw_notice,
             "auth_inject": raw_auth_inject if isinstance(raw_auth_inject, dict) else {},
         }
-        if set(value) <= {"id"}:
+        if placeholder:
             site_values["enabled"] = False
         sites.append(SiteSpec(**site_values))
     return tuple(sites)

@@ -15,7 +15,12 @@ import llm_price_monitor.ai as _ai
 from .api_format import _body_token_budget, _finish_reason, _usage_tokens, _with_token_budget, ai_content, ai_request
 from .client import ai_http_client
 from .errors import AIExtractionError, AIBudgetExhaustedError, _prompt_too_long, provider_error_detail
-from .state import MIN_USABLE_MAX_TOKENS, learn_model_limit, learn_thinking_required, log_ai_request
+from .state import (
+    MIN_USABLE_MAX_TOKENS,
+    learn_model_limit,
+    learn_thinking_required,
+    log_ai_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +80,7 @@ def _log_pool_exhausted(scene: str, model: str, last_error_text: str, prompt_exc
 def _stream_thinking_attempts(config: AIConfig) -> list[bool | None]:
     """流式重试的翻参序列：只有 chat_completions 的请求体带 enable_thinking，其他结构翻参重试只会白发一次同样的请求。"""
     attempts: list[bool | None] = [None]
-    if config.enable_thinking is False and config.api_format == "chat_completions":
+    if config.api_format == "chat_completions":
         attempts.append(True)
     return attempts
 
@@ -160,7 +165,7 @@ def request_with_model_fallback(
     # 最近校验失败进冷却名单的模型先跳过（全冷却时回退全池，不拒服）
     order = [name for name in pool if _ai._MODEL_COOLDOWN.get(name, 0) <= now] or pool
     request_timeout = timeout or config.timeout
-    request_limit = config.max_tokens if max_tokens is None else max_tokens
+    request_limit = _ai.AI_MAX_TOKENS if max_tokens is None else max_tokens
     # 已学上限连本次最低输出预算（MIN_USABLE_MAX_TOKENS 与 request_limit 取小）都装不下的
     # 模型按"规格过小"剔除——发起必然截断成坏 JSON 白烧一次调用；全被剔时回退原序不拒服
     floor = min(MIN_USABLE_MAX_TOKENS, request_limit)

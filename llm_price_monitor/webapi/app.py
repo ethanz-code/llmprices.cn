@@ -48,7 +48,7 @@ def _ai_seed_document(raw: dict[str, Any]) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     doc = {
         key: raw[key]
-        for key in ("enabled", "base_url", "model", "models", "timeout", "max_input_chars", "max_tokens", "enable_thinking")
+        for key in ("base_url", "model", "models", "timeout")
         if key in raw
     }
     if raw.get("api_key"):

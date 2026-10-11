@@ -31,9 +31,14 @@ model_limits_saver: Callable[[str, int], None] | None = None
 thinking_models_loader: Callable[[], list[str]] | None = None
 thinking_models_saver: Callable[[str], None] | None = None
 
-# 单批价格抽取 JSON 的最低输出预算（同 config.ai_from_raw 的最低校验值）：已学上限低于它的
-# 模型连一批都装不下，发起必然截断成坏 JSON，按"规格过小"从候选序里剔除。
+# 单批价格抽取 JSON 的最低输出预算：已学上限低于它的模型连一批都装不下，发起必然截断成
+# 坏 JSON，按"规格过小"从候选序里剔除。
 MIN_USABLE_MAX_TOKENS = 4000
+
+# 单次请求的输入正文截断长度（字符）：价格页/状态页/公告原文超长时裁到这个规模再发给 AI
+AI_MAX_INPUT_CHARS = 60000
+# 单次请求的输出 token 预算：抽取按 8 个模型一批规划输出，低于 MIN_USABLE_MAX_TOKENS 必然截断
+AI_MAX_TOKENS = 16000
 
 
 def log_ai_request(**fields: Any) -> None:

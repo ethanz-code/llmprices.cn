@@ -719,7 +719,7 @@ def test_fetch_page_prices_ai_fallback_uses_rendered_text(monkeypatch):
         return [], []
 
     monkeypatch.setattr(page_price, "_ai_extract", fake_ai_extract)
-    ai_config = AIConfig(base_url="https://ai.test/v1", models=("m",), api_key="k", enabled=True)
+    ai_config = AIConfig(base_url="https://ai.test/v1", models=("m",), api_key="k")
     result = fetch_page_prices(
         "https://demo.test/pricing",
         ai_config=ai_config,
@@ -772,13 +772,13 @@ def test_fetch_suspect_parse_prefers_ai_records() -> None:
 
 
 def test_fetch_suspect_parse_demoted_without_ai() -> None:
-    """AI 禁用时可疑静态结果保留但整页降级为待复核，不当可信基准。"""
+    """AI 未配置时可疑静态结果保留但整页降级为待复核，不当可信基准。"""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=SUSPICIOUS_PAGE)
 
     result = fetch_page_prices(
         "https://example.com/pricing",
-        ai_config=page_price.AIConfig(base_url="https://ai.test/v1", models=("m",), api_key="k", enabled=False),
+        ai_config=page_price.AIConfig(),
         transport=httpx.MockTransport(handler),
     )
     assert result["method"] == "static-html"
@@ -786,7 +786,7 @@ def test_fetch_suspect_parse_demoted_without_ai() -> None:
     assert any("待复核" in warning for warning in result["warnings"])
 
 
-def test_fetch_big_page_slims_and_chunks_ai() -> None:
+def test_fetch_big_page_slims_and_chunks_ai(monkeypatch: pytest.MonkeyPatch) -> None:
     """超长页剥标签分块逐段提取，再按模型键合并。"""
     filler = "<div>导航菜单占位文字</div>" * 40
     # 价格写成纯文本行：静态三种解析都吃不下，强制走分块 AI
@@ -811,7 +811,8 @@ def test_fetch_big_page_slims_and_chunks_ai() -> None:
             return httpx.Response(200, json=_ai_response(models))
         return httpx.Response(200, text=page)
 
-    config = page_price.AIConfig(base_url="https://ai.test/v1", models=("m",), api_key="k", max_input_chars=200)
+    monkeypatch.setattr(page_price.ai_fallback, "AI_MAX_INPUT_CHARS", 200)  # 窗口调小，短页即可验证分块
+    config = page_price.AIConfig(base_url="https://ai.test/v1", models=("m",), api_key="k")
     result = fetch_page_prices("https://example.com/pricing", ai_config=config, transport=httpx.MockTransport(handler))
     assert result["method"] == "ai"
     assert [record["model"] for record in result["models"]] == ["model-one", "model-two"]

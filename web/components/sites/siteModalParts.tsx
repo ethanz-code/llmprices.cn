@@ -34,19 +34,17 @@ import type { SiteConfig } from "@/lib/types";
         display: "grid",
         gap: 3,
         padding: "10px 12px",
-        border: "1px solid var(--border)",
+        border: "none",
         borderRadius: 8,
-        background: "var(--panel)",
+        background: "color-mix(in srgb, var(--text) 5%, transparent)",
         cursor: "pointer",
-        transition: "border-color 150ms ease, background 150ms ease",
+        transition: "background 150ms ease",
       }}
       onMouseEnter={(event) => {
-        event.currentTarget.style.borderColor = "var(--border-strong)";
-        event.currentTarget.style.background = "var(--panel-2)";
+        event.currentTarget.style.background = "color-mix(in srgb, var(--text) 9%, transparent)";
       }}
       onMouseLeave={(event) => {
-        event.currentTarget.style.borderColor = "var(--border)";
-        event.currentTarget.style.background = "var(--panel)";
+        event.currentTarget.style.background = "color-mix(in srgb, var(--text) 5%, transparent)";
       }}
     >
       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>

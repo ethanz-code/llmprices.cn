@@ -39,8 +39,6 @@ def resolve_ai_config(args: argparse.Namespace) -> tuple[AIConfig | None, str | 
         ai = config_from_store(Store(db_path)).ai
     except Exception as exc:  # 库损坏或配置非法：不阻断拉取，只放弃 AI 兜底
         return None, f"读取 AI 配置失败（{exc}），AI 兜底已跳过"
-    if not ai.enabled:
-        return None, "AI 配置处于禁用状态，AI 兜底已跳过"
     return ai, None
 
 

@@ -445,7 +445,7 @@ def test_attach_catalog_discounts_falls_back_to_live_rate(monkeypatch):
 
 
 def _ai_config(**overrides) -> AIConfig:
-    values: dict = {"enabled": True, "base_url": "https://ai.test/v1", "models": ("test-ai",), "api_key": "sk-test"}
+    values: dict = {"base_url": "https://ai.test/v1", "models": ("test-ai",), "api_key": "sk-test"}
     values.update(overrides)
     return AIConfig(**values)
 
@@ -526,7 +526,7 @@ def test_attach_zh_descriptions_skips_bad_translation_and_off_list():
 
 def test_attach_zh_descriptions_silent_when_unavailable_or_failing():
     output = _desc_output()
-    assert attach_zh_descriptions(output, None, _ai_config(enabled=False), None) == 0
+    assert attach_zh_descriptions(output, None, _ai_config(), None) == 0
     assert "description_zh" not in output["models"]["m1"]
     broken = httpx.MockTransport(lambda request: httpx.Response(500))
     with httpx.Client(transport=broken) as client:
@@ -590,7 +590,7 @@ def test_attach_ai_intros_reuses_previous_generation():
 
 def test_attach_ai_intros_silent_when_unavailable_or_failing():
     output = _intro_output()
-    assert attach_ai_intros(output, None, _ai_config(enabled=False), None) == 0
+    assert attach_ai_intros(output, None, _ai_config(), None) == 0
     assert "description_zh" not in output["models"]["m1"]
     broken = httpx.MockTransport(lambda request: httpx.Response(500))
     with httpx.Client(transport=broken) as client:

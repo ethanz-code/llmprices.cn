@@ -67,8 +67,8 @@ def fetch_page_prices(
         # 解析"有结果但可疑"（档位注释/合并行/重复档价）不能当可信基准：交给 AI 复核，
         # AI 没有产出时整页降级为 candidate，宁可多人工复核也不静默采脏价
         suspect = parsed is not None and _records_suspicious(parsed[0])
-        ai_enabled = ai_config is not None and ai_config.enabled
-        if (parsed is None or suspect) and ai_enabled:
+        ai_usable = ai_config is not None and ai_config.usable
+        if (parsed is None or suspect) and ai_usable:
             try:
                 # 渲染出过正文（无论解析成败）就优先给 AI 看渲染后的正文——原始 text 可能是 JS 空壳
                 ai_text = rendered or text
@@ -81,8 +81,8 @@ def fetch_page_prices(
                     suspect = False
             except (AIExtractionError, httpx.HTTPError, PriceMonitorError) as exc:
                 warnings.append(f"AI 兜底失败：{exc}")
-        elif ai_config is not None and not ai_config.enabled and (parsed is None or suspect):
-            warnings.append("AI 配置已禁用，跳过 AI 兜底")
+        elif ai_config is not None and not ai_config.usable and (parsed is None or suspect):
+            warnings.append("AI 未配置完整（缺接口地址或模型池），跳过 AI 兜底")
         if parsed is not None and suspect:
             for record in parsed[0]:
                 record["price_status"] = "candidate"

@@ -12,7 +12,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 
@@ -22,7 +22,6 @@ from llm_price_monitor.config import (
     ACCESS_TOKEN_VAR,
     AIConfig,
     REFRESH_TOKEN_VAR,
-    ModelTarget,
     PriceMonitorError,
     SiteSpec,
 )
@@ -48,21 +47,18 @@ class Adapter(Protocol):
 
 
 def headers(spec: SiteSpec, user_agent: str) -> dict[str, str]:
-    """站点级静态请求头（request_headers + UA + 站点 Cookie）。
+    """站点级静态请求头（request_headers + UA）。
 
-    凭证不在这里：它由 auth_inject_headers 按采集目标（价格/状态/公告）注入，
-    同一份 token 可以在不同目标上塞成不同的头。
+    凭证与 Cookie 都不在这里：凭证由 auth_inject_headers 按采集目标注入，
+    Cookie 属于普通静态头，直接写进 request_headers。
     """
-    result = {**spec.request_headers, "user-agent": user_agent}
-    if spec.cookie:
-        result["cookie"] = spec.cookie
-    return result
+    return {**spec.request_headers, "user-agent": user_agent}
 
 
 def auth_inject_headers(spec: SiteSpec, target: str) -> dict[str, str]:
     """按「认证与续签」里配的规则，把凭证展开成该采集目标的请求头（target 见 AUTH_INJECT_TARGETS）。
 
-    没配 auth_inject 的老配置按老行为注入 Authorization（auth_header/auth_prefix 可改），
+    没配 auth_inject 的老配置按老行为注入 Authorization: Bearer <token>，
     存量站点不改配置就能继续跑。值里的 ${access_token}/${refresh_token} 展开成当前凭证，
     其余文本原样保留（不认环境变量，占位符只有这两个）。
 
@@ -89,7 +85,7 @@ def _legacy_auth_rule(spec: SiteSpec) -> dict[str, str] | None:
     """auth_inject 出现之前的行为：站点有 auth_token 就注入 Authorization: Bearer <token>。"""
     if not spec.auth_token:
         return None
-    return {"header": spec.auth_header, "value": f"{spec.auth_prefix}{ACCESS_TOKEN_VAR}"}
+    return {"header": "Authorization", "value": f"Bearer {ACCESS_TOKEN_VAR}"}
 
 
 def _expand_credential_vars(spec: SiteSpec, value: str) -> str:
@@ -189,8 +185,6 @@ def build_request_kwargs(
         if str(key).casefold() not in shadowed
     })
     request_headers.update(injected)
-    if spec.cookies and "cookie" not in request_headers:
-        request_headers["cookie"] = "; ".join(f"{key}={value}" for key, value in spec.cookies.items())
     # 空 params 不能传给 httpx：0.28 起 params={} 会整体替换 URL 查询串，
     # 把写在 URL 里的 page_size/过滤参数悄悄清掉（httpx.Request 实测）
     kwargs: dict[str, Any] = {"headers": request_headers, "timeout": timeout}
@@ -1403,6 +1397,4 @@ def _price_records_from_table_entries(
         ))
     return records
 
-ADAPTERS: dict[str, Adapter] = {
-    "standard": NetworkAdapter(),
-}
+

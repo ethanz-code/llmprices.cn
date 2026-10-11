@@ -15,7 +15,7 @@ from tests.test_webapi import _config, workspace  # noqa: F401  workspace 为共
 def _enable_ai(client: TestClient) -> None:
     # 种子模式 skip_existing 不会覆盖已有的 ai 配置，这里直接写库
     client.app.state.store.set_document(
-        "ai", {"enabled": True, "base_url": "https://ai.test/v1", "models": ["test-model"], "api_key": "sk-test"}
+        "ai", {"base_url": "https://ai.test/v1", "models": ["test-model"], "api_key": "sk-test"}
     )
 
 
@@ -282,7 +282,7 @@ def test_data_questions_run_tool_loop_on_any_format(workspace: Path, monkeypatch
     _enable_ai(client)
     client.app.state.store.set_document("settings", {"assistant_daily_limit": 0})
     client.app.state.store.set_document(
-        "ai", {"enabled": True, "base_url": "https://ai.test/v1", "models": ["test-model"], "api_key": "sk-test", "api_format": "anthropic"}
+        "ai", {"base_url": "https://ai.test/v1", "models": ["test-model"], "api_key": "sk-test", "api_format": "anthropic"}
     )
     res = client.post("/api/assistant/ask", json={"question": "demo 站现在什么价？"})
     assert res.status_code == 200
@@ -313,7 +313,7 @@ def test_failed_model_cooldowns_for_data_questions(workspace: Path, monkeypatch)
     client.app.state.store.set_document("settings", {"assistant_daily_limit": 0})
     store = client.app.state.store
     store.set_document(
-        "ai", {"enabled": True, "base_url": "https://ai.test/v1", "models": ["bad-model", "good-model"], "api_key": "sk-test"}
+        "ai", {"base_url": "https://ai.test/v1", "models": ["bad-model", "good-model"], "api_key": "sk-test"}
     )
     res = client.post("/api/assistant/ask", json={"question": "demo 站现在什么价？"})
     assert res.status_code == 200
@@ -423,34 +423,6 @@ def test_quota_counted_in_sqlite_and_enforced(workspace: Path, monkeypatch):
     # 表里计数达到限额后继续提问即 429
     limited = client.post("/api/assistant/ask", json={"question": "再问一个"})
     assert limited.status_code == 429
-
-
-def test_ask_throttles_eleventh_request_within_an_hour(workspace: Path, monkeypatch):
-    """每 IP 每小时最多 10 问：第 11 次直接 429，也不再发起 LLM 调用。"""
-    captured: dict = {}
-    client = _gated_client(workspace, monkeypatch, ["general"], captured)
-    client.app.state.store.set_document("settings", {"assistant_daily_limit": 100})  # 解开日限额，只测每小时限速
-    for _ in range(10):
-        assert client.post("/api/assistant/ask", json={"question": "上下文长度是什么？"}).status_code == 200
-    calls_after_ten = len(captured["calls"])
-    limited = client.post("/api/assistant/ask", json={"question": "再来一个"})
-    assert limited.status_code == 429
-    assert "用完" in limited.json()["detail"]
-    assert len(captured["calls"]) == calls_after_ten
-
-
-def test_ask_hourly_limit_is_configurable(workspace: Path, monkeypatch):
-    """每小时限速读 settings.assistant_hourly_limit：自定义值生效，0 表示关闭。"""
-    captured: dict = {}
-    client = _gated_client(workspace, monkeypatch, ["general"], captured)
-    client.app.state.store.set_document("settings", {"assistant_daily_limit": 100, "assistant_hourly_limit": 2})
-    assert client.post("/api/assistant/ask", json={"question": "问题一"}).status_code == 200
-    assert client.post("/api/assistant/ask", json={"question": "问题二"}).status_code == 200
-    limited = client.post("/api/assistant/ask", json={"question": "问题三"})
-    assert limited.status_code == 429
-    # 设为 0 = 关闭每小时限速，立即可继续提问（日限额仍生效）
-    client.app.state.store.set_document("settings", {"assistant_daily_limit": 100, "assistant_hourly_limit": 0})
-    assert client.post("/api/assistant/ask", json={"question": "问题四"}).status_code == 200
 
 
 def test_tool_executors_filter_sort_and_bound(workspace: Path):

@@ -23,17 +23,12 @@ import type { SiteCollectHealth, SiteConfig, SitesData } from "@/lib/types";
 function siteSkeleton(id = ""): SiteConfig {
   return {
     id,
-    adapter: "standard",
     network: {
       url: null,
       params: {},
       headers: {},
     },
     auth_token: null,
-    auth_header: "Authorization",
-    auth_prefix: "Bearer ",
-    cookie: null,
-    cookies: {},
     request_headers: {},
     enabled: true,
   };
@@ -345,6 +340,8 @@ export function AdminSites() {
                 type="number"
                 min={0}
                 className="admin-num-input"
+                name="auto-remove-months"
+                aria-label="发布超过多少个月的模型自动移出"
                 value={maxAgeMonths}
                 onChange={(event) => {
                   const value = Number(event.target.value);
@@ -489,7 +486,7 @@ export function AdminSites() {
       )}
 
       {/* 导入选文件用，选择后立即清空 value 以便同一文件可重复选 */}
-      <input ref={importInput} type="file" accept="application/json,.json" hidden onChange={handleImportFile} />
+      <input ref={importInput} type="file" name="site-import" accept="application/json,.json" hidden onChange={handleImportFile} />
 
       {importing && (
         <ImportSitesModal

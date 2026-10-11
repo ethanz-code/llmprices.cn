@@ -391,7 +391,7 @@ function AuthSubModal({
               )}
             </button>
             {showAdvanced && (
-              <div style={{ border: "1px solid var(--border)", borderRadius: 10, background: "color-mix(in srgb, var(--panel-2) 45%, var(--panel))", padding: "10px 12px", display: "grid", gap: 14 }}>
+              <div style={{ borderRadius: 10, background: "color-mix(in srgb, var(--panel-2) 45%, var(--panel))", padding: "10px 12px", display: "grid", gap: 14 }}>
                 <div style={{ display: "grid", gap: 4 }}>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <Sel

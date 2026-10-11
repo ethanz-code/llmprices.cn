@@ -155,15 +155,15 @@ function TagMultiSelect({
               right: 0,
               zIndex: 31,
               background: "var(--panel)",
-              border: "1px solid var(--border)",
               borderRadius: 8,
               boxShadow: "0 12px 32px rgba(0, 0, 0, 0.18)",
               display: "grid",
             }}
           >
-            <div style={{ padding: 8, borderBottom: "1px solid var(--border)" }}>
+            <div style={{ padding: 8 }}>
               <input
                 className="input"
+                name="multiselect-query"
                 autoFocus
                 value={query}
                 aria-label={inputLabel}

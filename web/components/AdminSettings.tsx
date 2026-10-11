@@ -43,19 +43,8 @@ const RETENTION_ITEMS: { key: string; label: string; hint: string; default: numb
   { key: "retention_ai_log_days", label: "AI 调用日志", hint: "AI 请求的成功/失败与 token 记录，AI 成功率和按天趋势基于它", default: DEFAULT_AI_LOG_RETENTION_DAYS },
 ];
 
-/** 任务记录与日志上限配置项：与后端 settings 的 max_task_* 字段一一对应，超出即淘汰最旧。 */
-const DEFAULT_MAX_TASK_RUNS = 100;
-const DEFAULT_MAX_LOG_LINES = 500;
-
 /** AI 助手每 IP 每日提问上限：与后端 settings.assistant_daily_limit 对应；0 = 不限制。 */
 const DEFAULT_ASSISTANT_DAILY_LIMIT = 10;
-
-/** AI 助手每 IP 每小时提问上限（防单访客高频刷问题）：与后端 settings.assistant_hourly_limit 对应；0 = 不限制。 */
-const DEFAULT_ASSISTANT_HOURLY_LIMIT = 10;
-
-/** 单次请求喂给 AI 的证据上限与回复 token 上限：与后端 ai.max_input_chars / ai.max_tokens 对应。 */
-const DEFAULT_AI_MAX_INPUT_CHARS = 60000;
-const DEFAULT_AI_MAX_TOKENS = 4000;
 
 function modelsToText(models: SiteConfig["models"]): string {
   return (models ?? []).join(", ");
@@ -199,10 +188,7 @@ export function AdminSettings() {
   const [aiTimeout, setAiTimeout] = useState("60");
   const [schedule, setSchedule] = useState<Record<string, string>>({});
   const [retention, setRetention] = useState<Record<string, string>>({});
-  const [maxTaskRuns, setMaxTaskRuns] = useState("");
-  const [maxLogLines, setMaxLogLines] = useState("");
   const [assistantDailyLimit, setAssistantDailyLimit] = useState("");
-  const [assistantHourlyLimit, setAssistantHourlyLimit] = useState("");
   const [fallbackProxy, setFallbackProxy] = useState("");
   const [proxyControllerUrl, setProxyControllerUrl] = useState("");
   const [proxyControllerSecret, setProxyControllerSecret] = useState("");
@@ -211,8 +197,6 @@ export function AdminSettings() {
   /** 从控制接口读到的组清单；null = 还没读（或改了地址/密钥后失效），此时两个字段回落手填 */
   const [proxyGroups, setProxyGroups] = useState<ProxyGroupInfo[] | null>(null);
   const [loadingGroups, setLoadingGroups] = useState(false);
-  const [aiMaxInputChars, setAiMaxInputChars] = useState("");
-  const [aiMaxTokens, setAiMaxTokens] = useState("");
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState<TestTarget | null>(null);
   const [results, setResults] = useState<Partial<Record<TestTarget, TestOutcome>>>({});
@@ -237,8 +221,6 @@ export function AdminSettings() {
         setAiPriceModel(typeof ai.price_model === "string" ? ai.price_model : "");
         setAiApiKey(typeof ai.api_key === "string" ? ai.api_key : "");
         setAiTimeout(String(typeof ai.timeout === "number" ? ai.timeout : 60));
-        setAiMaxInputChars(typeof ai.max_input_chars === "number" && Number.isFinite(ai.max_input_chars) ? String(ai.max_input_chars) : "");
-        setAiMaxTokens(typeof ai.max_tokens === "number" && Number.isFinite(ai.max_tokens) ? String(ai.max_tokens) : "");
         const rawSchedule = (loaded.settings.schedule ?? {}) as Record<string, unknown>;
         const nextSchedule: Record<string, string> = {};
         for (const item of SCHEDULE_ITEMS) {
@@ -253,24 +235,9 @@ export function AdminSettings() {
           nextRetention[item.key] = typeof value === "number" && Number.isFinite(value) ? String(value) : "";
         }
         setRetention(nextRetention);
-        setMaxTaskRuns(
-          typeof loaded.settings.max_task_runs === "number" && Number.isFinite(loaded.settings.max_task_runs)
-            ? String(loaded.settings.max_task_runs)
-            : "",
-        );
-        setMaxLogLines(
-          typeof loaded.settings.max_task_log_lines === "number" && Number.isFinite(loaded.settings.max_task_log_lines)
-            ? String(loaded.settings.max_task_log_lines)
-            : "",
-        );
         setAssistantDailyLimit(
           typeof loaded.settings.assistant_daily_limit === "number" && Number.isFinite(loaded.settings.assistant_daily_limit)
             ? String(loaded.settings.assistant_daily_limit)
-            : "",
-        );
-        setAssistantHourlyLimit(
-          typeof loaded.settings.assistant_hourly_limit === "number" && Number.isFinite(loaded.settings.assistant_hourly_limit)
-            ? String(loaded.settings.assistant_hourly_limit)
             : "",
         );
         setFallbackProxy(typeof loaded.settings.fallback_proxy === "string" ? loaded.settings.fallback_proxy : "");
@@ -317,30 +284,11 @@ export function AdminSettings() {
       }
       retentionOut[item.key] = value;
     }
-    // 任务/日志上限留空 = 回默认值；非法输入直接拦截，不发请求
-    const runsText = maxTaskRuns.trim();
-    const maxRuns = runsText ? Number.parseFloat(runsText) : DEFAULT_MAX_TASK_RUNS;
-    if (!Number.isFinite(maxRuns) || maxRuns < 1 || !Number.isInteger(maxRuns)) {
-      toast("任务记录保留条数需是不小于 1 的整数");
-      return;
-    }
-    const logLinesText = maxLogLines.trim();
-    const maxLogLinesOut = logLinesText ? Number.parseFloat(logLinesText) : DEFAULT_MAX_LOG_LINES;
-    if (!Number.isFinite(maxLogLinesOut) || maxLogLinesOut < 1 || !Number.isInteger(maxLogLinesOut)) {
-      toast("单任务日志行数上限需是不小于 1 的整数");
-      return;
-    }
     // 助手限次留空 = 回默认值；0 = 不限制；非法输入直接拦截，不发请求
     const assistantLimitText = assistantDailyLimit.trim();
     const assistantLimitOut = assistantLimitText ? Number.parseFloat(assistantLimitText) : DEFAULT_ASSISTANT_DAILY_LIMIT;
     if (!Number.isFinite(assistantLimitOut) || assistantLimitOut < 0 || !Number.isInteger(assistantLimitOut)) {
       toast("AI 助手每日提问上限需是不小于 0 的整数（0 为不限制）");
-      return;
-    }
-    const assistantHourText = assistantHourlyLimit.trim();
-    const assistantHourOut = assistantHourText ? Number.parseFloat(assistantHourText) : DEFAULT_ASSISTANT_HOURLY_LIMIT;
-    if (!Number.isFinite(assistantHourOut) || assistantHourOut < 0 || !Number.isInteger(assistantHourOut)) {
-      toast("AI 助手每小时提问上限需是不小于 0 的整数（0 为不限制）");
       return;
     }
     // 备用代理留空 = 不启用；填了就必须是完整 http(s) 地址，后端还会再校验一遍
@@ -371,10 +319,7 @@ export function AdminSettings() {
       wxpusher_uid: wxUid.trim() || null,
       schedule: scheduleOut,
       ...retentionOut,
-      max_task_runs: maxRuns,
-      max_task_log_lines: maxLogLinesOut,
       assistant_daily_limit: assistantLimitOut,
-      assistant_hourly_limit: assistantHourOut,
     };
     // Base URL 留空 = 暂不启用 AI；填了就必须是完整 http(s) 地址，否则要到调用时才报错
     const base = aiBaseUrl.trim();
@@ -389,30 +334,14 @@ export function AdminSettings() {
       toast("AI 超时需是大于 0 的数字（秒）");
       return;
     }
-    // 输入/输出上限留空 = 回默认值；非法输入直接拦截，不发请求
-    const maxInputText = aiMaxInputChars.trim();
-    const maxInputChars = maxInputText ? Number.parseFloat(maxInputText) : DEFAULT_AI_MAX_INPUT_CHARS;
-    if (!Number.isFinite(maxInputChars) || maxInputChars < 1 || !Number.isInteger(maxInputChars)) {
-      toast("单次输入上限需是不小于 1 的整数（字符）");
-      return;
-    }
-    const maxTokensText = aiMaxTokens.trim();
-    const maxTokens = maxTokensText ? Number.parseFloat(maxTokensText) : DEFAULT_AI_MAX_TOKENS;
-    if (!Number.isFinite(maxTokens) || maxTokens < 4000 || !Number.isInteger(maxTokens)) {
-      toast("单次回复上限最低 4000（token）：低于该值价格抽取的输出会被截断");
-      return;
-    }
     const ai: Record<string, unknown> = {
       ...data.ai,
-      enabled: true,
       base_url: base,
       api_format: aiFormat,
       models: aiModels.split(/[,\n]/).map((item) => item.trim()).filter(Boolean),
       price_model: aiPriceModel.trim() || null,
       api_key: aiApiKey.trim() || null,
       timeout,
-      max_input_chars: maxInputChars,
-      max_tokens: maxTokens,
     };
     setSaving(true);
     try {
@@ -710,27 +639,6 @@ export function AdminSettings() {
             ))}
           </SettingsSection>
           <SettingsSection
-            title="任务与日志"
-            description="采集任务的记录条数和每次任务的日志行数上限，超出会淘汰最早的记录；留空表示默认值"
-          >
-            <SettingRow label="任务记录保留条数" hint="采集任务列表最多保留多少次运行记录，超过后最早的被清掉">
-              <Input
-                value={maxTaskRuns}
-                onChange={setMaxTaskRuns}
-                placeholder={`默认 ${DEFAULT_MAX_TASK_RUNS}`}
-                style={{ width: 120, maxWidth: "100%" }}
-              />
-            </SettingRow>
-            <SettingRow label="单任务日志行数上限" hint="每次任务最多保留多少行日志，超了以后滚动保留最新的">
-              <Input
-                value={maxLogLines}
-                onChange={setMaxLogLines}
-                placeholder={`默认 ${DEFAULT_MAX_LOG_LINES}`}
-                style={{ width: 120, maxWidth: "100%" }}
-              />
-            </SettingRow>
-          </SettingsSection>
-          <SettingsSection
             title="AI 提取"
             description="AI 负责认出模型别名、读本地算不了的站点价格。填好 Base URL 和模型列表就算启用；会产生少量 token 费用"
             result={results.ai}
@@ -880,35 +788,11 @@ export function AdminSettings() {
                 )}
               </div>
             )}
-            <SettingRow label="单次输入上限（字符）" hint="发给 AI 的页面证据超出就截断；调大能看全更大的页面，token 消耗也更大">
-              <Input
-                value={aiMaxInputChars}
-                onChange={setAiMaxInputChars}
-                placeholder={`默认 ${DEFAULT_AI_MAX_INPUT_CHARS}`}
-                style={{ width: 120, maxWidth: "100%" }}
-              />
-            </SettingRow>
-            <SettingRow label="单次回复上限（token）" hint="模型单次最多生成多少 token；最低 4000，价格抽取的输出需要这个预算。填得超过某个模型的上限时，系统会按该模型实测上限自动降额，不用手动迁就">
-              <Input
-                value={aiMaxTokens}
-                onChange={setAiMaxTokens}
-                placeholder={`默认 ${DEFAULT_AI_MAX_TOKENS}`}
-                style={{ width: 120, maxWidth: "100%" }}
-              />
-            </SettingRow>
             <SettingRow label="AI 助手每 IP 每日提问上限" hint="每个访客每天最多向 AI 助手提多少个问题，超了当天就不再回答；填 0 表示不限制">
               <Input
                 value={assistantDailyLimit}
                 onChange={setAssistantDailyLimit}
                 placeholder={`默认 ${DEFAULT_ASSISTANT_DAILY_LIMIT}`}
-                style={{ width: 120, maxWidth: "100%" }}
-              />
-            </SettingRow>
-            <SettingRow label="AI 助手每 IP 每小时提问上限" hint="每个访客每小时最多向 AI 助手提多少个问题，防止单人高频刷问题；填 0 表示不限制">
-              <Input
-                value={assistantHourlyLimit}
-                onChange={setAssistantHourlyLimit}
-                placeholder={`默认 ${DEFAULT_ASSISTANT_HOURLY_LIMIT}`}
                 style={{ width: 120, maxWidth: "100%" }}
               />
             </SettingRow>

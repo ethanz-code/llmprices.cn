@@ -26,7 +26,7 @@ def _config(tmp_path: Path) -> Path:
             "schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0},
             "monitor_models": ["demo-model"],
         },
-        "ai": {"enabled": False},
+        "ai": {},
         "sites": [{
             "id": "demo",
             "adapter": "standard",
@@ -1327,7 +1327,7 @@ def test_reseed_modes(workspace: Path):
     # 手动删掉 timeout 后才重新可补
     seed_path.write_text(json.dumps({
         "settings": {"timeout": 99, "schedule": {"price": 123, "status": 0, "notice": 0, "catalog": 0, "rankings": 0}},
-        "ai": {"enabled": True},
+        "ai": {"timeout": 120},
         "sites": [],
     }), encoding="utf-8")
     result = admin.post("/api/seed", json={"mode": "skip_existing"}).json()
@@ -1340,22 +1340,22 @@ def test_reseed_modes(workspace: Path):
     result = admin.post("/api/seed", json={"mode": "skip_existing"}).json()
     assert set(result["settings_written"]) == {"timeout"}
     assert admin.get("/api/settings").json()["settings"]["timeout"] == 99
-    assert admin.get("/api/settings").json()["ai"]["enabled"] is False
+    assert admin.get("/api/settings").json()["ai"]["timeout"] == 120
     assert len(admin.get("/api/sites").json()["sites"]) == 1
 
     # overwrite：种子里的键逐项覆盖；sites 为空数组时受保护不清空
     seed_path.write_text(json.dumps({
         "settings": {"timeout": 20, "schedule": {"price": 30, "status": 5, "notice": 10, "catalog": 720, "rankings": 0, "discovery": 0}},
-        "ai": {"enabled": True},
+        "ai": {"timeout": 60},
         "sites": [],
     }), encoding="utf-8")
     result = admin.post("/api/seed", json={"mode": "overwrite"}).json()
     assert set(result["settings_written"]) == {"timeout", "schedule"}
-    assert result["ai_written"] == ["enabled"]
+    assert result["ai_written"] == ["timeout"]
     assert result["sites_replaced"] is False
     settings = admin.get("/api/settings").json()["settings"]
     assert settings["timeout"] == 20 and settings["schedule"]["price"] == 30
-    assert admin.get("/api/settings").json()["ai"]["enabled"] is True
+    assert admin.get("/api/settings").json()["ai"]["timeout"] == 60
     assert len(admin.get("/api/sites").json()["sites"]) == 1
 
     # overwrite 列出站点 → 整表替换；种子未声明的 settings 不动
@@ -1413,21 +1413,18 @@ def test_settings_defaults_written_to_db(workspace: Path):
     for key in MonitorSettings.__dataclass_fields__:
         assert key in settings, f"settings 缺字段 {key}"
     assert settings["timeout"] == 30  # 已有值不被覆盖
-    assert settings["assistant_hourly_limit"] == 10
+    assert settings["assistant_daily_limit"] == 10
     assert settings["retention_ai_log_days"] == 7
-    assert settings["random_user_agent"] is False
-    assert settings["user_agent_platforms"] == []
     assert settings["wxpusher_app_token"] is None
 
 
 def test_first_startup_seeds_full_settings_defaults(workspace: Path):
-    """空库首次启动：种子文件的 settings 连同缺失默认值一起写入，assistant_hourly_limit 等新键可直接读出。"""
+    """空库首次启动：种子文件的 settings 连同缺失默认值一起写入，assistant_daily_limit 等新键可直接读出。"""
     seed_path = workspace / "config.json"
-    seed_path.write_text(json.dumps({"settings": {}, "ai": {"enabled": False}, "sites": []}), encoding="utf-8")
+    seed_path.write_text(json.dumps({"settings": {}, "ai": {}, "sites": []}), encoding="utf-8")
     client = TestClient(create_app(seed_path))
     assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200
     settings = client.get("/api/settings").json()["settings"]
-    assert settings["assistant_hourly_limit"] == 10
     assert settings["assistant_daily_limit"] == 10
     assert settings["retention_ai_log_days"] == 7
 
@@ -1775,7 +1772,7 @@ def test_site_auth_inject_round_trips_through_api(workspace: Path):
 
 
 def test_site_config_slimmed_on_save(workspace: Path):
-    """保存时去掉空值与默认值字段：null / 空容器 / 默认 auth_header 等不落库，读取时由 SiteSpec 默认值兜底；非默认值原样保留。enabled 例外：始终落库，管理台行内启用判断直接读它。"""
+    """保存时去掉空值、默认值与已废弃字段（adapter/auth_header/auth_prefix/cookie/cookies 等）：不再落库，行为由 SiteSpec 兜底。enabled 例外：始终落库，管理台行内判断直接读它。"""
     client = _admin_client(workspace)
     fat = {
         "id": "slim",
@@ -1800,9 +1797,8 @@ def test_site_config_slimmed_on_save(workspace: Path):
     updated = client.put("/api/sites/slim", json={"config": {**fat, "auth_header": "X-Token", "enabled": False}})
     assert updated.status_code == 200
     site = next(s for s in client.get("/api/sites").json()["sites"] if s["id"] == "slim")
-    assert site["auth_header"] == "X-Token"
+    assert "auth_header" not in site and "auth_prefix" not in site and "auth_token" not in site
     assert site["enabled"] is False
-    assert "auth_prefix" not in site and "auth_token" not in site
 
 
 def test_token_refresh_test_endpoint(workspace: Path, monkeypatch):
@@ -1867,7 +1863,7 @@ def test_task_logs_roll_oldest_when_full():
     from llm_price_monitor.webapi import tasks as tasks_mod
 
     tasks_mod.reset()
-    max_lines = tasks_mod.DEFAULT_MAX_LOG_LINES
+    max_lines = tasks_mod.MAX_TASK_LOG_LINES
     tasks_mod._tasks["t1"] = {"id": "t1", "logs": [{"time": 0, "message": f"old-{i}", "level": "info"} for i in range(max_lines)]}
     for i in range(3):
         tasks_mod._append_log("t1", f"new-{i}", "info")
@@ -1904,7 +1900,7 @@ def test_assistant_daily_ip_limit(workspace: Path, monkeypatch):
     monkeypatch.setattr(assistant_routes, "ai_stream_messages_fallback", fake_events)
     config_path = _config(workspace)
     doc = json.loads(config_path.read_text(encoding="utf-8"))
-    doc["ai"] = {"enabled": True, "base_url": "https://ai.test/v1", "models": ["m-a"], "api_key": "sk-x"}
+    doc["ai"] = {"base_url": "https://ai.test/v1", "models": ["m-a"], "api_key": "sk-x"}
     config_path.write_text(json.dumps(doc), encoding="utf-8")
     client = TestClient(create_app(config_path))
     client.app.state.store.set_document("settings", {"assistant_daily_limit": 2})

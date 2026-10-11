@@ -35,7 +35,6 @@ from typing import Any, Callable  # noqa: F401
 import httpx
 
 from llm_price_monitor import tasklog
-from llm_price_monitor.adapters import ADAPTERS  # noqa: F401
 from llm_price_monitor.config import (  # noqa: F401
     AuthRequiredError,
     ChangeKind,

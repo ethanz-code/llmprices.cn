@@ -210,7 +210,7 @@ export function AdminAnalytics() {
         <section>
           <h3 className="section-title">访客来自哪里</h3>
           <p className="section-sub">近 30 天访问按国家着色；亮色主题勾线、暗色主题填色，越亮访问越多</p>
-          <div style={{ border: "1px solid var(--border, rgba(127,127,127,0.2))", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ background: "var(--panel)", borderRadius: 12, overflow: "hidden" }}>
             <div style={{ height: "min(52vh, 480px)", minHeight: 320 }}>
               <VisitorMap regions={mapRegions} />
             </div>

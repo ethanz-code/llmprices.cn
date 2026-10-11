@@ -297,7 +297,7 @@ def ai_request(
     messages 传入完整对话（工具循环的多轮消息）时替代 system/user 组装；tools 为 OpenAI
     function calling 风格的工具定义，四种接口结构都会转成各自的工具协议。
     """
-    limit = config.max_tokens if max_tokens is None else max_tokens
+    limit = _ai.AI_MAX_TOKENS if max_tokens is None else max_tokens
     learned_limit = _ai._MODEL_MAX_TOKENS_LIMIT.get(model)
     if learned_limit is not None and limit > learned_limit:
         # 该模型的上限已从报错里学到（见 _MODEL_MAX_TOKENS_LIMIT）：直接按上限构造，省一次 400
@@ -371,7 +371,7 @@ def ai_request(
         "max_tokens": limit,
         "messages": messages,
         # DashScope 的 qwen3 系列默认开思考，思考会耗尽 max_tokens 导致正文为空，必须显式声明
-        "enable_thinking": config.enable_thinking,
+        "enable_thinking": False,
     }
     if body["enable_thinking"] is False and model in _ai._MODEL_THINKING_REQUIRED:
         # 该模型拒收 enable_thinking=false（从 400 报错里学过）：直接按 true 构造，省一次白发请求

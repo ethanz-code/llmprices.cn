@@ -73,7 +73,7 @@ def test_config_from_store_builds_typed_config(tmp_path: Path):
     store = Store(tmp_path / "monitor.db")
     store.replace_sites([_site_config("demo", "https://demo.test/api")])
     store.set_document("settings", {"timeout": 9.5})
-    store.set_document("ai", {"enabled": True, "base_url": "https://ai.test/v1", "models": ["m-a"], "api_key": "sk-x"})
+    store.set_document("ai", {"base_url": "https://ai.test/v1", "models": ["m-a"], "api_key": "sk-x"})
 
     config = config_from_store(store)
     assert config.settings.timeout == 9.5
@@ -146,7 +146,7 @@ def test_seed_imports_var_files_once(tmp_path: Path, monkeypatch):
     config_path.write_text(json.dumps({
         # timeout 断言种子导入；schedule 全 0 关闭后台调度，测试环境不触网
         "settings": {"timeout": 15.0, "schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0}},
-        "ai": {"enabled": False},
+        "ai": {},
         "sites": [_site_config("demo", "https://demo.test/api")],
     }), encoding="utf-8")
     (tmp_path / "var").mkdir()
