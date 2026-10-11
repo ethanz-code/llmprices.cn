@@ -190,6 +190,8 @@ def _scan_prices(
             )
             if synthesized:
                 collected = synthesized
+                # 合成价就是本轮真实产出：站点状态须随重算，否则健康档案按价格腿零命中误报"没抓到任何价格数据"
+                site_status[spec.id] = {"checked_at": time.time(), **site_status_from_records(collected)}
                 tasklog.emit(f"[{spec.id}] 价格腿未命中，按渠道倍率 × 官方价合成 {len(synthesized)} 条渠道价", "info")
         # 占位组跳过：组内全部模型同一价目且有作废实锤时整组跳过（零配置通用判据）
         collected = _drop_phony_group_records(collected, spec.id, sanity_state)

@@ -63,8 +63,9 @@
 
 1. 匿名能通就不配认证——先匿名 curl 试，这是最省心的形态。
 2. 固定 token：站点级 `auth_token` + `auth_inject` 写清三处注入规则。
-3. 短效会话：`token_refresh` 自动续签（new-api 会话系配 `refresh_cookie_name: new_api_refresh`，自研站配对应刷新端点）。
+3. 短效会话：`token_refresh` 自动续签（new-api 会话系配 `refresh_cookie_name: new_api_refresh`，自研站配对应刷新端点）。sub2api 系（1for/2000lab）配法实测（2026-10-09 定稿）：`url` = `https://<站域>/api/v1/auth/refresh`、`method` POST、`body` = `{"refresh_token": "${refresh_token}"}`、`access_token_field` = `data.access_token`、`refresh_token_field` = `data.refresh_token`，浏览器登录后从 localStorage 取 `refresh_token` 贴进去保存即接管。⚠️ 两条纪律：① **rt_ 单次可用每次刷新轮换**——拿被前端自动轮换掉、或被探测烧过的旧 rt_ 去续签必然 `REFRESH_TOKEN_INVALID`（「2000lab 续签链断了」的旧结论就是这么来的误判）；② 接管后浏览器侧会话的自动续签即作废（同一 rt_ 只能一个客户端持有），到期浏览器需重登、采集侧不受影响。
 4. 登录态 Cookie 与特殊头（`New-Api-User`、`Referer`）放**站点级 `request_headers`**（站点对象顶层字段）让三处共享——注意不是 `network.headers`，后者只有公告腿显式读取，状态/价格腿不认（2026-10-07 A/B 实测）；只有个别腿需要时才写在那个腿的 `headers` 里。
+5. 响应头滑窗续签（claude-relay 系，如 icodeeasy）：登录后 token 存 localStorage 单个 `token` 键、有效期 30 天——服务端可在响应头 `x-new-token` 里下发新 token，前端拦截器自动写回。**实测 2026-10-09：新鲜 token 请求未触发该头**（疑似仅临期才下发），采集端也未接管；到期前没人替它续，过期即公告腿 401、需重新登录重贴。识别特征：SPA 前端代码里 `x-new-token` 字样。
 
 ## AI 浏览器代办 SOP（替用户看站 + 配置）
 

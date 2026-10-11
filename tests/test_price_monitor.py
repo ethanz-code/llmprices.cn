@@ -3592,6 +3592,9 @@ def test_channel_rate_fills_pricing_when_direct_leg_misses(tmp_path: Path, monke
     latest = store.latest_all()
     plus = latest["demo:demo-model:Plus【稳定】"]
     assert plus["input_price"] == 0.4 and plus["price_status"] == "candidate"
+    # 合成价即本轮真实产出：站点状态按合成结果记 ok，健康档案不得按价格腿零命中误报"没抓到数据"
+    assert report.site_status["demo"]["status"] == "ok"
+    assert (store.get_document("site_collect_health") or {}).get("demo", {}).get("price") is None
 
 
 def test_group_removed_requires_consecutive_misses(tmp_path: Path, monkeypatch):
