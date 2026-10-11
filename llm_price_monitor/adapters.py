@@ -731,6 +731,346 @@ def sub2api_model_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) 
     return list(records.values())
 
 
+def looks_like_marketplace_pricing(payload: Any) -> bool:
+    """模型广场牌价结构（sub2api marketplace/models 两代形态，按响应结构分派非按站）：
+
+    - items 型：data.items[].model_name + pricing.input_price/output_price（unit 声明 per_1m_tokens 或 per_token）
+    - models 型：data.models[].name + input_cost_per_token 等每 token 单价
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return False
+    data = payload["data"]
+    items = data.get("items")
+    if isinstance(items, list) and any(
+        isinstance(item, dict) and isinstance(item.get("pricing"), dict)
+        for item in items
+    ):
+        return True
+    models = data.get("models")
+    return isinstance(models, list) and any(
+        isinstance(model, dict) and _plain_number(model.get("input_cost_per_token"))
+        for model in models
+    )
+
+
+def marketplace_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
+    """确定性解析模型广场牌价：站方对外的每模型售价，美元口径随接口/站点声明。
+
+    items 型直读 pricing（优先 effective_* 实付价，回落标价；unit=per_token 时 ×1e6）；
+    models 型按每 token 单价 ×1e6 归一为 USD/1M tokens；缓存读/写价同步采集。
+    匿名广场视图即默认分组牌价，input/output 齐全为 confirmed。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return []
+    records: dict[tuple[str, str], PriceRecord] = {}
+    for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        model_name = str(item.get("model_name") or "")
+        pricing = item.get("pricing")
+        if not isinstance(pricing, dict):
+            continue
+        target = next(
+            (t for t in spec.models if t.name.casefold() == model_name.casefold()),
+            None,
+        )
+        if target is None:
+            continue
+
+        def priced(field: str, pricing: dict[str, Any] = pricing) -> float | None:
+            value = pricing.get(f"effective_{field}")
+            if not _plain_number(value):
+                value = pricing.get(field)
+            if not _plain_number(value):
+                return None
+            unit = str(pricing.get("unit") or "")
+            return value * 1_000_000 if unit == "per_token" else value
+
+        input_price = priced("input_price")
+        output_price = priced("output_price")
+        if input_price is None and output_price is None:
+            continue
+        currency = str(pricing.get("currency") or "USD")
+        metadata = {
+            "adapter": "network",
+            "pricing_kind": "explicit_price",
+            "group": "default",
+            "group_ratio": None,
+            "cache_read_price": priced("cache_read_price"),
+            "cache_create_price": priced("cache_write_price"),
+            "currency": currency,
+            "network_evidence": [{
+                "source": "model_list",
+                "url": redact_url(str(captured[0].get("url", ""))),
+                "resource_type": captured[0].get("resource_type"),
+                "status": captured[0].get("status"),
+                "payload_sha256": payload_hash(payload),
+            }],
+            "page_evidence": [],
+            "notes": "模型广场牌价直读：items[].pricing 按接口声明的 unit 与币种归一（实付价优先）。",
+        }
+        status = "confirmed" if input_price is not None and output_price is not None else "candidate"
+        records[(target.name, "default")] = PriceRecord(
+            target.name,
+            input_price,
+            output_price,
+            f"{currency}/1M tokens",
+            response_source_url,
+            time.time(),
+            metadata,
+            status,
+        )
+    for model in data.get("models") or []:
+        if not isinstance(model, dict):
+            continue
+        target = next(
+            (t for t in spec.models if t.name.casefold() == str(model.get("name", "")).casefold()),
+            None,
+        )
+        if target is None:
+            continue
+
+        def per_million(field: str, model: dict[str, Any] = model) -> float | None:
+            value = model.get(field)
+            return value * 1_000_000 if _plain_number(value) else None
+
+        input_price = per_million("input_cost_per_token")
+        output_price = per_million("output_cost_per_token")
+        if input_price is None and output_price is None:
+            continue
+        metadata = {
+            "adapter": "network",
+            "pricing_kind": "explicit_price",
+            "group": "default",
+            "group_ratio": None,
+            "cache_read_price": per_million("cache_read_cost_per_token"),
+            "cache_create_price": per_million("cache_creation_cost_per_token"),
+            "currency": "USD",
+            "network_evidence": [{
+                "source": "model_list",
+                "url": redact_url(str(captured[0].get("url", ""))),
+                "resource_type": captured[0].get("resource_type"),
+                "status": captured[0].get("status"),
+                "payload_sha256": payload_hash(payload),
+            }],
+            "page_evidence": [],
+            "notes": "模型广场牌价直读：models[].cost_per_token 每 token 单价 ×1e6 归一为 USD/1M tokens。",
+        }
+        status = "confirmed" if input_price is not None and output_price is not None else "candidate"
+        records[(target.name, "default")] = PriceRecord(
+            target.name,
+            input_price,
+            output_price,
+            "USD/1M tokens",
+            response_source_url,
+            time.time(),
+            metadata,
+            status,
+        )
+    return list(records.values())
+
+
+def looks_like_rate_pair_pricing(payload: Any) -> bool:
+    """模型价目 + 分组倍率表结构：价目清单与倍率映射成对出现。
+
+    两种同形态写法都认：data = [模型价目清单, {分组: 倍率}]（二元组），或
+    data = {list: [模型价目], group_ratios: {分组: 倍率}}（字典键名形式）。
+    模型带 name/id + input_price/output_price（+ 可选 price_tiers/groups 成员表）。
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+
+    def _has_priced_model(models: Any) -> bool:
+        return isinstance(models, list) and any(
+            isinstance(model, dict)
+            and _plain_number(model.get("input_price"))
+            and _plain_number(model.get("output_price"))
+            for model in models
+        )
+
+    if isinstance(data, list) and len(data) == 2:
+        return isinstance(data[0], list) and isinstance(data[1], dict) and _has_priced_model(data[0])
+    if isinstance(data, dict):
+        return _has_priced_model(data.get("list")) and isinstance(data.get("group_ratios"), dict)
+    return False
+
+
+def _rate_pair_parts(data: Any) -> tuple[list[Any], dict[str, Any]] | None:
+    """归一两种写法为 (模型价目清单, 倍率映射)；不匹配返回 None。"""
+    if isinstance(data, list) and len(data) == 2 and isinstance(data[0], list) and isinstance(data[1], dict):
+        return data[0], data[1]
+    if isinstance(data, dict) and isinstance(data.get("list"), list) and isinstance(data.get("group_ratios"), dict):
+        return data["list"], data["group_ratios"]
+    return None
+
+
+def rate_pair_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
+    """确定性解析「价目 + 分组倍率」：实付 = 基准档价 × 分组倍率。
+
+    币种按站点页面口径（¥ 计价直显）；倍率是站方明确的分组定价语义（点选分组
+    前后对照实测），合成实付价标 candidate 留复核；每次计费模型（input/output
+    双零）不按 token 价采；price_tiers 取 base/standard 标准档，长上下文档不混入。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    parts = _rate_pair_parts(data)
+    if parts is None:
+        return []
+    models, rates = parts
+    records: dict[tuple[str, str], PriceRecord] = {}
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        site_name = str(model.get("name") or model.get("id") or "")
+        target = next(
+            (t for t in spec.models if t.name.casefold() == site_name.casefold()),
+            None,
+        )
+        if target is None:
+            continue
+        tiers = model.get("price_tiers") or []
+        tier = next(
+            (t for t in tiers if isinstance(t, dict) and str(t.get("name") or "").casefold() in ("base", "standard")),
+            None,
+        ) or next((t for t in tiers if isinstance(t, dict)), None)
+
+        def base_price(field: str, model: dict[str, Any] = model, tier: dict[str, Any] | None = tier) -> float | None:
+            value = tier.get(field) if isinstance(tier, dict) else None
+            if not _plain_number(value):
+                value = model.get(field)
+            return value if _plain_number(value) else None
+
+        base_input = base_price("input_price")
+        base_output = base_price("output_price")
+        if not base_input and not base_output:
+            continue
+        cache_read = base_price("cache_read_price")
+        cache_write = base_price("cache_write_price")
+        membership = [str(g) for g in model.get("groups") or [] if str(g)]
+        groups = [g for g in membership if isinstance(rates.get(g), (int, float)) and not isinstance(rates.get(g), bool)]
+        for group in groups or ["default"]:
+            rate = rates.get(group) if group != "default" else 1
+            if not _plain_number(rate):
+                continue
+            key = (target.name, group)
+            if key in records:
+                continue
+            metadata = {
+                "adapter": "network",
+                "pricing_kind": "explicit_price",
+                "group": group,
+                "group_ratio": rate,
+                "cache_read_price": cache_read * rate if _plain_number(cache_read) else None,
+                "cache_create_price": cache_write * rate if _plain_number(cache_write) else None,
+                "currency": "CNY",
+                "network_evidence": [{
+                    "source": "model_list",
+                    "url": redact_url(str(captured[0].get("url", ""))),
+                    "resource_type": captured[0].get("resource_type"),
+                    "status": captured[0].get("status"),
+                    "payload_sha256": payload_hash(payload),
+                }],
+                "page_evidence": [],
+                "notes": "价目+倍率二元组直读：基准档价 × 分组倍率合成实付价（站点页面 ¥ 计价口径），倍率语义经页面点选分组对照验证。",
+            }
+            records[key] = PriceRecord(
+                target.name,
+                base_input * rate,
+                base_output * rate,
+                "CNY/1M tokens",
+                response_source_url,
+                time.time(),
+                metadata,
+                "candidate",
+            )
+    return list(records.values())
+
+
+def looks_like_billing_rate_items(payload: Any) -> bool:
+    """计费费率清单结构：items[].model + input_per_1m/output_per_1m（微美元每百万 token）。"""
+    if not isinstance(payload, dict):
+        return False
+    items = payload.get("items")
+    return isinstance(items, list) and any(
+        isinstance(item, dict)
+        and isinstance(item.get("model"), str)
+        and _plain_number(item.get("input_per_1m"))
+        for item in items
+    )
+
+
+def billing_rate_item_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
+    """确定性解析 billing model-rates 清单：per_1m 字段为微美元/百万 token（÷1e6 归一 USD）。
+
+    billing_mode=token 的行才按 token 价采（unit 按次计费的生图行 input/output 双零跳过）；
+    官方对照价（official_*_usd）与通道来源（provider）落 metadata 留核对线索。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    records: dict[tuple[str, str], PriceRecord] = {}
+    for item in items:
+        if not isinstance(item, dict) or str(item.get("billing_mode") or "token") != "token":
+            continue
+        target = next(
+            (t for t in spec.models if t.name.casefold() == str(item.get("model", "")).casefold()),
+            None,
+        )
+        if target is None:
+            continue
+
+        def usd_per_million(field: str, item: dict[str, Any] = item) -> float | None:
+            value = item.get(field)
+            return value / 1_000_000 if _plain_number(value) else None
+
+        input_price = usd_per_million("input_per_1m")
+        output_price = usd_per_million("output_per_1m")
+        if input_price is None and output_price is None:
+            continue
+        provider = str(item.get("provider") or "")
+        official_input = usd_per_million("official_input_usd")
+        official_output = usd_per_million("official_output_usd")
+        metadata = {
+            "adapter": "network",
+            "pricing_kind": "explicit_price",
+            "group": "default",
+            "group_ratio": None,
+            "cache_read_price": usd_per_million("cache_read_per_1m"),
+            "cache_create_price": usd_per_million("cache_write_per_1m"),
+            "currency": "USD",
+            "network_evidence": [{
+                "source": "model_list",
+                "url": redact_url(str(captured[0].get("url", ""))),
+                "resource_type": captured[0].get("resource_type"),
+                "status": captured[0].get("status"),
+                "payload_sha256": payload_hash(payload),
+            }],
+            "page_evidence": [],
+            "notes": "billing 费率清单直读：per_1m 微美元 ÷1e6 归一 USD/1M tokens。"
+            + (f"通道 {provider}。" if provider else "")
+            + (f"站方标注官方价 in {official_input}/out {official_output} USD/1M。" if official_input or official_output else ""),
+        }
+        status = "confirmed" if input_price is not None and output_price is not None else "candidate"
+        records[(target.name, "default")] = PriceRecord(
+            target.name,
+            input_price,
+            output_price,
+            "USD/1M tokens",
+            response_source_url,
+            time.time(),
+            metadata,
+            status,
+        )
+    return list(records.values())
+
+
 class _BrowserPageResponse:
     """Headless抓到的页面伪装成 httpx.Response 的最小接口，让后续 HTML 解析路径直接复用。"""
 
@@ -883,6 +1223,15 @@ class NetworkAdapter:
             # 平台分桶定价结构（totokens final_prices / sub2api channels 直读价）：
             # 同上，确定性形状不落 AI
             return platform_pricing_records(spec, [captured])
+        if looks_like_marketplace_pricing(payload):
+            # 模型广场牌价（items[].pricing / models[].cost_per_token）：确定性形状不落 AI
+            return marketplace_price_records(spec, [captured])
+        if looks_like_rate_pair_pricing(payload):
+            # 价目+分组倍率二元组：确定性形状不落 AI
+            return rate_pair_price_records(spec, [captured])
+        if looks_like_billing_rate_items(payload):
+            # billing 费率清单（items[].*_per_1m 微美元）：确定性形状不落 AI
+            return billing_rate_item_records(spec, [captured])
         if ai is not None and ai.usable:
             return AIPriceExtractor(ai).extract(
                 spec,

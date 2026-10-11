@@ -4375,6 +4375,135 @@ def test_sub2api_model_prices_scale_and_missing_output():
     assert records[0].unit == "USD/1M tokens"
 
 
+def test_marketplace_items_pricing_records():
+    """模型广场牌价 items 型（pricing.input_price + unit 声明）：实付价优先、按 unit 归一，
+    缓存价同步采集，input/output 齐全为 confirmed。"""
+    from llm_price_monitor.adapters import looks_like_marketplace_pricing, marketplace_price_records
+
+    payload = {"code": 0, "message": "success", "data": {"items": [
+        {"model_name": "gpt-6.1-sol", "platform": "openai", "billing_mode": "token", "pricing": {
+            "display_type": "token", "currency": "USD", "unit": "per_1m_tokens", "promotion_applied": False,
+            "input_price": 0.22, "effective_input_price": 0.22, "output_price": 1.1, "effective_output_price": 1.1,
+            "cache_read_price": 0.022, "effective_cache_read_price": 0.022, "cache_write_price": 0.275,
+        }},
+        {"model_name": "wan3.0-video", "pricing": {"display_type": "video_tiers", "currency": "USD", "unit": "per_second", "tiers": []}},
+    ]}}
+    assert looks_like_marketplace_pricing(payload)
+    spec = SiteSpec(id="lab", models=[ModelTarget("gpt-6.1-sol")], network={"url": "https://lab.test/api/v1/marketplace/models"})
+    records = marketplace_price_records(spec, [{"url": "https://lab.test/api/v1/marketplace/models", "status": 200, "resource_type": "fetch", "payload": payload}])
+    assert len(records) == 1
+    record = records[0]
+    assert record.input_price == pytest.approx(0.22)
+    assert record.output_price == pytest.approx(1.1)
+    assert record.price_status == "confirmed"
+    assert record.unit == "USD/1M tokens"
+    assert record.metadata["cache_read_price"] == pytest.approx(0.022)
+    assert record.metadata["cache_create_price"] == pytest.approx(0.275)
+
+
+def test_marketplace_cost_per_token_records_scale():
+    """模型广场牌价 models 型（cost_per_token 每 token 单价）：×1e6 归一 USD/1M tokens。"""
+    from llm_price_monitor.adapters import looks_like_marketplace_pricing, marketplace_price_records
+
+    payload = {"code": 0, "message": "success", "data": {"groups": [], "models": [
+        {"name": "gpt-5.6-sol", "platform": "openai", "billing_mode": "token",
+         "input_cost_per_token": 5e-06, "output_cost_per_token": 3e-05,
+         "cache_creation_cost_per_token": 6.25e-06, "cache_read_cost_per_token": 5e-07},
+    ]}}
+    assert looks_like_marketplace_pricing(payload)
+    spec = SiteSpec(id="lab", models=[ModelTarget("gpt-5.6-sol")], network={"url": "https://lab.test/api/v1/marketplace/models"})
+    records = marketplace_price_records(spec, [{"url": "https://lab.test/api/v1/marketplace/models", "status": 200, "resource_type": "fetch", "payload": payload}])
+    assert len(records) == 1
+    record = records[0]
+    assert record.input_price == pytest.approx(5.0)
+    assert record.output_price == pytest.approx(30.0)
+    assert record.unit == "USD/1M tokens"
+    assert record.metadata["cache_read_price"] == pytest.approx(0.5)
+    assert record.metadata["cache_create_price"] == pytest.approx(6.25)
+
+
+def test_rate_pair_pricing_records_multiply_group_rate():
+    """价目+倍率二元组：实付=基准档价×分组倍率，逐分组出价标 candidate，按次计费行跳过。"""
+    from llm_price_monitor.adapters import looks_like_rate_pair_pricing, rate_pair_price_records
+
+    payload = {"code": 0, "message": "success", "data": [
+        [
+            {"id": "gpt-6.1-sol", "name": "gpt-6.1-sol", "billing_mode": "tiered_expr",
+             "input_price": 2, "output_price": 10, "cache_read_price": 0.1, "cache_write_price": 2.5,
+             "groups": ["GPT Plus", "GPT Pro"],
+             "price_tiers": [
+                 {"name": "standard", "input_price": 2, "output_price": 10, "cache_read_price": 0.1, "cache_write_price": 2.5, "unit": "1m_tokens"},
+                 {"name": "long_context", "input_price": 4, "output_price": 15, "cache_read_price": 0.2, "cache_write_price": 5, "unit": "1m_tokens"},
+             ]},
+            {"id": "viduq3-ad", "name": "viduq3-ad", "input_price": 0, "output_price": 0, "request_price": 0.03125, "price_tiers": None, "groups": ["Vidu"]},
+        ],
+        {"GPT Plus": 0.2, "GPT Pro": 0.3, "Vidu": 1},
+    ]}
+    assert looks_like_rate_pair_pricing(payload)
+    spec = SiteSpec(id="lab", models=[ModelTarget("gpt-6.1-sol"), ModelTarget("viduq3-ad")], network={"url": "https://lab.test/api/v1/models/marketplace"})
+    records = rate_pair_price_records(spec, [{"url": "https://lab.test/api/v1/models/marketplace", "status": 200, "resource_type": "fetch", "payload": payload}])
+    by_group = {r.metadata["group"]: r for r in records}
+    assert set(by_group) == {"GPT Plus", "GPT Pro"}
+    plus = by_group["GPT Plus"]
+    assert plus.input_price == pytest.approx(0.4)
+    assert plus.output_price == pytest.approx(2.0)
+    assert plus.price_status == "candidate"
+    assert plus.unit == "CNY/1M tokens"
+    assert plus.metadata["group_ratio"] == 0.2
+    assert plus.metadata["cache_read_price"] == pytest.approx(0.02)
+    assert by_group["GPT Pro"].input_price == pytest.approx(0.6)
+
+
+def test_rate_pair_pricing_dict_form_same_semantics():
+    """价目+倍率的字典写法（data.list + data.group_ratios）：与二元组同语义出价。"""
+    from llm_price_monitor.adapters import looks_like_rate_pair_pricing, rate_pair_price_records
+
+    payload = {"code": 200, "message": "success", "data": {
+        "list": [
+            {"id": "gpt-6-astra", "name": "gpt-6-astra", "input_price": 10, "output_price": 50,
+             "cache_read_price": 1, "cache_write_price": 12.5, "groups": ["GPT Plus"],
+             "price_tiers": [{"name": "standard", "input_price": 10, "output_price": 50, "unit": "1m_tokens"}]},
+        ],
+        "group_ratios": {"GPT Plus": 0.2, "default": 1},
+    }}
+    assert looks_like_rate_pair_pricing(payload)
+    spec = SiteSpec(id="lab", models=[ModelTarget("gpt-6-astra")], network={"url": "https://lab.test/api/v1/models/marketplace"})
+    records = rate_pair_price_records(spec, [{"url": "https://lab.test/api/v1/models/marketplace", "status": 200, "resource_type": "fetch", "payload": payload}])
+    assert len(records) == 1
+    record = records[0]
+    assert record.metadata["group"] == "GPT Plus"
+    assert record.input_price == pytest.approx(2.0)
+    assert record.output_price == pytest.approx(10.0)
+    assert record.price_status == "candidate"
+    assert record.unit == "CNY/1M tokens"
+    assert record.metadata["cache_read_price"] == pytest.approx(0.2)
+
+
+def test_billing_rate_items_records_micro_usd():
+    """billing 费率清单：per_1m 微美元 ÷1e6 归一 USD/1M tokens；unit 按次行与缺价行跳过。"""
+    from llm_price_monitor.adapters import looks_like_billing_rate_items, billing_rate_item_records
+
+    payload = {"items": [
+        {"provider": "codex", "model": "gpt-6.1-sol", "billing_mode": "token", "unit_label": "次",
+         "input_per_1m": 300000, "output_per_1m": 1500000, "cache_read_per_1m": 30000, "cache_write_per_1m": 375000,
+         "official_input_usd": 2000000, "official_output_usd": 10000000},
+        {"provider": "codex", "model": "gpt-image-2", "billing_mode": "unit", "unit_label": "次",
+         "input_per_1m": 0, "output_per_1m": 0},
+    ]}
+    assert looks_like_billing_rate_items(payload)
+    spec = SiteSpec(id="lab", models=[ModelTarget("gpt-6.1-sol"), ModelTarget("gpt-image-2")], network={"url": "https://api.lab.test/api/billing/model-rates"})
+    records = billing_rate_item_records(spec, [{"url": "https://api.lab.test/api/billing/model-rates", "status": 200, "resource_type": "fetch", "payload": payload}])
+    assert len(records) == 1
+    record = records[0]
+    assert record.input_price == pytest.approx(0.3)
+    assert record.output_price == pytest.approx(1.5)
+    assert record.price_status == "confirmed"
+    assert record.unit == "USD/1M tokens"
+    assert record.metadata["cache_read_price"] == pytest.approx(0.03)
+    assert record.metadata["cache_create_price"] == pytest.approx(0.375)
+    assert "codex" in record.metadata["notes"]
+
+
 def test_network_adapter_dispatches_sub2api_shapes_without_ai():
     """识别出的确定性形状不落 AI：model-prices 直接出记录，channels/available 未命中监控模型返回空也不报错。"""
     def handler(request: httpx.Request) -> httpx.Response:
