@@ -1282,7 +1282,8 @@ body > main {
   appearance: none;
   -webkit-appearance: none;
   height: 34px;
-  border-radius: 6px;
+  /* 与 .input 同族：单行控件一律胶囊，与旁边并排的输入框/按钮轮廓连贯 */
+  border-radius: 9999px;
   border: 1px solid transparent;
   background: var(--field-bg);
   color: var(--text);
@@ -1497,12 +1498,34 @@ body > main {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-/* 设置行内嵌的胶囊数字输入（如自动更新月数）：同 .input 皮肤，聚焦才亮描边 */
+/* 设置行内嵌的数字输入（如自动更新月数）：真正落实「同 .input 皮肤」——
+   填充底 + 胶囊 + 藏起原生步进箭头，聚焦才亮强调描边 */
 .admin-num-input {
+  height: 34px;
+  padding: 0 12px;
   border: 1px solid transparent;
+  border-radius: 9999px;
+  background: var(--field-bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13.5px;
+  text-align: center;
+  appearance: textfield;
+  -moz-appearance: textfield;
   transition:
     border-color var(--dur),
+    background var(--dur),
     box-shadow var(--dur);
+}
+
+.admin-num-input::-webkit-outer-spin-button,
+.admin-num-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.admin-num-input:hover:not(:focus) {
+  background: var(--field-bg-hover);
 }
 
 .admin-num-input:focus {
@@ -5885,7 +5908,8 @@ a.event-card {
   min-width: 0;
   padding: 10px 15px;
   border: none;
-  border-radius: 6px;
+  /* 单行控件与全站同族：胶囊 */
+  border-radius: 9999px;
   background: var(--panel);
   color: var(--text);
   font-size: 13.5px;

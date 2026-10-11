@@ -107,7 +107,8 @@ function TagMultiSelect({
           maxHeight: 100,
           overflowY: "scroll",
           padding: "5px 10px",
-          borderRadius: 6,
+          // 多行容器按全站规矩收 12px（同 .input.textarea），胶囊圆弧会裁到首尾行标签
+          borderRadius: 12,
           boxSizing: "border-box",
         }}
       >
