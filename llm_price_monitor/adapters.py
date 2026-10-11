@@ -231,10 +231,15 @@ def _newapi_denomination(client: httpx.Client, pricing_url: str, timeout: float)
     v1 的 /api/pricing 载荷自身不带计价声明，而各站充值汇率差 7 倍
     （AIHub365 price=6.8，多数中文站 price=1），不读就会把美元站价格整体低算。
     status 是 new-api 启动必有的公开接口，拿不到字段说明不是 new-api 或站方未声明，
-    维持默认基准价并留痕。
+    维持默认基准价并留痕。采集地址不一定是 /api/pricing（subrouter 是 marketplace
+    路径），所以优先剥 /api/pricing 后缀，剥不出就退回 URL 起源。
     """
-    base = str(pricing_url).split("/api/pricing", 1)[0]
+    url = str(pricing_url)
+    base = url.split("/api/pricing", 1)[0] if "/api/pricing" in url else ""
     if not base.startswith(("http://", "https://")):
+        match = re.match(r"^(https?://[^/]+)", url)
+        base = match.group(1) if match else ""
+    if not base:
         return None
     try:
         response = client.get(f"{base}/api/status", timeout=timeout)

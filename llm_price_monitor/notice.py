@@ -87,6 +87,11 @@ def _fetch_announcements(
     return [item for item in items if isinstance(item, dict) and str(item.get("content") or "").strip()]
 
 
+def _announcement_body(item: dict[str, Any]) -> str:
+    """公告正文字段：多数站用 content，01tree 用 description，取先出现的非空者。"""
+    return str(item.get("content") or item.get("description") or "").strip()
+
+
 def _announcement_markdown(items: list[dict[str, Any]]) -> str:
     """公告数组渲染成 Markdown 分节：标题（extra/title）+ 日期（publishDate/created_at）+ 正文，最新在前。"""
 
@@ -104,7 +109,7 @@ def _announcement_markdown(items: list[dict[str, Any]]) -> str:
         title = str(item.get("extra") or item.get("title") or "").strip() or "公告"
         date = str(item.get("publishDate") or item.get("created_at") or "").strip()[:10]
         heading = f"## {title}" + (f"（{date}）" if date else "")
-        sections.append(f"{heading}\n\n{str(item.get('content') or '').strip()}")
+        sections.append(f"{heading}\n\n{_announcement_body(item)}")
     return "\n\n".join(sections)
 
 
@@ -168,7 +173,7 @@ def fetch_site_notice(
             # 结构化公告数组：直接渲染成分节 Markdown，不交给 AI，
             # 也不再向 /api/status 重复发起第二次请求。
             content = _announcement_markdown(
-                [item for item in items if isinstance(item, dict) and str(item.get("content") or "").strip()]
+                [item for item in items if isinstance(item, dict) and _announcement_body(item)]
             )
             parse = "status"
     elif payload is None or isinstance(payload, list):

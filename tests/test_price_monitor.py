@@ -465,6 +465,44 @@ def test_network_pricing_uses_newapi_ratios_without_dom_or_ai():
     assert records[0].metadata["page_evidence"] == []
 
 
+def test_network_pricing_marketplace_url_still_reads_status_denomination():
+    """subrouter 实测：采集地址是 marketplace 路径（不含 /api/pricing），status 推导
+    要退回 URL 起源，否则充值口径拿不到、挂牌价原值当 CNY 入库。"""
+    spec = SiteSpec(
+        id="mkt",
+        network={"url": "https://mkt.test/api/marketplace/shared-models?page=1"},
+        models=(ModelTarget("demo-model"),),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/status":
+            return httpx.Response(200, json={"data": {"quota_per_unit": 500000, "price": 6.8}})
+        assert request.url.path == "/api/marketplace/shared-models"
+        return httpx.Response(200, json={
+            "group_ratio": {"default": 1.0},
+            "data": [{"model_name": "demo-model", "input_price": 0.6, "output_price": 3}],
+        })
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    from llm_price_monitor.adapters import _newapi_denomination
+    denomination = _newapi_denomination(client, "https://mkt.test/api/marketplace/shared-models?page=1", 5.0)
+    assert denomination is not None and denomination["ratio_base_price"] == 13.6
+
+    from llm_price_monitor.adapters import network_pricing_records
+    records = network_pricing_records(spec, [{
+        "url": "https://mkt.test/api/marketplace/shared-models?page=1",
+        "status": 200,
+        "resource_type": "fetch",
+        "payload": {
+            "group_ratio": {"default": 1.0},
+            "data": [{"model_name": "demo-model", "input_price": 0.6, "output_price": 3}],
+        },
+    }], denomination=denomination)
+
+    assert records[0].input_price == pytest.approx(0.6 * 6.8)
+    assert records[0].metadata["denomination"]["topup_cny_per_usd"] == 6.8
+
+
 _HTML_PRICE_TABLE = """
 <html><body>
 <p>GPT 模型，官方价格单位为每 1M tokens。</p>

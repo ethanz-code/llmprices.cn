@@ -45,7 +45,7 @@
 
 - new-api 系零配置也能跑：未配 `notice.url` 时自动从 `network.url` 根地址推导 `/api/notice`，并自动请求 `/api/status` 把后台「公告管理」发布的多条 announcements 拼成分节 Markdown 合并进正文。
 - **配法口径（2026-10-09 修订，推翻 10-08 旧拍板）**：**哪个接口承载站的真公告就配哪个**——new-api 站的公告板（`/api/status` 的 announcements）通常是主公告源且更明确（cun 板上 16 条完整版 vs `/api/notice` 57 字节一句话；modelflare 的 `/api/notice` 是静态欢迎页；subrouter 的为空），这类站显式配 `/api/status`；少数站板上无货、`/api/notice` 手写位才是真公告（123ai-ai-wx 等批站），则配 `/api/notice`。**配之前两个接口都拉一次看内容，别按站族套公式**。显式配 `/api/notice` 时解析层仍会自动拼 `/api/status` 的公告板进正文（json+status），显式配 `/api/status` 只拿公告板（但板上就是主源时这正好）。零配置虽等价于显式 `/api/notice`，按「填什么抓什么」原则统一显式写。
-- 其余显式场景：① 标准路径不存在或自研路径 → 配实际公告接口（`data` 直接是公告数组、`announcements` 挂顶层、`data` 为单条公告对象（302.ai 型）这三种形态都能解析）；② 公告接口要登录 → 显式配 + 认证（`auth_inject` 的 notice 腿或 `notice.headers`）。
+- 其余显式场景：① 标准路径不存在或自研路径 → 配实际公告接口（`data` 直接是公告数组、`announcements` 挂顶层、`data` 为单条公告对象（302.ai 型）这三种形态都能解析；公告数组条目的正文字段 `content` 与 `description`（01tree 型）都认）；② 公告接口要登录 → 显式配 + 认证（`auth_inject` 的 notice 腿或 `notice.headers`）。**公告抓回来是空的先查两处再怪站方**：接口 401（腿没配认证）与正文键对不上（01tree 实锤：description 被当无正文整批过滤，扫描零报错零记录，只能主动干跑一单站才发现）。
 - 正文变化才存新版本发事件，正文为空不入库；显式配置的地址 404 是配置错误会报错，自动推导地址 404 视为站点没有公告接口、静默跳过。
 
 **渠道状态（status）**：
@@ -77,9 +77,10 @@
 1. **看站类型**：打开站点，判断是 new-api/one-api 系（标配 `/api/pricing`、`/api/status`、`/api/notice`）还是自研接口（如 subrouter 的 marketplace API）。**动手前先学站点自己的文档**（2026-10-08 约定）：站内文档页、页脚开源署名对应的 GitHub 仓库、API 文档都看一眼再下判断——sub2api 系读它的仓库文档，new-api 系对照官方源码，不靠猜。**别用一个接口定生死**（2026-10-08 用户要求）：`/api/pricing` 404 不等于站死——把导航、模型广场、渠道、订阅、公告各页面都翻一遍再归类，页面 UI 同款模板（如 sub2api 系的 EN/暗色切换壳）直接对照同族站找接口。
 2. **甄别渠道**：按上表口径过一遍模型页/渠道页，确认官方共享渠道的过滤参数或专用接口；空壳渠道（供货统计全 0、价格「不限」）直接排除。
 3. **确认价格接口**：优先公开 pricing 接口；拿不准时看网络面板（DevTools MCP）找返回模型+价格的请求。返回 HTML 的页面地址必须免登录——httpx 直采没有浏览器环境（详见 `dom_url_auth_constraint`）。顺带确认公告与渠道状态接口（new-api 系候选：`/api/notice`、`/api/status`、`/api/model_status/groups`；渠道分组接口不少部署没有，公开性能汇总 `/api/perf-metrics/summary?hours=24` 是常见替代，两者都匿名可读才配）。sub2api 系端点家族：`/api/v1/model-plaza`（模型广场，匿名性逐站不同）、`/api/v1/channels/available`（可用渠道，带每 token 直读价）、`/api/v1/model-prices`（分组实付价，2026-10-08 新增确定性解析器：按分组展开已含倍率的 CNY 价，登录后可读）、`/api/v1/groups/rates`（分组倍率，多为要登录）、`/api/v1/announcements`（公告）、`/api/v1/channel-monitors`（渠道可用率/延迟，登录后可读）；注意「实收 = 官方美元价 × 分组倍率」的 CNY 计费站，倍率表拿不到就别采——采到的只是没乘倍率的官方价（2xapi 教训）。自研美元计价站（「基准价 × 套餐倍率」那种）先想清楚抽取路径：非 new-api 格式走 AI 兜底，抽取不稳就先别开——错价比没价糟（118.ink 教训，lessons.md §2）。
+   **计价口径不用配但必须懂**（2026-10-10 定稿，修 AIHub365 全站价低 6.8 倍后收口）：v1 new-api 站的倍率基准价 = `(1e6/quota_per_unit) × price`，两数都取自该站 `/api/status`（`price` 是充值汇率：1 美元额度卖几块钱；`usd_exchange_rate` 是前端显示换算，不能当基准——1-cnmz 报 7.3 实收按 1）。中文 1:1 站 price=1 基准即 2；AIHub365 6.8→13.6、cun 6.95→13.9、128api/2coding/134-175-71 7.3→14.6。采集层自动读 status 推导（含 marketplace 等非 /api/pricing 地址，剥不出后缀退回 URL 起源），v2 载荷（billing_denomination_version=2）以站方声明优先——配站零动作，但核对价格、跟用户解释折扣时按这个口径心算。另两条解析层既有语义：站方挂牌价（input_price/output_price）优先于 billing_expr 表达式（subrouter 实锤：表达式是官价池计费 p*10+c*50，站上挂牌 0.6=94% 折扣）；`billing_multiplier` 是站方对表达式的折扣系数（sudocode 0.2~2），漏乘即错最高 5 倍。
 4. **试探认证**：先匿名请求接口；401/403 再配认证。new-api 系注意 `New-Api-User` 头与 Referer 坑（lessons.md §1）。**撞到登录墙（定价/接口要登录才给数据）**：不硬试——每个站单独开一个注册页标签页交给用户注册登录（2026-10-08 与用户跑通的流程），登录后直接从浏览器会话读 localStorage/Cookie 取凭证，按现役范式配（共享登录态走站点级 `request_headers`，短效凭证配 `token_refresh` 自动续签，浏览器存储登录态走 headless 注入）；凭证运行时贴入，不落仓库。**httpOnly Cookie 页面脚本读不出来**，但 IAB（ZCode 内嵌浏览器）的 cookie 库是本地明文 SQLite，拷库直查即可（2026-10-09 cun 实证）：`cp "~/Library/Application Support/ZCode/session/Partitions/zcode-embedded-browser/Cookies" /tmp/iab_cookies.db && sqlite3 /tmp/iab_cookies.db "SELECT name, value FROM cookies WHERE host_key LIKE '%站域%'"`；若 value 是加密形态（`v10` 开头）才退回让用户从 DevTools 手抄。
 5. **录入配置**：管理台新增/编辑站点，价格、公告、渠道状态三件套配齐（能采就采），填认证；凭证运行时贴入，不落仓库。
-6. **自验**：站点行「测试采集」干跑（默认不调 AI、零费用），或 `POST /api/collect` 带 `site_id`；核对采到的模型与价格同站内页面一致、渠道来源符合口径。
+6. **自验**：站点行「测试采集」干跑（默认不调 AI、零费用），或 `POST /api/collect` 带 `site_id`；核对采到的模型与价格同站内页面一致、渠道来源符合口径。价格核对拿页面渲染值对数（2026-10-10 全站对照定稿的做法）：公开页直接看 DOM，登录墙站用库内凭证注入浏览器（localStorage 四键，见 lessons.md §3）或页内 fetch 同源接口；数值对不上先怀疑充值口径与 billing_multiplier 这类解析层盲区，站方换模型阵容才是正常流失。
 7. **收尾沉淀**：新坑进 lessons.md 对应分类，跨会话硬约束写 Serena 记忆。
 
 ## 红线

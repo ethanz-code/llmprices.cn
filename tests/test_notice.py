@@ -91,6 +91,24 @@ def test_fetch_site_notice_reads_newapi_data_field():
     assert record["source_url"] == "https://demo.test/api/notice"
 
 
+def test_fetch_site_notice_accepts_description_as_body():
+    """01tree 实测：公告正文字段是 description 而非 content，漏收会让整批公告渲染成空。"""
+    spec = _spec({"url": "https://tree.test/api/announcements/board"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"announcements": [
+            {"id": "db-1", "title": "站内通知📢", "description": "因 OpenAI 官方算力不足，Codex 服务成本将临时波动。"},
+            {"id": "db-2", "title": "无正文占位", "description": "   "},
+        ]})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        record = fetch_site_notice(spec, client, 10.0, "ua/1")
+    assert record["parse"] == "status"
+    assert "站内通知📢" in record["content"]
+    assert "Codex 服务成本将临时波动" in record["content"]
+    assert "无正文占位" not in record["content"]
+
+
 def test_fetch_site_notice_html_data_kept_verbatim(monkeypatch):
     """data 直接是 HTML 公告片段时原样保留，不经 AI 改写（改写会触发假公告变化）。"""
 
