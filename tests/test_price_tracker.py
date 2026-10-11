@@ -177,6 +177,97 @@ def test_newapi_ratio_price_applies_topup_denomination():
     assert record.metadata["cache_read_price"] == pytest.approx(0.24 * 0.2875, abs=1e-6)
 
 
+def test_newapi_explicit_and_tiered_prices_scale_by_topup_rate():
+    """cun 实锤：显式价与阶梯价是展示美元（定价页直接显示的数），要乘充值汇率才是实付。"""
+    denomination = newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.95}})
+    explicit_payload = {
+        "data": [{"model_name": "deepseek-v4-pro", "input_price": 0.6, "output_price": 1.8}],
+        "group_ratio": {"default": 1.25},
+    }
+    record = newapi_price_record(
+        explicit_payload, "deepseek-v4-pro", "https://cun.test/api/pricing", group="default", denomination=denomination,
+    )
+    assert record.input_price == pytest.approx(0.6 * 1.25 * 6.95)
+    assert record.output_price == pytest.approx(1.8 * 1.25 * 6.95)
+
+    tiered_payload = {
+        "data": [{
+            "model_name": "deepseek-v4-pro",
+            "billing_mode": "tiered_expr",
+            "pricing_rules": {"tiers": [
+                {"label": "peak", "unit_prices": {"input": 0.77, "output": 2.3116}},
+                {"label": "offpeak", "unit_prices": {"input": 0.385, "output": 1.1558}},
+            ]},
+            "enable_groups": ["default"],
+        }],
+        "group_ratio": {"default": 1.0},
+    }
+    tiered = newapi_price_record(
+        tiered_payload, "deepseek-v4-pro", "https://cun.test/api/pricing", group="default", denomination=denomination,
+    )
+    tiers = tiered.metadata["pricing_rules"]["groups"][0]["tiers"]
+    assert tiers[0]["input_price"] == pytest.approx(0.77 * 6.95)
+    assert tiers[1]["input_price"] == pytest.approx(0.385 * 6.95)
+
+
+def test_newapi_explicit_price_with_declared_unit_is_not_rescaled():
+    """载荷自己声明了单位（官方参考价）说明数值已是终价，不再折算。"""
+    denomination = newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.95}})
+    payload = {
+        "data": [{"model_name": "gpt-x", "input_price": 3.0, "output_price": 9.0, "unit": "USD/1M tokens"}],
+        "group_ratio": {"default": 1.0},
+    }
+    record = newapi_price_record(payload, "gpt-x", "https://x.test/api/pricing", group="default", denomination=denomination)
+    assert record.input_price == 3.0 and record.output_price == 9.0
+
+
+def test_newapi_tiered_expr_applies_billing_multiplier():
+    """sudocode 实锤：billing_multiplier 是站方对计费表达式的折扣/加价系数，漏乘会把官方基准价当站价。"""
+    payload = {
+        "data": [{
+            "model_name": "deepseek-v4-pro",
+            "billing_mode": "tiered_expr",
+            "billing_expr": '(tier("base", p * 9 + c * 27 + cr * 0.3)) * (hour("Asia/Shanghai") >= 9 ? 1.2 : 1)',
+            "billing_multiplier": 0.5,
+            "enable_groups": ["default"],
+        }],
+        "group_ratio": {"default": 1.0},
+    }
+    record = newapi_price_record(payload, "deepseek-v4-pro", "https://sudocode.test/api/pricing", group="default")
+    tiers = record.metadata["pricing_rules"]["groups"][0]["tiers"]
+    assert tiers[0]["input_price"] == pytest.approx(4.5)
+    assert tiers[0]["output_price"] == pytest.approx(13.5)
+    assert record.metadata["billing_multiplier"] == 0.5
+
+
+def test_newapi_advertised_price_wins_over_official_rate_tier_expr():
+    """subrouter 实锤：billing_expr 里的 p*10+c*50 是官方价率的池子计费，站方挂牌价
+    input_price 0.6（=官价 94% 折扣）才是页面展示的站价，挂牌价必须优先。"""
+    payload = {
+        "data": [{
+            "model_name": "gpt-6-astra",
+            "input_price": 0.6,
+            "output_price": 3,
+            "official_input_price": 10,
+            "official_output_price": 50,
+            "billing_mode": "tiered_expr",
+            "billing_expr": 'len <= 272000 ? tier("0_272k", p * 10 + cr * 1 + cc * 12.5 + c * 50) : tier("272k_plus", p * 20 + cr * 2 + cc * 25 + c * 75)',
+        }],
+        "group_ratio": {"default": 1.0},
+    }
+    denomination = newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.8}})
+
+    record = newapi_price_record(
+        payload, "gpt-6-astra", "https://subrouter.test/api/marketplace/shared-models",
+        group="default", denomination=denomination,
+    )
+
+    assert record.price_status == "confirmed"
+    assert record.input_price == pytest.approx(0.6 * 6.8)
+    assert record.output_price == pytest.approx(3 * 6.8)
+    assert record.metadata["pricing_kind"] == "explicit_price"
+
+
 def test_newapi_v2_payload_keeps_priority_over_status_denomination():
     """modelflare：v2 载荷自带基准声明，/api/status 的 qpu 自定义值不参与推导。"""
     payload = {

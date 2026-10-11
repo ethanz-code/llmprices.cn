@@ -370,6 +370,13 @@ def newapi_price_record(
         # v1 载荷不带计价声明，用 /api/status 的充值口径（price×quota_per_unit）修正基准；
         # AIHub365 实锤：默认按 ¥2 算会把它这类美元充值站的价格整体低算 6.8 倍。
         ratio_base_price = float(denomination["ratio_base_price"])
+    # 倍率价与显式价/阶梯价的量纲不同：倍率价按 基准价×倍率 折算，而 input_price、
+    # pricing_rules.tiers 里的数值已经是"展示美元"（new-api 定价页直接显示的数），
+    # 人民币实付 = 展示美元 × 充值汇率。v2 的显式价是 USD，乘 cny_rate；v1 未声明
+    # 充值口径的站按 1 处理（历史口径）。载落数值自 带 unit 的（官方参考价）不折算。
+    explicit_rate = currency_multiplier
+    if not denomination_v2 and denomination and configured_currency == "CNY":
+        explicit_rate = float(denomination["topup_cny_per_usd"])
     request_rules = item.get("request_rules")
     if not (isinstance(request_rules, list) and request_rules):
         pricing_rules_raw = item.get("pricing_rules")
@@ -393,18 +400,25 @@ def newapi_price_record(
     }
     if denomination is not None and not denomination_v2:
         metadata["denomination"] = denomination
-    if item.get("billing_mode") == "tiered_expr":
+    advertised = _number(item.get("input_price")) is not None and _number(item.get("output_price")) is not None
+    if item.get("billing_mode") == "tiered_expr" and not advertised:
         expression = item.get("billing_expr")
-        rules = _tiered_rules(expression, multiplier * currency_multiplier, configured_unit) if isinstance(expression, str) else None
+        # billing_multiplier 是站方对整个计费表达式的折扣/加价系数（sudocode 实锤：
+        # 0.2~2 不等，deepseek-v4-pro 标称基准价 ¥9 但站上现价 ¥4.5 = 9×0.5），漏乘会把
+        # 官方基准价当成站价，误差最高 5 倍
+        billing_multiplier = _number(item.get("billing_multiplier"))
+        tier_rate = multiplier * explicit_rate * (billing_multiplier if billing_multiplier is not None else 1.0)
+        rules = _tiered_rules(expression, tier_rate, configured_unit) if isinstance(expression, str) else None
         if rules is None:
             pricing_rules = item.get("pricing_rules")
             if isinstance(pricing_rules, dict):
-                rules = _tiered_pricing_rules(pricing_rules, multiplier * currency_multiplier, configured_unit)
+                rules = _tiered_pricing_rules(pricing_rules, tier_rate, configured_unit)
         if rules is None:
             metadata.update({"pricing_kind": "tiered_expr", "pricing_rules": None, "calculation_error": "无法解析 billing_expr 或 pricing_rules.tiers"})
             return PriceRecord(model, None, None, configured_unit, source_url, time.time(), metadata, "unavailable")
         metadata.update({
             "pricing_kind": "tiered_expr",
+            "billing_multiplier": billing_multiplier,
             "pricing_rules": {"groups": [{"name": selected_group or "default", "tiers": rules}]},
         })
         return PriceRecord(model, None, None, configured_unit, source_url, time.time(), metadata, "rule_only")
@@ -418,15 +432,19 @@ def newapi_price_record(
     prefer_ratio = model_ratio is not None and (
         completion_ratio is not None or not has_explicit_price
     )
+    # billing_expr 描述的可能是官方价率的池子计费细节（subrouter 实锤：表达式 p*10+c*50
+    # 是官价，站方挂牌价 input_price 0.6 = 官价 94% 折扣，页面展示的也是 0.6）——上面
+    # tiered 分支已在挂牌价存在时让路，这里维持倍率对优先的既有语义
     if has_explicit_price and not prefer_ratio:
         input_price, output_price, explicit_unit = _price_fields(item)
         if input_price is not None:
             metadata["pricing_kind"] = "explicit_price"
+            price_rate = multiplier * explicit_rate if explicit_unit is None else multiplier
             for field_name in ("cache_read_price", "cache_create_price", "cache_create_1h_price"):
                 value = _number(item.get(field_name))
                 if value is not None:
-                    metadata[field_name] = value * multiplier * currency_multiplier
-            return PriceRecord(model, input_price * multiplier * currency_multiplier, output_price * multiplier * currency_multiplier if output_price is not None else None, explicit_unit or configured_unit, source_url, time.time(), metadata, "confirmed" if output_price is not None else "candidate")
+                    metadata[field_name] = value * price_rate
+            return PriceRecord(model, input_price * price_rate, output_price * price_rate if output_price is not None else None, explicit_unit or configured_unit, source_url, time.time(), metadata, "confirmed" if output_price is not None else "candidate")
     if model_ratio is not None:
         global _RATIO_BASE_WARNED
         if denomination is None and not denomination_v2 and not _RATIO_BASE_WARNED:
