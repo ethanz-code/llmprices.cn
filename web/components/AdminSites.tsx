@@ -344,6 +344,7 @@ export function AdminSites() {
               <input
                 type="number"
                 min={0}
+                className="admin-num-input"
                 value={maxAgeMonths}
                 onChange={(event) => {
                   const value = Number(event.target.value);
@@ -356,7 +357,6 @@ export function AdminSites() {
                 style={{
                   width: 56,
                   padding: "3px 6px",
-                  border: "1px solid var(--border-strong)",
                   borderRadius: 9999,
                   fontSize: 12,
                   textAlign: "center",

@@ -1491,6 +1491,41 @@ html:not([data-theme="dark"]) .btn-ghost:hover:not(:disabled) {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+/* 标签式多选外框（检测模型/分组白名单共用）：与 .input 同皮肤——静态无边框靠填充底分层，
+   展开才亮强调描边；卡片内不再常驻一层描边，避免框中框 */
+.tag-field {
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: var(--field-bg);
+  transition:
+    border-color var(--dur),
+    background var(--dur),
+    box-shadow var(--dur);
+}
+
+.tag-field:hover {
+  background: var(--field-bg-hover);
+}
+
+.tag-field[data-open="true"] {
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* 设置行内嵌的胶囊数字输入（如自动更新月数）：同 .input 皮肤，聚焦才亮描边 */
+.admin-num-input {
+  border: 1px solid transparent;
+  transition:
+    border-color var(--dur),
+    box-shadow var(--dur);
+}
+
+.admin-num-input:focus {
+  outline: none;
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
 .input::placeholder {
   color: var(--text-3);
 }

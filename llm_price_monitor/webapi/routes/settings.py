@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from llm_price_monitor import wxpusher
-from llm_price_monitor.ai import ping_model, provider_error_detail
+from llm_price_monitor.ai import model_unusable_status, ping_model, provider_error_detail
 from llm_price_monitor.config import ai_from_raw, schedule_from_raw, settings_from_raw
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi.seed import apply_seed
@@ -28,6 +29,22 @@ PROXY_TEST_TIMEOUT_SECONDS = 12.0
 PROXY_STATUS_TIMEOUT_SECONDS = 8.0
 _PROXY_TEST_URL = "https://www.gstatic.com/generate_204"
 _PROXY_EXIT_IP_URL = "https://api.ipify.org?format=json"
+
+# 老库的体检结果只存了报错原文，从里面的 HTTP 状态回推"确定不可用"用
+_HTTP_STATUS_PREFIX = re.compile(r"^HTTP\s+(\d{3})")
+
+
+def _probe_view(item: dict[str, Any]) -> dict[str, Any]:
+    """给一条体检结果补上 status / unusable：新结果直接带 status，老库结果从报错原文回推。
+
+    unusable 只按状态码判定（额度用尽、没权限、模型不存在为真；限流、超时、网络抖动为假），
+    前端据此标记"不可用"并允许一键清理——临时失败的留在模型列表里下次再试。
+    """
+    status = item.get("status")
+    if not isinstance(status, int):
+        found = _HTTP_STATUS_PREFIX.match(str(item.get("error") or ""))
+        status = int(found.group(1)) if found else None
+    return {**item, "status": status, "unusable": bool(status and model_unusable_status(status))}
 
 
 def probe_proxy(
@@ -199,7 +216,8 @@ def build_router(store: Store) -> APIRouter:
         doc = store.get_document("model_probe")
         if not doc:
             return {"tested_at": None, "results": {}}
-        return {"tested_at": doc.get("tested_at"), "results": doc.get("results", {})}
+        results = doc.get("results", {}) or {}
+        return {"tested_at": doc.get("tested_at"), "results": {name: _probe_view(item) for name, item in results.items()}}
 
     @router.post("/api/settings/test-models")
     def probe_models(body: ModelsProbeBody) -> dict[str, Any]:
@@ -227,7 +245,13 @@ def build_router(store: Store) -> APIRouter:
                 reply = ping_model(ai_config, model, timeout=PROBE_TIMEOUT_SECONDS)
                 return {"model": model, "ok": True, "reply": reply[:80], "duration_ms": elapsed()}
             except httpx.HTTPStatusError as exc:
-                return {"model": model, "ok": False, "error": provider_error_detail(exc.response), "duration_ms": elapsed()}
+                return {
+                    "model": model,
+                    "ok": False,
+                    "status": exc.response.status_code,
+                    "error": provider_error_detail(exc.response),
+                    "duration_ms": elapsed(),
+                }
             except httpx.HTTPError as exc:
                 return {"model": model, "ok": False, "error": f"连接失败：{exc}", "duration_ms": elapsed()}
             except ValueError as exc:
@@ -236,7 +260,7 @@ def build_router(store: Store) -> APIRouter:
                 return {"model": model, "ok": False, "error": str(exc), "duration_ms": elapsed()}
 
         with ThreadPoolExecutor(max_workers=6) as executor:
-            results = list(executor.map(probe_one, models))
+            results = [_probe_view(item) for item in executor.map(probe_one, models)]
 
         doc = {"tested_at": time.time(), "results": {}} if body.reset else (store.get_document("model_probe") or {"tested_at": time.time(), "results": {}})
         merged: dict[str, Any] = dict(doc.get("results") or {})

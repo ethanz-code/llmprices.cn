@@ -103,7 +103,17 @@ type TestOutcome = { ok: boolean; text: string };
 
 type TestResponse = { elapsed_ms: number; model?: string; reply?: string; exit_ip?: string };
 
-type ModelProbeResult = { model: string; ok: boolean; reply?: string; error?: string; duration_ms: number };
+/** unusable = 后端按状态码判定"这模型确定用不了"（额度用尽/没权限/模型不存在），可一键清理；
+ *  其余失败（限流/超时/网络）算临时，留在列表里下次再试。 */
+type ModelProbeResult = {
+  model: string;
+  ok: boolean;
+  reply?: string;
+  error?: string;
+  duration_ms: number;
+  status?: number | null;
+  unusable?: boolean;
+};
 
 type ModelProbeReport = { tested_at: number | null; results: Record<string, ModelProbeResult> };
 
@@ -473,6 +483,20 @@ export function AdminSettings() {
     void navigator.clipboard.writeText(list.join(", ")).then(() => toast("可用模型列表已复制，粘贴回模型列表保存即可"));
   }
 
+  /** 一键清掉"确定不可用"的模型（额度用尽/没权限/模型不存在）：只改表单不落库，点保存才生效；
+   *  临时失败的（限流/超时/网络）留在列表里，下次体检还能试出来。 */
+  function cleanUnusable(unusableModels: string[]) {
+    const bad = new Set(unusableModels);
+    if (!bad.size) return;
+    const kept = parsePoolText(aiModels).filter((name) => !bad.has(name));
+    setAiModels(modelsToText(kept));
+    const priceModelDropped = bad.has(aiPriceModel.trim());
+    if (priceModelDropped) setAiPriceModel("");
+    toast(
+      `已从模型列表移除 ${bad.size} 个不可用模型，剩 ${kept.length} 个${priceModelDropped ? "；固定价格提取模型也一起清空了" : ""}。点「保存设置」生效`,
+    );
+  }
+
   async function runSeed(mode: "skip_existing" | "overwrite") {
     if (mode === "overwrite") {
       setSeedWarnOpen(true); // 覆盖有风险：先弹确认弹窗再执行
@@ -670,14 +694,14 @@ export function AdminSettings() {
             </SettingRow>
             <SettingRow
               label="模型池体检"
-              hint="对列表里每个模型各发一次最小请求（15 秒内没回话按失败计），用已保存的配置实测，会产生少量 token 费用；改过配置先保存再测"
+              hint="对列表里每个模型各发一次最小请求（15 秒内没回话按失败计），用已保存的配置实测，会产生少量 token 费用；改过配置先保存再测。测完能一键清掉不可用的（额度用尽、没权限、模型不存在），临时失败的会留着下次再试"
             >
               <Btn size="sm" loading={probing} onClick={runProbeAll}>
                 一键测试全部模型
               </Btn>
             </SettingRow>
             {(probing || Object.keys(probeResults).length > 0) && (
-              <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "grid", gap: 8, gridTemplateColumns: "minmax(0, 1fr)" }}>
                 {probing && (
                   <span style={{ fontSize: 12, color: "var(--text-3)" }}>
                     已测 {Object.keys(probeResults).length}/{probeTotal}，边测边出结果…
@@ -692,7 +716,13 @@ export function AdminSettings() {
                     >
                       {item.model}
                     </span>
-                    {item.ok ? <span className="tag tone-green">可用</span> : <span className="tag tone-red">失败</span>}
+                    {item.ok ? (
+                      <span className="tag tag-quiet">可用</span>
+                    ) : item.unusable ? (
+                      <span className="tag tone-red">不可用</span>
+                    ) : (
+                      <span className="tag tone-yellow">失败</span>
+                    )}
                     <span
                       title={item.ok ? item.reply : item.error}
                       style={{
@@ -710,28 +740,45 @@ export function AdminSettings() {
                   </div>
                 ))}
                 {(() => {
-                  const okModels = Object.values(probeResults)
-                    .filter((item) => item.ok)
-                    .map((item) => item.model);
-                  if (!okModels.length) return null;
+                  const pool = new Set(parsePoolText(aiModels));
+                  const all = Object.values(probeResults);
+                  const okModels = all.filter((item) => item.ok).map((item) => item.model);
+                  // 只算"当前列表里真的有"的不可用模型，按钮上的数字才和清掉的条数一致
+                  const unusable = all.filter((item) => !item.ok && item.unusable && pool.has(item.model)).map((item) => item.model);
+                  if (!okModels.length && !unusable.length) return null;
                   return (
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12.5, color: "var(--text-2)", whiteSpace: "nowrap" }}>
-                        可用 {okModels.length} 个：
-                      </span>
-                      <code
-                        className="mono"
-                        title={okModels.join(", ")}
-                        style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      >
-                        {okModels.join(", ")}
-                      </code>
-                      {!probing && (
-                        <Btn size="sm" onClick={copyOkModels}>
-                          复制可用列表
-                        </Btn>
+                    <>
+                      {okModels.length > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 12.5, color: "var(--text-2)", whiteSpace: "nowrap" }}>
+                            可用 {okModels.length} 个：
+                          </span>
+                          <code
+                            className="mono"
+                            title={okModels.join(", ")}
+                            style={{ flex: 1, minWidth: 0, fontSize: 12, color: "var(--text-3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          >
+                            {okModels.join(", ")}
+                          </code>
+                          {!probing && (
+                            <Btn size="sm" onClick={copyOkModels}>
+                              复制可用列表
+                            </Btn>
+                          )}
+                          {!probing && unusable.length > 0 && (
+                            <Btn size="sm" onClick={() => cleanUnusable(unusable)}>
+                              清掉不可用的 {unusable.length} 个
+                            </Btn>
+                          )}
+                        </div>
                       )}
-                    </div>
+                      {/* 全军覆没多半是密钥或额度的问题，不是每个模型各自坏了：不给清理入口，免得把列表清空 */}
+                      {!probing && !okModels.length && (
+                        <span style={{ fontSize: 12.5, color: "var(--tone-red-text)" }}>
+                          所有模型都没测通，像是密钥或额度的问题，先核对上面的配置，别急着清列表。
+                        </span>
+                      )}
+                    </>
                   );
                 })()}
                 {!probing && probeTestedAt && (

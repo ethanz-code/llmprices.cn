@@ -107,6 +107,6 @@
 - [ ] `.page` 容器起步；列表页配 `<h1 className="sr-only">`，可见标题只在详情/文档页用 `PageHeader`。
 - [ ] 卡片用 `.panel`，提示用 `Alert`，表格用 `.dtable`，数字加 `.mono.num`。
 - [ ] 颜色、字号、圆角、动效全部引用 token；需要新值先在 `:root` 加 token。
-- [ ] grid / flex 子项记得 `min-width: 0`，长模型名、长 URL 要能截断。
+- [ ] grid / flex 子项记得 `min-width: 0`，长模型名、长 URL 要能截断；外层是 grid 且列宽自动时还要给容器显式 `grid-template-columns: minmax(0, 1fr)`——只写子项 `min-width: 0` 拦不住长 nowrap 文本把隐式轨道撑爆，省略号会形同虚设。
 - [ ] 390px 宽度过一遍：无横向滚动、表格在 `.dtable-scroll` 内滚、卡片不贴边。
 - [ ] 亮色、暗色两套主题各看一眼，确认对比度和彩色点缀没有超范围。

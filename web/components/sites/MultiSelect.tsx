@@ -94,6 +94,8 @@ function TagMultiSelect({
         role="button"
         aria-label={ariaLabel}
         onClick={() => setOpen(true)}
+        className="tag-field"
+        data-open={open}
         style={{
           display: "flex",
           flexWrap: "wrap",
@@ -102,13 +104,10 @@ function TagMultiSelect({
           width: "100%",
           minHeight: 34,
           // 已选标签多时框体不无限长高：约三行封顶，内部滚动；scroll 让滚动条常显，别等溢出才出现
-          maxHeight: 105,
+          maxHeight: 100,
           overflowY: "scroll",
           padding: "5px 10px",
           borderRadius: 6,
-          border: "1px solid var(--border-strong)",
-          background: "var(--panel)",
-          cursor: "pointer",
           boxSizing: "border-box",
         }}
       >
@@ -121,7 +120,7 @@ function TagMultiSelect({
               alignItems: "center",
               gap: 2,
               padding: "1px 2px 1px 8px",
-              border: "1px solid var(--border)",
+              background: "var(--panel)",
               borderRadius: 999,
               fontSize: 12,
               maxWidth: "100%",

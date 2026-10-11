@@ -905,6 +905,66 @@ def test_settings_test_models_probes_pool_and_persists(workspace: Path, monkeypa
     assert set(report["results"].keys()) == {"fresh"}
 
 
+def test_settings_probe_marks_unusable_models_only_for_permanent_failures(workspace: Path, monkeypatch) -> None:
+    """体检结果带 status/unusable：额度用尽/没权限/模型不存在才算"确定不可用"，限流超时不算。
+
+    unusable 是前端"一键清掉不可用模型"的唯一依据，判错会误删模型池，所以两种都要钉住；
+    老库结果没存 status，从报错原文的 HTTP 状态回推，历史数据升级后也能直接清理。
+    """
+    import llm_price_monitor.webapi.routes.settings as settings_routes
+    from llm_price_monitor.store import Store
+
+    client = _admin_client(workspace)
+    assert client.put("/api/settings", json={
+        "settings": {}, "ai": {"base_url": "https://saved.test/v1", "models": ["a"]},
+    }).status_code == 200
+
+    def http_status_error(status: int, message: str) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://saved.test/v1/chat/completions")
+        response = httpx.Response(status, json={"error": {"message": message, "type": "AllocationQuota.FreeTierOnly"}}, request=request)
+        return httpx.HTTPStatusError("err", request=request, response=response)
+
+    def fake_ping(config, model, *, client=None, timeout=None):
+        if model == "quota-model":
+            raise http_status_error(403, "Free quota exhausted.")
+        if model == "gone-model":
+            raise http_status_error(404, "model not found")
+        if model == "busy-model":
+            raise http_status_error(429, "rate limit exceeded")
+        if model == "timeout-model":
+            raise httpx.ConnectTimeout("timed out")
+        return "ok"
+
+    monkeypatch.setattr(settings_routes, "ping_model", fake_ping)
+
+    results = {
+        item["model"]: item
+        for item in client.post(
+            "/api/settings/test-models",
+            json={"models": ["ok-model", "quota-model", "gone-model", "busy-model", "timeout-model"], "reset": True},
+        ).json()["results"]
+    }
+    assert results["ok-model"]["ok"] is True and results["ok-model"]["unusable"] is False
+    assert (results["quota-model"]["status"], results["quota-model"]["unusable"]) == (403, True)
+    assert (results["gone-model"]["status"], results["gone-model"]["unusable"]) == (404, True)
+    # 限流与网络超时是临时的：留在模型池里下次再试，不给清理入口
+    assert (results["busy-model"]["status"], results["busy-model"]["unusable"]) == (429, False)
+    assert (results["timeout-model"]["status"], results["timeout-model"]["unusable"]) == (None, False)
+
+    # 落库后回看同样带判定（前端刷新页面靠 GET 这份）
+    report = client.get("/api/settings/test-models").json()
+    assert report["results"]["quota-model"]["unusable"] is True
+    assert report["results"]["busy-model"]["unusable"] is False
+
+    # 老库结果只有报错原文：从 HTTP 状态回推，历史体检数据不用重测也能清理
+    Store(workspace / "var" / "monitor.db").set_document(
+        "model_probe",
+        {"tested_at": 1.0, "results": {"legacy-quota": {"model": "legacy-quota", "ok": False, "error": "HTTP 403：Free quota exhausted.", "duration_ms": 150}}},
+    )
+    legacy = client.get("/api/settings/test-models").json()["results"]["legacy-quota"]
+    assert (legacy["status"], legacy["unusable"]) == (403, True)
+
+
 def test_analytics_track_public_with_dedup_and_validation(workspace: Path):
     """访问埋点公开可写：记录 IP/UA 并解析设备；30 秒内同 IP 同路径去重；非法路径 400。"""
     # summary 为管理员接口，统一用已登录客户端发起；track 本身公开。

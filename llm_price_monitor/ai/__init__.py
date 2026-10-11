@@ -28,6 +28,7 @@ from .errors import (
     _prompt_too_long,
     _response_detail,
     fit_text,
+    model_unusable_status,
     provider_error_detail,
 )
 from .state import (
@@ -116,6 +117,7 @@ __all__ = [
     "model_limits_loader",
     "model_limits_saver",
     "model_pool",
+    "model_unusable_status",
     "ping_model",
     "provider_error_detail",
     "request_with_model_fallback",

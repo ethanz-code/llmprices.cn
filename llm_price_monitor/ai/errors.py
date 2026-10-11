@@ -109,3 +109,14 @@ def provider_error_detail(response: httpx.Response) -> str:
 def _response_detail(exc: httpx.HTTPError) -> str:
     response = getattr(exc, "response", None)
     return f"；{provider_error_detail(response)}" if response is not None else ""
+
+
+# 这几个状态码说明是这个模型自己用不了（没权限 / 欠费 / 额度用尽 / 模型不存在），
+# 不是临时故障。只按状态码判定、不猜报错文案：429 限流、5xx、超时、网络抖动都算临时，
+# 下次可能就好了——清理模型列表是不可逆动作，宁可漏删不可错删。
+_UNUSABLE_MODEL_STATUSES = frozenset({401, 402, 403, 404, 410})
+
+
+def model_unusable_status(status_code: int) -> bool:
+    """该 HTTP 状态是否代表"这个模型确定用不了"（模型池体检标记与清理判断共用）。"""
+    return status_code in _UNUSABLE_MODEL_STATUSES
