@@ -18,8 +18,11 @@ def round2(value: Any) -> Any:
 
 
 # 模型 id 是 ASCII；中文（含全角符号）出现在抓取来的名字里只可能是页面标注
-# （"正式版"、"上下文缓存享有折扣"）或整行页面文案（"参见模型列表"）被连了进来
-_PAGE_NOTE_RE = re.compile(r"[\u4e00-\u9fff\u3000-\u303f\uff01-\uff5e]+")
+# （"正式版"、"上下文缓存享有折扣"）或整行页面文案（"参见模型列表"）被连了进来；
+# 零宽字符是页面文案里混排的隐形标注，一并剥掉（实测 doubao-seedream-4-5\u200b 混进监控清单）
+_PAGE_NOTE_RE = re.compile(
+    r"[\u4e00-\u9fff\u3000-\u303f\uff01-\uff5e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]+"
+)
 # 一行并排多个模型名（"MiMo-v2.6-Pro、MiMo-v2.5-Pro"）：价列只有一份，
 # 拆开必有一边拿到错价，整行丢弃比猜着拆安全
 _MERGED_NAME_RE = re.compile(r"[、,，；;]")

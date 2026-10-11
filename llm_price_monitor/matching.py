@@ -88,6 +88,9 @@ def resolve_site_names(
     """站点侧模型名 → 目标模型名：精确命中优先，其次"一侧省略版本号"，歧义宁缺勿猜。
 
     `accepted` 是 目标模型名 → 该目标可接受的名字（目标名本身 + AI 解析出的别名）。
+    第一趟别名同样算精确名，但一个目标命中站点多个不同模型时放弃——AIHub365 实锤：
+    目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash 两个模型时，
+    按 payload 顺序挑一个就是把两个模型的价格张冠李戴，必须宁缺勿猜。
     第二趟只在唯一候选时采信，因此站点同时挂着 v4 与 v4.1 两版时会放弃匹配，
     而不是随便挑一个把价格挂到错的模型上。返回 {目标名: 站点侧名字}。
     """
@@ -97,14 +100,18 @@ def resolve_site_names(
 
     resolved: dict[str, str] = {}
     claimed: set[str] = set()
+    ambiguous: set[str] = set()
     for target, names in accepted.items():
         wanted = {name.casefold() for name in names}
-        hit = next((original for key, original in unique.items() if key in wanted), None)
-        if hit is not None:
-            resolved[target] = hit
-            claimed.add(hit.casefold())
+        hits = [original for key, original in unique.items() if key in wanted]
+        if len(hits) > 1:
+            # 多命中本身就是歧义，第二趟"版本号省略"兜底也不许再猜
+            ambiguous.add(target)
+        elif len(hits) == 1 and hits[0].casefold() not in claimed:
+            resolved[target] = hits[0]
+            claimed.add(hits[0].casefold())
     for target, names in accepted.items():
-        if target in resolved:
+        if target in resolved or target in ambiguous:
             continue
         candidates = [
             original

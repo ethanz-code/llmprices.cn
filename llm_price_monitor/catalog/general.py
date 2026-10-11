@@ -18,7 +18,7 @@ from typing import Any
 # （海螺视频）与国内定价页的中文名条目（图生视频等）
 _NAME_BLOCK_SUBSTR = (
     "embed", "rerank", "ocr", "audio", "hailuo", "character", "structure",
-    "seedance", "图生视频", "文生图", "视频生成", "语音合成", "数字人",
+    "seedance", "seedream", "seededit", "图生视频", "文生图", "视频生成", "语音合成", "数字人",
 )
 # 名字黑名单——整段匹配（按 -_. 空格切段）：视觉（vl/vision）、语音（asr/tts）、
 # 实时（realtime）、翻译/角色扮演等专用模型与全模态生成系列（h3）

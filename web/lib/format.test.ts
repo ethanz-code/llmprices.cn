@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  cachePriceText,
+  effectiveCnyCachePrice,
   effectiveCnyPrice,
   formatPrice,
   formatTimeAgo,
@@ -51,6 +53,33 @@ describe("toCnyPrice / effectiveCnyPrice", () => {
       metadata: { pricing_rules: { groups: [{ tiers: [{ input_price: 5 }] }] } },
     };
     expect(tieredPrices(single, "input_price")).toEqual([]);
+  });
+});
+
+describe("cachePriceText / effectiveCnyCachePrice", () => {
+  // tiered_expr 记录的缓存价只存在 pricing_rules.groups[].tiers[]（实测 136 条顶层全空）
+  const tiered = {
+    unit: "CNY/1M tokens",
+    metadata: {
+      cache_read_price: null,
+      pricing_rules: {
+        groups: [
+          { tiers: [{ name: "standard", cache_read_price: 0.018, cache_create_price: 0.225 }] },
+        ],
+      },
+    },
+  };
+
+  it("顶层缺失时回落阶梯第一档", () => {
+    expect(cachePriceText(tiered, "cache_read_price")).toBe("¥0.018");
+    expect(effectiveCnyCachePrice(tiered, "cache_create_price", null)).toBe(0.225);
+  });
+
+  it("顶层有值优先，两处都缺返回 null", () => {
+    expect(
+      cachePriceText({ unit: "CNY/1M tokens", metadata: { cache_read_price: 0.5 } }, "cache_read_price"),
+    ).toBe("¥0.5");
+    expect(cachePriceText({ unit: "CNY/1M tokens", metadata: {} }, "cache_read_price")).toBeNull();
   });
 });
 

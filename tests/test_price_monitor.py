@@ -4094,6 +4094,9 @@ def test_platform_pricing_records_parses_final_prices():
     assert record.input_price == pytest.approx(0.89)
     assert record.output_price == pytest.approx(5.34)
     assert record.metadata["group_ratio"] == 0.178
+    # 缓存读/写价与 input/output 同源同换算；写价站方标 null 落 None
+    assert record.metadata["cache_read_price"] == pytest.approx(0.089)
+    assert record.metadata["cache_create_price"] is None
 
 
 def test_platform_pricing_records_parses_direct_prices():
@@ -4165,8 +4168,13 @@ def test_sub2api_model_prices_records_parse_groups():
     assert by_group["不降智"].output_price == pytest.approx(4.8)
     assert by_group["不降智"].price_status == "confirmed"
     assert by_group["不降智"].metadata["group_ratio"] == 0.161
+    # 缓存读/写（含 1h 档）与 input/output 同源直读；站方标 null 落 None
+    assert by_group["不降智"].metadata["cache_read_price"] == pytest.approx(0.3)
+    assert by_group["不降智"].metadata["cache_create_price"] is None
+    assert by_group["不降智"].metadata["cache_create_1h_price"] is None
     assert by_group["官方key"].input_price == pytest.approx(2.0)
     assert by_group["官方key"].output_price == pytest.approx(8.0)
+    assert by_group["官方key"].metadata["cache_read_price"] == pytest.approx(0.5)
     assert all(r.unit == "CNY/1M tokens" for r in records)
 
 
@@ -4227,8 +4235,9 @@ def test_network_adapter_dispatches_sub2api_shapes_without_ai():
 
 
 def test_product_library_price_records_parses_302ai():
-    """302.ai 产品库价目（data.products[].price_info[]）：美元每百万 token 直读，
-    多档取标准档，按次计费档跳过，折扣 SKU 归「折扣」分组、sale/ 前缀剥掉参与匹配。"""
+    """302.ai 产品库价目（data.products[].price_info[]）：按折后实付价（platform_*）直读、
+    缺失回落标价，缓存读/写价随实付口径采集；多档取标准档，按次计费档跳过，
+    折扣 SKU 归「折扣」分组、sale/ 前缀剥掉参与匹配。"""
     from llm_price_monitor.adapters import looks_like_product_library_prices, product_library_price_records
 
     payload = {
@@ -4243,6 +4252,7 @@ def test_product_library_price_records_parses_302ai():
                     "name": "gpt-6.1-sol",
                     "is_discount": 0,
                     "price_info": [
+                        # 不带 platform_* 实付价字段：回落标价
                         {"name": "gpt-6.1-sol", "rate": 1, "suffix": "1M tokens", "description": "≤ 272K", "input_price": 2.2, "output_price": 11, "special_pricing": ""},
                         {"name": "gpt-6.1-sol", "rate": 1, "suffix": "1M tokens", "description": "> 272K", "input_price": 4.4, "output_price": 22, "special_pricing": ""},
                     ],
@@ -4252,7 +4262,10 @@ def test_product_library_price_records_parses_302ai():
                     "name": "sale/claude-fable-5-1",
                     "is_discount": 1,
                     "price_info": [
-                        {"name": "sale/claude-fable-5-1", "rate": 0.85, "suffix": "1M tokens", "description": "", "input_price": 2.5, "output_price": 12.5, "special_pricing": ""},
+                        {"name": "sale/claude-fable-5-1", "rate": 0.85, "suffix": "1M tokens", "description": "", "input_price": 2.5, "output_price": 12.5,
+                         "platform_input_price": 2.125, "platform_output_price": 10.625,
+                         "cache_read_price": 0.25, "cache_write_price": 0.8,
+                         "platform_cache_read_price": 0.2125, "platform_cache_creation_price": 0.68, "special_pricing": ""},
                     ],
                 },
                 {
@@ -4276,6 +4289,7 @@ def test_product_library_price_records_parses_302ai():
     by_group = {r.metadata["group"]: r for r in records}
     assert set(by_group) == {"default", "折扣"}
     assert by_group["default"].model == "gpt-6.1-sol"
+    # 实付价缺失回落标价
     assert by_group["default"].input_price == pytest.approx(2.2)
     assert by_group["default"].output_price == pytest.approx(11)
     assert by_group["default"].price_status == "confirmed"
@@ -4283,6 +4297,11 @@ def test_product_library_price_records_parses_302ai():
     assert "档位：≤ 272K" in by_group["default"].metadata["notes"]
     assert by_group["折扣"].model == "claude-fable-5-1"
     assert by_group["折扣"].metadata["group_ratio"] == 0.85
+    # 折后实付价优先于标价，缓存读/写随实付口径
+    assert by_group["折扣"].input_price == pytest.approx(2.125)
+    assert by_group["折扣"].output_price == pytest.approx(10.625)
+    assert by_group["折扣"].metadata["cache_read_price"] == pytest.approx(0.2125)
+    assert by_group["折扣"].metadata["cache_create_price"] == pytest.approx(0.68)
 
 
 def test_network_adapter_dispatches_product_library_without_ai():

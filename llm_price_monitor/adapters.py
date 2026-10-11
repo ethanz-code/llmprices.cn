@@ -26,12 +26,13 @@ from llm_price_monitor.config import (
     SiteSpec,
 )
 from llm_price_monitor.evidence import is_preferred_response_url, payload_hash, redact_url
-from llm_price_monitor.matching import resolve_site_names
+from llm_price_monitor.matching import resolve_site_names, version_omitted_match
 from llm_price_monitor.tracker import (
     GroupRatioUnavailableError,
     PriceRecord,
     looks_like_newapi_pricing,
     looks_like_platform_pricing,
+    newapi_denomination_from_status,
     newapi_price_record,
 )
 
@@ -224,13 +225,36 @@ def _newapi_item(data: list[dict[str, Any]], model_name: str | None) -> dict[str
     )
 
 
+def _newapi_denomination(client: httpx.Client, pricing_url: str, timeout: float) -> dict[str, Any] | None:
+    """读站点 /api/status 的充值口径声明（price × quota_per_unit）；任何失败都回落 None。
+
+    v1 的 /api/pricing 载荷自身不带计价声明，而各站充值汇率差 7 倍
+    （AIHub365 price=6.8，多数中文站 price=1），不读就会把美元站价格整体低算。
+    status 是 new-api 启动必有的公开接口，拿不到字段说明不是 new-api 或站方未声明，
+    维持默认基准价并留痕。
+    """
+    base = str(pricing_url).split("/api/pricing", 1)[0]
+    if not base.startswith(("http://", "https://")):
+        return None
+    try:
+        response = client.get(f"{base}/api/status", timeout=timeout)
+        if not response.is_success:
+            return None
+        return newapi_denomination_from_status(response.json())
+    except Exception:
+        return None
+
+
 def network_pricing_records(
     spec: SiteSpec,
     captured: list[dict[str, Any]],
     resolved_aliases: dict[str, tuple[str, ...]] | None = None,
+    denomination: dict[str, Any] | None = None,
 ) -> list[PriceRecord]:
     """只用 HTTP JSON 响应计算价格；支持 New API 和字段映射响应。
 
+    `denomination` 是站点 /api/status 的充值口径声明（见 _newapi_denomination），
+    传进来用于修正 v1 载荷的倍率基准价；None 时按默认基准计价。
     metadata.adapter 标签只描述「价格怎么解析出来的」，与采集是否走了浏览器无关
     （"browser" 是历史命名：证据结构沿用了浏览器捕获事件的格式，实际可能纯 HTTP）：
     - browser_network：直采解析成功（new-api JSON，或 HTML 里内嵌的价格表）
@@ -268,6 +292,29 @@ def network_pricing_records(
         )
         for target in targets:
             site_name = matched.get(target.name)
+            if site_name is None:
+                # 宁缺勿猜被触发的要留痕：管理台看到的失败原因不能是笼统的"未捕获响应"。
+                # 两种歧义都写明站点上撞名的是谁：AI 别名多命中 / 站点同时挂同族多版本。
+                accepted_keys = {name.casefold() for name in accepted[target.name]}
+                hits = sorted({
+                    str(value.get("model_name", "")) for value in data
+                    if str(value.get("model_name", "")).casefold() in accepted_keys
+                })
+                if len(hits) > 1:
+                    failures[target.name].append(
+                        f"候选名同时命中站点 {len(hits)} 个模型（{'、'.join(hits)}），宁缺勿猜不采信"
+                    )
+                else:
+                    same_family = sorted({
+                        str(value.get("model_name", "")) for value in data
+                        if version_omitted_match(str(value.get("model_name", "")).casefold(), target.name)
+                    })
+                    if len(same_family) > 1:
+                        failures[target.name].append(
+                            f"站点同时挂着同族 {len(same_family)} 个版本（{'、'.join(same_family)}），"
+                            f"无法确定哪个对应 {target.name}，宁缺勿猜不采信"
+                        )
+                continue
             item = _newapi_item(data, site_name)
             if item is None:
                 continue
@@ -285,6 +332,7 @@ def network_pricing_records(
                         str(response.get("url") or ""),
                         group=selected_group,
                         aliases=aliases,
+                        denomination=denomination,
                     )
                 except GroupRatioUnavailableError:
                     # 站点未公开该分组倍率，无法计价，直接不输出该分组。
@@ -410,6 +458,8 @@ def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> 
 
                         input_price = scaled("input_price")
                         output_price = scaled("output_price")
+                        if input_price is None and output_price is None:
+                            continue
                         key = (target.name, group)
                         if key in records:
                             continue
@@ -419,6 +469,9 @@ def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> 
                         )
                         metadata["group"] = group
                         metadata["group_ratio"] = entry.get("rate_multiplier")
+                        # 缓存读/写价与 input/output 同源同换算（final_prices 内按分组实价）
+                        metadata["cache_read_price"] = scaled("cache_read_price")
+                        metadata["cache_create_price"] = scaled("cache_write_price")
                         status = "confirmed" if input_price is not None and output_price is not None else "candidate"
                         records[key] = PriceRecord(
                             target.name,
@@ -486,9 +539,10 @@ def _product_library_standard_tier(price_info: list[Any]) -> dict[str, Any] | No
 
 
 def product_library_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
-    """确定性解析 302.ai 产品库价目：美元每百万 token 直读。
+    """确定性解析 302.ai 产品库价目：按折后实付价（platform_*）直读，美元每百万 token。
 
     price_info 多档取标准档；按次计费档（suffix 非 "1M tokens"）不按 token 价采；
+    实付价缺失回落标价；缓存读/写价随实付口径一并采集（实测 61/100 条带缓存价）；
     折扣 SKU（is_discount 或 sale/ 名称前缀）归「折扣」分组，与标准价并列不互相覆盖。
     """
     response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
@@ -512,8 +566,15 @@ def product_library_price_records(spec: SiteSpec, captured: list[dict[str, Any]]
         )
         if target is None:
             continue
-        input_price = tier.get("input_price") if _plain_number(tier.get("input_price")) else None
-        output_price = tier.get("output_price") if _plain_number(tier.get("output_price")) else None
+
+        def effective(platform_key: str, list_key: str) -> float | None:
+            value = tier.get(platform_key)
+            if not _plain_number(value):
+                value = tier.get(list_key)
+            return value if _plain_number(value) else None
+
+        input_price = effective("platform_input_price", "input_price")
+        output_price = effective("platform_output_price", "output_price")
         if input_price is None and output_price is None:
             continue
         discounted = (
@@ -531,6 +592,8 @@ def product_library_price_records(spec: SiteSpec, captured: list[dict[str, Any]]
             "pricing_kind": "explicit_price",
             "group": group,
             "group_ratio": tier.get("rate") if _plain_number(tier.get("rate")) else None,
+            "cache_read_price": effective("platform_cache_read_price", "cache_read_price"),
+            "cache_create_price": effective("platform_cache_creation_price", "cache_write_price"),
             "currency": "USD",
             "network_evidence": [{
                 "source": "model_list",
@@ -540,7 +603,7 @@ def product_library_price_records(spec: SiteSpec, captured: list[dict[str, Any]]
                 "payload_sha256": payload_hash(payload),
             }],
             "page_evidence": [],
-            "notes": "302.ai 产品库直读：美元每百万 token。"
+            "notes": "302.ai 产品库直读：美元每百万 token，按折后实付价（缺折后价回落标价）。"
             + (f"档位：{tier_note}。" if tier_note else ""),
         }
         status = "confirmed" if input_price is not None and output_price is not None else "candidate"
@@ -579,7 +642,8 @@ def sub2api_model_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) 
     """确定性解析 sub2api model-prices：分组实付价已含倍率，币种与单位随接口声明。
 
     同一模型在多个分组售卖时逐分组出价；tiers 取 min_tokens=0 的标准档（缺失回落第一档），
-    非标准档不混入。input/output 齐全为 confirmed，缺一为 candidate。
+    非标准档不混入。input/output 齐全为 confirmed，缺一为 candidate；
+    缓存读/写（含 1h 档）与 input/output 同源同倍率换算。
     """
     response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
     payload = captured[0].get("payload") if captured else None
@@ -631,6 +695,10 @@ def sub2api_model_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) 
                 "pricing_kind": "explicit_price",
                 "group": group_name,
                 "group_ratio": rate,
+                # 缓存读/写价与 input/output 同源同倍率换算（tiers 内按档实价，2000lab 实测三键）
+                "cache_read_price": scaled("cache_read"),
+                "cache_create_price": scaled("cache_write"),
+                "cache_create_1h_price": scaled("cache_write_1h"),
                 "currency": currency,
                 "network_evidence": [{
                     "source": "model_list",
@@ -762,7 +830,8 @@ class NetworkAdapter:
             # 需要浏览器渲染的站点由管理员显式切到「网页模式」（headless.enabled）
             return self._collect_from_html(spec, network, entry, client, timeout, user_agent, ai, response, captured)
         if looks_like_newapi_pricing(payload):
-            direct_records = network_pricing_records(spec, [captured])
+            denomination = _newapi_denomination(client, str(response.url), timeout)
+            direct_records = network_pricing_records(spec, [captured], denomination=denomination)
             # Always let AI inspect New API/One API model names when enabled.
             # It resolves informal configured labels to evidence-backed
             # model_name aliases; pricing itself remains deterministic.
@@ -778,7 +847,7 @@ class NetworkAdapter:
                         aliases[model] = tuple(
                             value for value in (observed, *(details.get("aliases") or [])) if value
                         )
-                    resolved_records = network_pricing_records(spec, [captured], aliases)
+                    resolved_records = network_pricing_records(spec, [captured], aliases, denomination=denomination)
                     for resolved in resolved_records:
                         details = alias_details.get(resolved.model)
                         if not details:

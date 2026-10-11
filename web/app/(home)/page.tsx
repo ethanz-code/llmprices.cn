@@ -83,14 +83,16 @@ const LATEST_EVENTS_SHOWN = 5;
 async function loadLanding(): Promise<LandingData> {
   try {
     // 统一事件流（价格+公告已合并）；渠道检测拉取失败只影响星球与站点卡片，不阻塞整页
+    // 在售监测集与首页数据共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求
+    const overviewPromise = apiGet<OverviewData>("/api/overview");
     const [overview, meta, feed, statusViews, geo, rankings, catalog, history] = await Promise.all([
-      apiGet<OverviewData>("/api/overview"),
+      overviewPromise,
       apiGet<MetaData>("/api/meta"),
       apiGet<FeedData>("/api/feed?events_limit=8&notice_limit=8").catch(() => null),
       // 与站点检测详情页同口径（每站最近 400 条、近 7 天）：逐站拉取后合并成视图。
       // 曾经全局 max_records 抽样按总 id 取模，站内密度失衡会丢渠道、漂移最新可用率，
       // 与详情页对不上；口径收拢在 lib/statusData.ts，数字与详情页同源。
-      loadStatusViews().catch(() => buildSiteViews([])),
+      loadStatusViews(undefined, overviewPromise).catch(() => buildSiteViews([])),
       // 站点定位较慢（DNS + 归属地查询），失败只影响地球落点，不阻塞整页
       apiGet<{ geo: Record<string, SiteGeo> }>("/api/geo").catch(() => ({ geo: {} })),
       apiGet<RankingsData>("/api/rankings").catch(() => null),

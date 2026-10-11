@@ -38,9 +38,11 @@ export default async function OverviewPage() {
   let modelOrder: Record<string, ModelOrderEntry> = {};
   let error: string | null = null;
   try {
+    // 在售监测集与总览表共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求
+    const overviewPromise = apiGet<OverviewData>("/api/overview", headers);
     const [overview, statusViews, rankings, catalog] = await Promise.all([
-      apiGet<OverviewData>("/api/overview", headers),
-      loadStatusViews(headers).catch(() => buildSiteViews([])),
+      overviewPromise,
+      loadStatusViews(headers, overviewPromise).catch(() => buildSiteViews([])),
       apiGet<RankingsData>("/api/rankings").catch(() => null),
       apiGet<CatalogData>("/api/catalog").catch(() => null),
     ]);

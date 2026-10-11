@@ -137,6 +137,24 @@ def test_overview_attaches_discount_and_catalog_context(workspace: Path):
     assert data["site_completeness"] == {"demo": 0}
 
 
+def test_overview_site_id_filters_records(workspace: Path):
+    """site_id 参数只保留该站记录：站点检测详情页取本站在售监测集用，省全量序列化。"""
+    (workspace / "var" / "latest.json").write_text(json.dumps({
+        "demo:demo-model:default": _latest_record(),
+        "other:other-model:vip": {
+            **_latest_record(), "site_id": "other", "model": "other-model",
+            "metadata": {"group": "vip"},
+        },
+    }), encoding="utf-8")
+    client = TestClient(create_app(_config(workspace)))
+    all_sites = {row["site_id"] for row in client.get("/api/overview").json()["records"]}
+    assert all_sites == {"demo", "other"}
+    only_demo = client.get("/api/overview", params={"site_id": "demo"}).json()
+    assert {row["site_id"] for row in only_demo["records"]} == {"demo"}
+    assert only_demo["records"][0]["model"] == "demo-model"
+    assert client.get("/api/overview", params={"site_id": "nope"}).json()["records"] == []
+
+
 def test_catalog_missing_returns_404(workspace: Path):
     (workspace / "var" / "catalog.json").unlink()
     # 调度已在 _config 里关闭，目录缺失时不会触发自动同步，保持"无数据"状态

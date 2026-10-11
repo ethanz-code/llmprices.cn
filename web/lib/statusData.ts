@@ -5,8 +5,8 @@
  *  （134-175-71 实测：首页比详情页少 grok-4.6 渠道、可用率 86% vs 75%）。
  *  现在逐站按详情页同参数拉取，数据同源，数字不可能再分叉。 */
 import { apiGet } from "./api";
-import { buildSiteViews, type SiteViews } from "./channelStatus";
-import type { StatusSnapshot } from "./types";
+import { buildMonitoredSets, buildSiteViews, type SiteViews } from "./channelStatus";
+import type { OverviewData, StatusSnapshot } from "./types";
 
 /** 与站点详情页同款：每站最近 400 条。 */
 export const STATUS_PER_SITE_LIMIT = 400;
@@ -32,14 +32,23 @@ export async function fetchSiteStatus(
 }
 
 /** 全站视图：站点清单取 /api/status/latest（只含采过状态的站），逐站并发拉详情页口径，
- *  单站失败只缺该站、不拖垮整页；合并后跑一次 buildSiteViews，各站视图共享同一份输入。 */
-export async function loadStatusViews(headers?: HeadersInit): Promise<SiteViews> {
+ *  单站失败只缺该站、不拖垮整页；合并后跑一次 buildSiteViews，各站视图共享同一份输入。
+ *  overview 传同页已在拉取的 /api/overview 在飞 Promise（并行不重复请求），由它构建各站
+ *  「在售监测集」，渠道视图只保留对得上在售模型/分组的行（零命中回退全量）；不传则自己拉一份。 */
+export async function loadStatusViews(
+  headers?: HeadersInit,
+  overview?: Promise<OverviewData | null>,
+): Promise<SiteViews> {
   const latest = await apiGet<Record<string, unknown>>("/api/status/latest", headers).catch(
     () => ({} as Record<string, unknown>),
   );
   const siteIds = Object.keys(latest);
-  const batches = await Promise.all(
-    siteIds.map((siteId) => fetchSiteStatus(siteId, headers).catch(() => [] as StatusSnapshot[])),
-  );
-  return buildSiteViews(batches.flat());
+  const [batches, overviewData] = await Promise.all([
+    Promise.all(
+      siteIds.map((siteId) => fetchSiteStatus(siteId, headers).catch(() => [] as StatusSnapshot[])),
+    ),
+    (overview ?? apiGet<OverviewData>("/api/overview", headers)).catch(() => null),
+  ]);
+  const monitored = overviewData ? buildMonitoredSets(overviewData.records) : undefined;
+  return buildSiteViews(batches.flat(), monitored);
 }

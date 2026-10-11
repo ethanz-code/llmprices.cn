@@ -11,7 +11,7 @@
 | 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
-| 价格 / 基准价 / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 | 本页 §3 |
+| 价格 / 基准价 / 充值汇率 / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 | 本页 §3 |
 | 骨架屏 / 暗色 / 表格 / 窄屏 / 响应式 / 内容超出框 / 横向滚动 / min-width | 本页 §4 |
 | panic / char boundary / code-frame / dev 半死 / 改文件不生效 | 本页 §4 |
 | 强制刷新 / 数据不更新 / 页面旧数据 / revalidate / no-store / 缓存 | 本页 §4 |
@@ -85,6 +85,9 @@
 | 1for"拿不到价格"两轮误判：第一轮归因"站方货架空了等补货"被用户纠正——**售卖接口（channels/available）空 ≠ 没价目，sub2api 系渠道状态（/monitor、channel-monitors）里渠道与模型列表一体且带 rate_multiplier**，倍率就是价目（实付=官方价×倍率）。判定站有没有货必须把状态腿响应翻全，不能只看售卖腿 | 价格腿零命中 + 状态快照（status_ref:{site}）渠道带倍率与模型 → 官方价×倍率自动合成渠道价（candidate、分组=渠道名、官方目录查无的渠道跳过），零配置通用判据 | pricing.py `_channel_rate_records`；scans.py 零命中分支 |
 | 0 被当成有效价贯穿全链路：`_has_price` 只判 `is not None`，0/0 双零占位行入库绕过"无价行不进快照"设计；前端 `hasUsablePrice`/最低价挑选同样不防 0，¥0 假免费价上首页。**判"有没有价"必须带 price_status 语义：0/0 只有 confirmed（真免费档）算数**；且旧价不能无限沿用——连续 3 轮无数据（响应缺席或解析不出价）就从快照摘除旧价发 group_removed（用户点名要实时，需认证/采集失败的整轮除外，那是我方问题） | pricing.py `_has_price`；scans.py `GROUP_REMOVED_MISSES = 3`；web/lib/priceRows.ts `hasUsablePrice`；存量 0/0 行由落库层无价行清扫自动摘除，无需手工清库 |
 | 健康档案把"采到合成价"的站点标黄"没抓到任何价格数据"（1for：8 条渠道倍率价已入库，站点行仍挂感叹号，用户点名）：`site_status` 在渠道倍率合成分支**之前**算出，合成成功只换了 `collected` 不回填状态。**凡"先算状态、后补数据"的流程都要检查每条产出路径是否回填**——合成价、兜底价、表解析价都是本轮真实产出 | 合成成功即按合成记录重算 `site_status`（重算而非补丁：与价格腿同一函数推导，测试采集的逐站回显同步受益） | scans.py 合成分支；提交 b2de648 |
+| 「站点接口没给缓存价」从落库结果反推被用户当场抓住：302 产品库 price_info 61/100 条带缓存价，`product_library_price_records` 只读 input/output 直接丢弃——**"数据源没有"必须回源看原文才算数，落库缺字段只证明"采集结果里没有"**；确定性解析器接新站时逐字段对照源结构清单，别只取眼前要的几个键。同一丢失模式连中三枪（302/2000lab/totokens），而验证只要带库里的 access_token 发一个 GET——「接口要登录态」不是不验证的理由，凭证就在站点配置里 | 带认证探测只读接口用 access_token 直接 Bearer，绝不碰 refresh_token（轮换制凭据探测即消费）；三站解析器均已补读缓存价（302 实付价口径、sub2api 三键、platforms final_prices ×1e6） | adapters.py 三个解析器；审查记录 .zcode/plans/price-cache-discount-audit-20261010.md |
+| new-api v1 站倍率基准想当然按 ¥2 全站统一（用户贴 AIHub365 定价 JSON 手算 3 折对不上，点名复查）：站方「官方3折」标价 ×13.6 精确命中、图片 price_table ¥0.2=model_price×6.8，实锤美元充值站价格被整体低算 6.8 倍；`usd_exchange_rate` 是显示换算不能当基准（1-cnmz 报 7.3 实收按 1）——**各站实付锚点只有 /api/status 的 `price`（充值汇率）×`quota_per_unit`，基准=1e6/qpu×price**，v2 载荷自带声明优先；合理性校验只拦超高不拦超低，6.8 倍低估全程无告警 | v1 载荷采集时读 /api/status 推导充值口径基准（拿不到回退 2 并留 warn），记录带 `metadata.denomination` 留证据；15 站扫描：cun/AIHub365/128api/2coding 被修正，price=1 的站数值不变 | tracker.py `newapi_denomination_from_status`；adapters.py `_newapi_denomination` |
+| AI 别名把站上两个模型（deepseek-v4-flash / v4.1-flash）都列为官方名 deepseek-flash 的候选，`resolve_site_names` 第一趟按 payload 顺序挑一个写库标 confirmed，"宁缺勿猜"护栏被绕过；且同站同族模型排序一变就换人，价格差 40%——**第一趟多命中弃权后必须把歧义传递给第二趟，否则版本号省略兜底接着猜** | 第一趟命中数 >1 即弃权并禁走第二趟；弃权原因写进 failures 留痕（"站点同时挂着同族 N 个版本…"），管理台不再看到笼统的"未捕获响应"；实测三站（AIHub365/cun/123ai）deepseek-flash 全部如实 unavailable | matching.py `resolve_site_names`；adapters.py 留痕分支 |
 
 ## 4. 前端
 

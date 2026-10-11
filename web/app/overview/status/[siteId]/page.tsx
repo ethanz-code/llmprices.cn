@@ -10,6 +10,7 @@ import { ShareSiteButton } from "@/components/ShareSiteButton";
 import { ChartLegendProvider } from "@/components/ChartLegendContext";
 import { formatTime } from "@/lib/format";
 import {
+  buildMonitoredSets,
   buildSiteViews,
   buildUptimeBuckets,
   latencyLevel,
@@ -20,7 +21,7 @@ import {
 import type { Tone } from "@/components/ToneTag";
 import type { Metadata } from "next";
 import { getSiteInfo } from "@/lib/sites";
-import type { NoticeSnapshot, StatusSnapshot } from "@/lib/types";
+import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
 
 export const dynamic = "force-dynamic";
@@ -199,11 +200,12 @@ export default async function StatusDetailPage({
 
   let records: StatusSnapshot[] = [];
   let notices: NoticeSnapshot[] = [];
+  let overview: OverviewData | null = null;
   let error: string | null = null;
   try {
     // 渠道时序走 lib/statusData.ts：每站最近 400 条、近 7 天——首页与总览的渠道统计
     // 也用这同一份口径（数据同源，各页数字才一致），这里是「详情页口径」的本体。
-    const [timeline, noticeData] = await Promise.all([
+    const [timeline, noticeData, overviewData] = await Promise.all([
       fetchSiteStatus(siteId),
       // 公告拉取失败只影响公告区，不阻塞整页；只取最新一次采集的存档
       apiGet<{ records: NoticeSnapshot[] }>(
@@ -211,14 +213,21 @@ export default async function StatusDetailPage({
       ).catch(() => ({
         records: [] as NoticeSnapshot[],
       })),
+      // 在售监测集：后端按站过滤的轻量 overview，渠道视图只看本站在售模型/分组
+      apiGet<OverviewData>(`/api/overview?site_id=${encodeURIComponent(siteId)}`).catch(() => null),
     ]);
     records = timeline;
     notices = noticeData.records ?? [];
+    overview = overviewData;
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
 
-  const views = buildSiteViews(records);
+  // monitored 由本站在售价格行构建；overview 拉取失败时 undefined = 不过滤，保持全量
+  const views = buildSiteViews(
+    records,
+    overview ? buildMonitoredSets(overview.records) : undefined,
+  );
   const series = views.availability[siteId] ?? [];
   const channels = views.channels[siteId] ?? [];
   // 顶部整站时段色块：服务端用抽稀前的全量序列预分桶（桶内平均/最差/次数都是真实口径，

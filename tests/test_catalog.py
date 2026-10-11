@@ -344,6 +344,12 @@ def test_is_general_llm_and_snapshot_variant():
     assert not is_general_llm({"model": "qwen3-asr-flash", "modalities": {"input": ["audio"], "output": ["text"]}})
     assert not is_general_llm({"model": "text-embedding-3-small"})
     assert not is_general_llm({"model": "doubao-seed-character"})
+    # 即梦系生图/图片编辑（seedream/seededit）与视频 seedance 同族拦截；
+    # doubao-seed-2.1 文本主线不受影响
+    assert not is_general_llm({"model": "doubao-seedream-4-5"})
+    assert not is_general_llm({"model": "seedream-5-0-pro"})
+    assert not is_general_llm({"model": "seededit-3.0"})
+    assert is_general_llm({"model": "doubao-seed-2.1-pro"})
     assert not is_general_llm({"model": "MiniMax-H3"})
     # 媒体生成（国内定价页不标 modalities，按名字拦）：万相系整族 + 形态标记 + 定向档
     assert not is_general_llm({"model": "wan2.7-t2v"})
@@ -374,6 +380,9 @@ def test_sanitize_model_name():
     assert sanitize_model_name("腾讯元器") == ("", "整行页面文案，非模型")
     # 一行并排两个模型共价：拆开必错一边，整行丢弃
     assert sanitize_model_name("MiMo-v2.6-Pro、MiMo-v2.5-Pro")[1] is not None
+    # 零宽字符混排的隐形标注剥掉（实测 doubao-seedream-4-5\u200b 混进监控清单）
+    assert sanitize_model_name("doubao-seedream-4-5\u200b") == ("doubao-seedream-4-5", None)
+    assert sanitize_model_name("glm-5.3\u200b按场景区分定价\u200b") == ("glm-5.3", None)
     # 干净名字原样通过
     assert sanitize_model_name(" qwen3.8-max ") == ("qwen3.8-max", None)
 

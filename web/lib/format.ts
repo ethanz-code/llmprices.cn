@@ -201,20 +201,33 @@ export const CACHE_PRICE_LABELS: Record<CachePriceField, string> = {
   cache_create_1h_price: "缓存写(1h)",
 };
 
-/** 缓存价记录的最小结构：只需要 unit 与 metadata 里的缓存价字段。 */
+/** 缓存价记录的最小结构：只需要 unit 与 metadata 里的缓存价字段（含阶梯档回落）。 */
 interface CachePriced {
   unit?: string;
   metadata?: {
     cache_read_price?: number | null;
     cache_create_price?: number | null;
     cache_create_1h_price?: number | null;
+    pricing_rules?: unknown;
   } | null;
 }
 
-/** 缓存价原始值：站点未提供（字段缺省或 null）返回 null。 */
+/** 缓存价原始值：顶层优先；阶梯计费记录（tiered_expr）的缓存价只存在
+ *  pricing_rules.groups[].tiers[] 里（实测 136 条），回落取第一档，
+ *  与后端折扣计算「顶层空时取第一档」同口径。两处都没有返回 null。 */
 function cachePriceValue(row: CachePriced | null | undefined, field: CachePriceField): number | null {
   const value = row?.metadata?.[field];
-  return typeof value === "number" ? value : null;
+  if (typeof value === "number") return value;
+  const rules = row?.metadata?.pricing_rules as
+    | { groups?: { tiers?: Record<string, unknown>[] }[] }
+    | undefined;
+  for (const group of rules?.groups ?? []) {
+    for (const tier of group.tiers ?? []) {
+      const tierValue = tier[field];
+      if (typeof tierValue === "number") return tierValue;
+    }
+  }
+  return null;
 }
 
 /** 缓存价文本：折算口径与输入/输出价一致（USD 乘汇率折 RMB，CNY 原样，其余回落原币）；无值返回 null。 */

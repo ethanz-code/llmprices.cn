@@ -8,7 +8,7 @@
 ## 特性
 
 - **多站点监控**：通过 API 触发采集各站点价格接口，AI 自动归一化不规范模型名，历史/快照/变化事件齐备。
-- **确定性计价**：one-api / new-api 响应本地精确计算（`输入价 = model_ratio × 2 × group_ratio`，基准价固定 2）；`billing_denomination_version: 2` 新格式直接读官方标注价。
+- **确定性计价**：one-api / new-api 响应本地精确计算（`输入价 = model_ratio × 基准价 × group_ratio`）；`billing_denomination_version: 2` 新格式直接读官方标注价。
 - **多地址采集**：`networks` 数组给同一站点配置多个采集地址，逐个采集后合并价格，同一模型主地址优先。
 - **完整阶梯**：`tiered_expr` 与 `pricing_rules.tiers` 解析为完整上下文阶梯（tiers），保留缓存读/写价与 `request_rules`，不压缩成固定单价。
 - **AI 兜底**：非 New API 格式交给 AI 做证据抽取，结果过模型名、URL、价格数值三重校验，无法闭环时降级，不猜测。
@@ -338,7 +338,7 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 
 默认请求 `network.url`（支持 `method` / `params` / `headers` / `body`），按响应类型分三条路；`networks` 数组可配置多个附加地址，逐个采集后合并价格（同一模型主地址优先）：
 
-1. **JSON 且形如 one-api/new-api**（`data[].model_name` + `model_ratio` 等）→ **本地公式确定性计价**：`输入价 = model_ratio × 2 × group_ratio`（基准价固定 2）；`tiered_expr` / `pricing_rules.tiers` 解析为完整上下文阶梯；`billing_denomination_version=2` 的站点按 USD 基准处理并乘以站点声明的 `pricing_cny_rate`（如有）。**AI 不参与算价**——若启用了 AI，仅用于把配置里的俗称解析成证据中的正式模型名（别名，如 `GPT-5.6 Sol` → `gpt-5.6-sol`），解析后仍用本地公式重算；AI 失败时直接输出公式结果。
+1. **JSON 且形如 one-api/new-api**（`data[].model_name` + `model_ratio` 等）→ **本地公式确定性计价**：`输入价 = model_ratio × 基准价 × group_ratio`；`tiered_expr` / `pricing_rules.tiers` 解析为完整上下文阶梯；`billing_denomination_version=2` 的站点按 USD 基准处理并乘以站点声明的 `pricing_cny_rate`（如有）。**基准价自动判定**：v1 载荷不带计价声明，而各站充值汇率差 7 倍（AIHub365 充值价 6.8 元/美元额度，多数中文站 1:1），采集时读站点 `/api/status` 的 `price`（充值汇率）×`quota_per_unit` 推导基准价 `1e6/quota_per_unit × price`——`usd_exchange_rate` 只是前端显示换算不能用作基准，status 拿不到时回退默认 2 并在日志留痕。**AI 不参与算价**——若启用了 AI，仅用于把配置里的俗称解析成证据中的正式模型名（别名，如 `GPT-5.6 Sol` → `gpt-5.6-sol`），解析后仍用本地公式重算；AI 失败时直接输出公式结果。别名匹配沿用宁缺勿猜：一个目标的候选名同时命中站点多个模型、或站点同时挂同族多版本时，放弃匹配并留痕（AIHub365 把 v4-flash 与 v4.1-flash 的价格张冠李戴进 deepseek-flash 的实锤教训）。
 2. **其它格式的 JSON** → 交给 AI 做证据抽取（未配置可用 AI 时报错，不猜测）。
 3. **HTML / 文本** → 先按结构特征识别页面内嵌的基准价表条目（`{category, provider, name, models[], input, output, …}`），命中目标模型即直接确定性计价（条目价为 USD，不经过 AI）；页面里没有目标模型时，自动发现页面引用的 JS chunk（最多 15 个）逐个查找，命中即确定性计价——chunk 文件名带内容哈希，每次采集重新发现，站点改版也能跟上；仍未命中再交给 AI 抽取，无 AI 时报错。
 

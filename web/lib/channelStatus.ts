@@ -33,8 +33,36 @@ export interface ChannelDotRow extends ChannelStatus {
   recentRates?: number[];
 }
 
-/** 点阵行名归一：去首尾空格、忽略大小写，用于与计价分组名匹配。 */
-const normalizeChannelName = (name: string) => name.trim().toLowerCase();
+/** 点阵行名归一：去首尾空格、忽略大小写，用于与计价分组名/在售监测集匹配。 */
+export const normalizeChannelName = (name: string) => name.trim().toLowerCase();
+
+/** 在售监测集：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」）。
+ *  渠道状态展示的在售口径匹配依据：渠道行只有对得上在售模型/分组，才与本站访客有关。 */
+export type MonitoredSets = Record<string, Set<string>>;
+
+/** 从最新价格行构建各站监测集：模型名与计价分组名都收——分组级状态页对分组名、
+ *  模型级状态页（perf-metrics 系）对模型名；归一口径与点阵行名一致（去空格、忽略大小写）。 */
+export function buildMonitoredSets(
+  records: { site_id: string; model: string; metadata?: { group?: string | null } }[],
+): MonitoredSets {
+  const sets: MonitoredSets = {};
+  for (const row of records) {
+    const set = (sets[row.site_id] ??= new Set<string>());
+    set.add(normalizeChannelName(row.model));
+    if (row.metadata?.group) set.add(normalizeChannelName(row.metadata.group));
+  }
+  return sets;
+}
+
+/** 渠道行在售口径过滤：只留渠道名对得上监测集的行；监测集缺失（站没采到价格）
+ *  或一条都对不上（站点状态页的产品线与在售完全错开，如 1xm 只挂 claude 渠道而在售全是
+ *  GPT/Gemini 分组）时原样返回——与后端 filter_status_groups 的防清空兜底同哲学，
+ *  别把详情页滤成白板。 */
+export function filterRowsByMonitored(rows: ChannelDotRow[], monitored: Set<string> | undefined): ChannelDotRow[] {
+  if (!monitored || monitored.size === 0) return rows;
+  const kept = rows.filter((row) => monitored.has(normalizeChannelName(row.name)));
+  return kept.length > 0 ? kept : rows;
+}
 
 
 /** 分桶保峰抽稀：把时间升序序列按时间跨度等分成 max 桶，每桶保留一个代表点——
@@ -145,7 +173,9 @@ function isNonChatChannel(name: string): boolean {
 /** 历史序列键名：不作为独立渠道递归，而是并成所属渠道的检测点 */
 const TIMELINE_KEYS = new Set(["timeline", "history", "checks", "events", "logs", "log", "uptime"]);
 const TIME_KEYS = ["checked_at", "checkedAt", "checked", "timestamp", "detected_at", "time", "at", "ts"];
-const MAX_CHANNELS = 64;
+// 上限只防异常膨胀，不再是展示裁剪：展示量由在售口径过滤（filterRowsByMonitored）收窄，
+// 截断发生在过滤之前会误丢监测中的渠道（1-cnmz 91 条曾被截到 64）
+const MAX_CHANNELS = 256;
 const MAX_DOTS = 720;
 
 function isUp(raw: string): boolean {
@@ -331,8 +361,13 @@ function dedupeDots(dots: ChannelDot[]): ChannelDot[] {
 /**
  * 按站点把状态时序合并成「渠道 → 检测点序列」：渠道快照里自带时间线时直接采用
  * （逐分钟，密度高），否则每次采集记一个点；异常渠道排在前面。
+ * 传入 monitored（在售监测集）时按站做在售口径过滤：渠道视图、可用率/延迟序列、
+ * 时段桶全部只落在售模型/分组上，站级 KPI 随之变成「在售口径」。
  */
-export function channelDotsBySite(records: { site_id: string; captured_at: number; data: unknown }[]): Record<string, ChannelDotRow[]> {
+export function channelDotsBySite(
+  records: { site_id: string; captured_at: number; data: unknown }[],
+  monitored?: MonitoredSets,
+): Record<string, ChannelDotRow[]> {
   const maps: Record<string, Map<string, ChannelDot[]>> = {};
   const metas: Record<string, Map<string, RawChannel>> = {};
   for (const record of [...records].sort((a, b) => a.captured_at - b.captured_at)) {
@@ -386,7 +421,7 @@ export function channelDotsBySite(records: { site_id: string; captured_at: numbe
       };
     });
     rows.sort((a, b) => Number(a.ok) - Number(b.ok));
-    result[site] = rows;
+    result[site] = filterRowsByMonitored(rows, monitored?.[site]);
   }
   return result;
 }
@@ -608,8 +643,11 @@ export interface SiteViews {
  *  避免页面把同一批记录解析三遍。
  *  两个口径：availability 是保峰抽稀后的序列（画图用，毛刺不丢）；uptimeBuckets 用抽稀前的
  *  全量序列分桶（数字用）——保峰抽稀「每格只留最差点」会把均值压悲观，区块平均率必须看全量。 */
-export function buildSiteViews(records: { site_id: string; captured_at: number; data: unknown }[]): SiteViews {
-  const bySite = channelDotsBySite(records);
+export function buildSiteViews(
+  records: { site_id: string; captured_at: number; data: unknown }[],
+  monitored?: MonitoredSets,
+): SiteViews {
+  const bySite = channelDotsBySite(records, monitored);
   const fullAvailability = fullAvailabilityFromDots(bySite);
   const uptimeBuckets: Record<string, (UptimeBucket | null)[]> = {};
   for (const [site, points] of Object.entries(fullAvailability)) {

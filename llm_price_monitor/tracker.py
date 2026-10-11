@@ -295,6 +295,34 @@ def _tiered_pricing_rules(value: dict[str, Any], multiplier: float, unit: str) -
         lower = upper + 1 if upper is not None else None
     return result
 
+def newapi_denomination_from_status(status_payload: Any) -> dict[str, Any] | None:
+    """new-api /api/status 的充值口径 → 人民币/倍率单位的基准价，拿不到就 None。
+
+    `price` 是站方「充值汇率」（1 美元额度卖多少人民币，充值页按它收款），
+    `quota_per_unit` 是 1 美元额度对应的 quota；1 倍率 = 1e6/quota_per_unit 美元额度，
+    实付人民币基准 = (1e6/quota_per_unit) × price。15 站实测双向验证：
+    price=1 的站（123ai/1-cnmz/4zapi）倍率×2 恰为人民币实付价；
+    price=6.8 的 AIHub365 倍率×13.6 与站方「官方3折」标价、图片价表（¥0.2 = model_price×6.8）
+    同时精确吻合。`usd_exchange_rate` 只是前端显示换算（1-cnmz 报 7.3 实收按 1），不能当基准。
+    """
+    data = status_payload.get("data") if isinstance(status_payload, dict) else None
+    if not isinstance(data, dict):
+        return None
+    quota_per_unit = _number(data.get("quota_per_unit"))
+    topup_price = _number(data.get("price"))
+    if not quota_per_unit or quota_per_unit <= 0 or not topup_price or topup_price <= 0:
+        return None
+    ratio_base_price = 1e6 / quota_per_unit * topup_price
+    if not 0.5 <= ratio_base_price <= 50:
+        return None
+    return {
+        "ratio_base_price": round(ratio_base_price, 6),
+        "quota_per_unit": quota_per_unit,
+        "topup_cny_per_usd": topup_price,
+        "source": "api_status",
+    }
+
+
 def newapi_price_record(
     payload: Any,
     model: str,
@@ -304,6 +332,7 @@ def newapi_price_record(
     aliases: tuple[str, ...] = (),
     ratio_base_price: float = DEFAULT_NEWAPI_RATIO_BASE_PRICE,
     currency: str = "CNY",
+    denomination: dict[str, Any] | None = None,
 ) -> PriceRecord:
     """从 one-api/new-api 响应确定性计算站点单价，不读取页面 DOM。"""
     configured_currency = currency.strip().upper()
@@ -337,6 +366,10 @@ def newapi_price_record(
             configured_unit = "USD/1M tokens"
         else:
             currency_multiplier = cny_rate
+    elif not denomination_v2 and denomination:
+        # v1 载荷不带计价声明，用 /api/status 的充值口径（price×quota_per_unit）修正基准；
+        # AIHub365 实锤：默认按 ¥2 算会把它这类美元充值站的价格整体低算 6.8 倍。
+        ratio_base_price = float(denomination["ratio_base_price"])
     request_rules = item.get("request_rules")
     if not (isinstance(request_rules, list) and request_rules):
         pricing_rules_raw = item.get("pricing_rules")
@@ -358,6 +391,8 @@ def newapi_price_record(
         "pricing_cny_rate": cny_rate,
         "request_rules": request_rules if isinstance(request_rules, list) and request_rules else None,
     }
+    if denomination is not None and not denomination_v2:
+        metadata["denomination"] = denomination
     if item.get("billing_mode") == "tiered_expr":
         expression = item.get("billing_expr")
         rules = _tiered_rules(expression, multiplier * currency_multiplier, configured_unit) if isinstance(expression, str) else None
@@ -394,10 +429,11 @@ def newapi_price_record(
             return PriceRecord(model, input_price * multiplier * currency_multiplier, output_price * multiplier * currency_multiplier if output_price is not None else None, explicit_unit or configured_unit, source_url, time.time(), metadata, "confirmed" if output_price is not None else "candidate")
     if model_ratio is not None:
         global _RATIO_BASE_WARNED
-        if not _RATIO_BASE_WARNED:
+        if denomination is None and not denomination_v2 and not _RATIO_BASE_WARNED:
             _RATIO_BASE_WARNED = True
             logging.getLogger("llm_price_monitor.tracker").warning(
-                "正在按 new-api 默认基准价 %.1f 折算倍率定价；若该站点口径不是 %.1f，价格会成比例偏差，请在采集配置里核对",
+                "正在按 new-api 默认基准价 %.1f 折算倍率定价（站点 /api/status 未提供充值口径）；"
+                "若该站点口径不是 %.1f，价格会成比例偏差，请在采集配置里核对",
                 DEFAULT_NEWAPI_RATIO_BASE_PRICE, DEFAULT_NEWAPI_RATIO_BASE_PRICE,
             )
         cache_ratio = _number(item.get("cache_ratio"))
@@ -491,7 +527,10 @@ def fetch_newapi_price(base_url: str, model: str, *, group: str | None = None, t
         payload = response.json()
         if not status_is_newapi and not looks_like_newapi_pricing(payload):
             raise ValueError("不是可识别的 New API 价格响应")
-        return newapi_price_record(payload, model, f"{base}/api/pricing", group=group)
+        return newapi_price_record(
+            payload, model, f"{base}/api/pricing", group=group,
+            denomination=newapi_denomination_from_status(status_data),
+        )
     finally:
         if own:
             client.close()

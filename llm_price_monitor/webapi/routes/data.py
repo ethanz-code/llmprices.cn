@@ -19,8 +19,10 @@ def build_router(store: Store) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/overview")
-    def overview(request: Request) -> dict[str, Any]:
-        """首页数据：最新快照逐条附加官方价折扣；collect_status 仅管理员会话可见。"""
+    def overview(request: Request, site_id: str | None = None) -> dict[str, Any]:
+        """首页数据：最新快照逐条附加官方价折扣；collect_status 仅管理员会话可见。
+
+        site_id 可选：只保留该站的记录（站点检测详情页用它取本站在售监测集，省全量序列化）。"""
         report = store.get_document("catalog")
         models, meta = catalog_models(report)
         discount_of: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
@@ -33,8 +35,15 @@ def build_router(store: Store) -> APIRouter:
                 entry, _reason = build_discount(summary_row(row), models, rate)
                 return entry.as_dict() if entry is not None else None
 
+        latest = store.latest_all()
+        if site_id:
+            latest = {
+                key: row
+                for key, row in latest.items()
+                if isinstance(row, dict) and str(row.get("site_id")) == site_id
+            }
         records: list[dict[str, Any]] = []
-        for row in store.latest_all().values():
+        for row in latest.values():
             if not isinstance(row, dict):
                 continue
             records.append({**row, "discount": discount_of(row) if discount_of else None})

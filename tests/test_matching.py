@@ -50,6 +50,40 @@ def test_resolve_site_names_uses_ai_alias_before_version_rule():
     assert resolved == {"deepseek-flash": "DeepSeek V4.1 Flash"}
 
 
+def test_resolve_site_names_abstains_when_alias_hits_two_site_models():
+    """AIHub365 实锤：目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash
+    两个模型时，按 payload 顺序挑一个就是把两份价格张冠李戴，必须宁缺勿猜。"""
+    resolved = resolve_site_names(
+        ["mimo-v2.5", "gpt-image-2", "deepseek-v4-flash", "deepseek-v4.1-flash"],
+        {"deepseek-flash": ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash")},
+    )
+
+    assert resolved == {}
+
+
+def test_resolve_site_names_alias_single_hit_still_matches():
+    """站点只挂一个候选版本时，别名命中照旧采信。"""
+    resolved = resolve_site_names(
+        ["deepseek-v4.1-flash"],
+        {"deepseek-flash": ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash")},
+    )
+
+    assert resolved == {"deepseek-flash": "deepseek-v4.1-flash"}
+
+
+def test_resolve_site_names_alias_hits_keep_ambiguous_even_after_exact_claim():
+    """专属名被另一目标认领后，多别名目标的剩余唯一命中仍是猜测，不采信。"""
+    resolved = resolve_site_names(
+        ["deepseek-v4-flash", "deepseek-v4.1-flash"],
+        {
+            "deepseek-v4-flash": ("deepseek-v4-flash",),
+            "deepseek-flash": ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash"),
+        },
+    )
+
+    assert resolved == {"deepseek-v4-flash": "deepseek-v4-flash"}
+
+
 def test_resolve_site_names_ignores_duplicate_records():
     """同一模型名在响应里重复出现不算多个候选。"""
     resolved = resolve_site_names(

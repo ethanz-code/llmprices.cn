@@ -7,6 +7,7 @@ from llm_price_monitor.tracker import (
     extract_price,
     fetch_newapi_price,
     fetch_price,
+    newapi_denomination_from_status,
     newapi_price_record,
 )
 
@@ -133,6 +134,78 @@ def test_newapi_currency_can_be_explicitly_configured_as_usd():
     record = newapi_price_record(payload, "gpt-5.6-luna", "https://newapi.test/api/pricing", currency="USD")
 
     assert record.unit == "USD/1M tokens"
+
+
+def test_newapi_denomination_from_status_derives_topup_base():
+    """充值口径 = (1e6/quota_per_unit) × price；price=1 的人民币站维持倍率×2。"""
+    assert newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.8}}) == {
+        "ratio_base_price": 13.6,
+        "quota_per_unit": 500000,
+        "topup_cny_per_usd": 6.8,
+        "source": "api_status",
+    }
+    assert newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 1}})["ratio_base_price"] == 2.0
+
+
+def test_newapi_denomination_from_status_rejects_missing_or_absurd_values():
+    assert newapi_denomination_from_status({"data": {"HeaderNavModules": "{}"}}) is None
+    assert newapi_denomination_from_status({"data": {"quota_per_unit": 0, "price": 1}}) is None
+    assert newapi_denomination_from_status({"data": {"quota_per_unit": 3333333.3, "price": 1}}) is None
+    assert newapi_denomination_from_status(None) is None
+    assert newapi_denomination_from_status({"data": "blocked"}) is None
+
+
+def test_newapi_ratio_price_applies_topup_denomination():
+    """AIHub365 实锤：price=6.8 的站倍率基准是 ¥13.6，按默认 ¥2 会整体低算 6.8 倍。"""
+    payload = {
+        "data": [{
+            "model_name": "glm-5.3-flash", "model_ratio": 0.017647058824,
+            "completion_ratio": 3.5, "cache_ratio": 0.2875,
+        }],
+        "group_ratio": {"default": 1},
+    }
+    denomination = newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.8}})
+
+    record = newapi_price_record(
+        payload, "glm-5.3-flash", "https://aihub365.test/api/pricing", group="default", denomination=denomination,
+    )
+
+    assert record.input_price == pytest.approx(0.24, abs=1e-6)
+    assert record.output_price == pytest.approx(0.84, abs=1e-6)
+    assert record.metadata["ratio_base_price"] == 13.6
+    assert record.metadata["denomination"]["topup_cny_per_usd"] == 6.8
+    assert record.metadata["cache_read_price"] == pytest.approx(0.24 * 0.2875, abs=1e-6)
+
+
+def test_newapi_v2_payload_keeps_priority_over_status_denomination():
+    """modelflare：v2 载荷自带基准声明，/api/status 的 qpu 自定义值不参与推导。"""
+    payload = {
+        "billing_denomination_version": 2,
+        "pricing_cny_rate": 6.73,
+        "data": [{"model_name": "glm-5.3-flash", "model_ratio": 0.4}],
+        "group_ratio": {"default": 1},
+    }
+    denomination = {"ratio_base_price": 13.6, "quota_per_unit": 500000, "topup_cny_per_usd": 6.8, "source": "api_status"}
+
+    record = newapi_price_record(
+        payload, "glm-5.3-flash", "https://modelflare.test/api/pricing", group="default", denomination=denomination,
+    )
+
+    assert record.input_price == pytest.approx(0.4 * 2 * 6.73)
+    assert "denomination" not in record.metadata
+
+
+def test_fetch_newapi_price_reads_topup_denomination_from_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/status":
+            return httpx.Response(200, json={"data": {"quota_per_unit": 500000, "price": 6.8, "HeaderNavModules": "{}"}})
+        return httpx.Response(200, json={"data": [{"model_name": "gpt-5.6-luna", "model_ratio": 0.02, "completion_ratio": 6}]})
+
+    record = fetch_newapi_price("https://denom.test", "gpt-5.6-luna", client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    assert record.input_price == pytest.approx(0.272)
+    assert record.output_price == pytest.approx(1.632)
+    assert record.metadata["denomination"]["source"] == "api_status"
 
 
 def test_newapi_requires_explicit_group_for_multiple_enabled_groups():
