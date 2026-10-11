@@ -258,9 +258,9 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 {
   "enabled": true,
   "base_url": "https://.../compatible-mode/v1",
-  "model": "qwen3.8-flash",
+  "models": ["qwen3.8-flash"],
   "max_tokens": 16000,
-  "price_model": "Moonshot-Kimi-K2-Instruct"
+  "price_model": "qwen3.8-flash"
 }
 ```
 
@@ -328,6 +328,7 @@ uv run price-page <url> --out prices.json        # 写文件；省略 --out 打�
 
 - `network.headless`：页面要在浏览器里执行 JS 才能看到价格（如单页应用，直接抓是空壳）时，启用无头浏览器（Playwright Chromium）渲染后再解析；打开网页前注入 cookies 和 localStorage 登录态（归属域自动取 `network.url`，不用填）。接口直采**不做** headless 自动回退：抓到空壳/风控页就按采集失败上报，需要浏览器渲染的站点由管理员显式启用（见 `adapters.NetworkAdapter._collect_once`）。`wait_seconds` 是页面渲染等待秒数（0~60，默认 3）。部署环境需安装：`pip install playwright && playwright install chromium`。
 - `settings.fallback_proxy`：部署在境内服务器、部分站点直连不了时，在管理面板「系统设置 → 采集出口」填一个 http(s) 备用代理地址（如 `http://172.17.0.1:7890`，要认证写成 `http://user:pass@host:port`；填完点「测试连通」可验证代理通不通并显示出口 IP）。采集始终先走直连，直连失败（超时/重置/被目标站拒收）的站点自动改走代理继续采，恢复后自动切回；国内能直连的站点永远不走代理。Docker 部署时代理客户端跑在宿主机的话，地址写 `http://172.17.0.1:7890`（容器里的 127.0.0.1 不是宿主机）。无头浏览器渲染同一站点时跟随同一出口选择。
+- `settings.proxy_controller_url` / `proxy_controller_secret` / `proxy_switch_group` / `proxy_switch_node_filter`：备用代理的出口也被目标站拒绝（超时/重置/拒收）时，自动在指定策略组里换一个「对该站实测可达」的节点再试一次——同一域名 10 分钟冷却、切换全局串行、候选节点按失败的那个网址逐个实测，测不通的不选。控制接口填 mihomo/Clash 内核的 external-controller 地址（Docker 部署填 `http://proxy:9090`；同机 Clash Verge 是 `http://127.0.0.1:9097`），密钥同内核配置里的 `secret`，节点组名填内核里的策略组名（容器模板里是 `PROXY`）；填好地址密钥后点「读取分组」，面板直接从内核拉出组与节点清单，组名下拉选、范围里勾节点或填关键词，不用去代理面板抄名字；「切换节点范围」可选填关键词（如「香港」，模糊匹配、逗号分隔），留空表示组内任意节点。控制接口地址与组名要么都填、要么都留空。**换节点改的是内核的全局选择**：指到自己上网用的策略组时，切完你在 Clash 面板上选的节点也跟着变（反过来你在面板上选的也可能被采集改掉）；想让两边互不影响，就给采集一个单独的策略组——Clash Verge 里可加一个只监听 `127.0.0.1` 的 [listener](https://wiki.metacubex.one/config/inbound/listeners/) 绑定该组，采集走这个端口，与自用出口完全分开。
 
 ## 工作原理
 

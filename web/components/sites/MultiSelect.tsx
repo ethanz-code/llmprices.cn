@@ -363,4 +363,4 @@ function GroupMultiSelect({ siteId, value, onChange }: { siteId: string; value: 
   );
 }
 
-export { GroupMultiSelect, ModelMultiSelect };
+export { GroupMultiSelect, ModelMultiSelect, TagMultiSelect };

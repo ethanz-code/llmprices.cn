@@ -65,6 +65,44 @@ def _request(base: str, secret: str, path: str, *, method: str = "GET", body: di
     return json.loads(raw) if raw else None
 
 
+def fetch_groups(base: str, secret: str, *, timeout: float = 8.0) -> list[dict[str, Any]]:
+    """读控制接口里的全部代理组，供管理面板下拉选组、选节点。
+
+    返回 [{name, type, now, builtin, nodes: [{name, info, group}]}]：builtin 标出内置的
+    GLOBAL 组（排序垫底）；info 标出机场塞在组里的信息位（剩余流量/套餐到期这类），
+    group 标出该成员本身还是个策略组——两个标记只做展示，过滤与否由调用方决定。
+    连不上/密钥不对/响应不是 mihomo 的形状都会抛异常，由调用方翻成人话提示。
+    """
+    data = _request(base, secret, "/proxies", timeout=timeout)
+    proxies = data.get("proxies") if isinstance(data, dict) else None
+    if not isinstance(proxies, dict):
+        raise ValueError("控制接口返回的不是 mihomo 的代理清单")
+    groups: list[dict[str, Any]] = []
+    for name, item in proxies.items():
+        if not isinstance(item, dict) or not isinstance(item.get("all"), list):
+            continue  # 只有带 all 的才是代理组，单个节点与内置 DIRECT/REJECT 跳过
+        members = [
+            {
+                "name": member,
+                "info": any(mark in member for mark in _INFO_NODE_MARKS),
+                "group": member != name and isinstance((proxies.get(member) or {}).get("all"), list),
+            }
+            for member in item["all"]
+            if isinstance(member, str) and member.strip()
+        ]
+        groups.append(
+            {
+                "name": name,
+                "type": str(item.get("type") or ""),
+                "now": str(item.get("now") or ""),
+                "builtin": name == "GLOBAL",
+                "nodes": members,
+            }
+        )
+    groups.sort(key=lambda group: (group["builtin"], group["name"]))
+    return groups
+
+
 def auto_switch_for(host: str, target_url: str) -> str | None:
     """host 的代理出口也被目标站拒绝时，切到对该站实测可达的节点，返回新节点名。
 

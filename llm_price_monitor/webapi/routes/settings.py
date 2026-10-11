@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
@@ -12,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from llm_price_monitor import wxpusher
+from llm_price_monitor import proxy_switch, wxpusher
 from llm_price_monitor.ai import model_unusable_status, ping_model, provider_error_detail
 from llm_price_monitor.config import ai_from_raw, schedule_from_raw, settings_from_raw
 from llm_price_monitor.store import Store
@@ -92,6 +93,12 @@ class ModelsProbeBody(BaseModel):
     reset: bool = False
 
 
+class ProxyGroupsBody(BaseModel):
+    """面板读控制接口用：带上表单当前值，先看后存，不必先保存。"""
+
+    settings: dict[str, Any] | None = None
+
+
 def track_monitor_model_removals(store: Store, incoming: dict[str, Any]) -> None:
     """保存监控清单时记录被移除的模型（monitor_models_dismissed）：
     目录刷新自动补模型时跳过它们，否则手动删掉的模型下轮又会被加回来。"""
@@ -128,6 +135,33 @@ def build_router(store: Store) -> APIRouter:
         except ValueError as exc:
             return {"configured": True, "ok": False, "error": str(exc)}
         return {"configured": True, "ok": True, "elapsed_ms": result["elapsed_ms"], "exit_ip": result.get("exit_ip")}
+
+    @router.post("/api/settings/proxy-groups")
+    def list_proxy_groups(body: ProxyGroupsBody) -> dict[str, Any]:
+        """读控制接口里有哪些代理组、组里有哪些节点（面板下拉选组/选节点用）。
+
+        用表单当前值，刚填完地址密钥就能先看再存；连不上、密钥不对这类问题
+        翻成人话返回 400，面板直接提示，不落库。
+        """
+        merged = {**(store.get_document("settings") or {}), **(body.settings or {})}
+        base = str(merged.get("proxy_controller_url") or "").strip().rstrip("/")
+        secret = str(merged.get("proxy_controller_secret") or "").strip()
+        try:
+            if not base:
+                raise ValueError("请先填写控制接口地址（http:// 或 https:// 开头）")
+            groups = proxy_switch.fetch_groups(base, secret)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            detail = (
+                "控制接口密钥不对，请核对内核配置里的 secret"
+                if exc.code == 401
+                else f"控制接口返回 HTTP {exc.code}，请核对地址与密钥"
+            )
+            raise HTTPException(status_code=400, detail=detail) from exc
+        except Exception as exc:  # noqa: BLE001 —— 网络不通/超时/响应没法解析：原因原样带回面板，不静默
+            raise HTTPException(status_code=400, detail=f"连不上控制接口：{exc}") from exc
+        return {"groups": groups}
 
     @router.put("/api/settings")
     def update_settings(body: SettingsBody) -> dict[str, Any]:

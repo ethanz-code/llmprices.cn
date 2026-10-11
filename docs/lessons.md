@@ -10,6 +10,7 @@
 | 访客统计 / visit_logs / IP 全一样 / XFF / client_ip | 本页 §1 |
 | 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
+| 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
 | 价格 / 基准价 / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 | 本页 §3 |
 | 骨架屏 / 暗色 / 表格 / 窄屏 / 响应式 / 内容超出框 / 横向滚动 / min-width | 本页 §4 |
 | panic / char boundary / code-frame / dev 半死 / 改文件不生效 | 本页 §4 |
@@ -30,7 +31,7 @@
 | 传输错误正则漏了 DNS 解析失败（`[Errno 8] nodename nor servname` 不含 connection/timeout 字样），本机网络瞬断的 warn 刷进异常卡片 | `_TRANSPORT_ERROR_RE` 补 nodename/getaddrinfo/name or service not known | 提交见 git log |
 | 生产访客统计 IP 全是同一个容器 IP、visit_logs 被 wget 健康检查刷屏（5 天 1.4 万条）：Next 中间件上报跨容器网对端非回环，`client_ip` 只信回环对端不认转发头，真人 IP 全记成 web 容器 IP（dev 本机回环链路正常，故测试没暴露） | `deps.client_ip` 信任边界从回环扩为内网网段表（回环/RFC1918/链路本地/ULA；**不能用 `is_private`**——TEST-NET、CGNAT 等 IANA 保留段会被误判成内网对端）；`web/proxy.ts` 对 wget/curl/bot UA 跳过埋点；存量垃圾按保留天数自然老化不删 | 提交见 git log |
 | httpx 直采没有浏览器环境，DOM 页必须免登录；认证要显式配 headers/token_refresh | 无头浏览器是例外分支（`network.headless.enabled`），注入 Cookie/localStorage 后渲染再解析 | Serena 记忆；`browser_fetch.py` |
-| new-api 系站点 401：光有 Cookie 不够，还要 `New-Api-User` 头；Cookie 只挂公告 headers 时全站采不到 | 共享落点是**站点级 `request_headers`**（站点对象顶层，三腿共用）；`network.headers` 只有公告腿显式读（notice.py `_site_headers`），状态/价格腿不认——2026-10-07 A/B 实测 network.headers 版迁移状态腿 401、request_headers 版三腿 200 | Serena 记忆 |
+| new-api 系站点 401：光有 Cookie 不够，还要 `New-Api-User` 头；Cookie 只挂在公告地址自己的 headers 里时，只有公告腿带得上，价格腿照旧 401（2026-10-07 A/B 实测） | 共享落点是**站点级 `request_headers`**（三腿都生效的唯一位置）。头合并序：auth_inject > 入口级 headers > request_headers——`network.headers` 价格/公告两腿都会带上（2026-10-09 cun 实证，此前「价格腿不认 network.headers」是以讹传讹；只有渠道状态腿不读），因此**凭证迁移或换新时必须同步删掉 network.headers 里的旧同名键**，否则旧值一直盖着新值 | adapters.py `build_request_kwargs`；Serena 记忆 |
 | Cloudflare WAF 403：多为缺 `Referer`/`Origin` 头，补齐后匿名也能过；别只报"可能需要认证" | 站点级 request_headers 配齐 Referer+Origin+Accept，看响应体里的真实 message | Serena 记忆 |
 | 采集客户端被 shell 环境变量代理劫持（Clash env） | `build_client` 显式传 transport；采集出口语义统一为"直连优先、代理兜底" | 提交 843bcd9 / 088c631 |
 | 境内服务器采不到国外站 | mihomo 兜底代理 sidecar（吃机场订阅），profile 默认不启、`.env` 一行启用；mihomo 必须 `allow-lan`；代理自带 healthcheck | docker-compose.md「采集兜底代理」 |
@@ -38,12 +39,16 @@
 | 采集卡死拖垮整轮 | 每站采完立即落库 + 单站硬超时 | 提交 9f2fb35 |
 | 硬超时只盖了价格腿：new-api 站测试采集必跑 AI 模型名解析（每 4 模型一批 × 每批 14~31s，cun 实测单站 328s），成功路径零日志像卡死；渠道状态/公告腿连硬超时都没有，挂死任务永不结束 | AI 抽取逐批留痕；状态/公告单站请求套 `_run_site_fetch` 同款硬上限；交互弹窗的轮询上限必须 ≥ 后端最坏路径时长（5 分钟上限对着 5.5 分钟的任务，成功被误报成超时） | 提交见 git log |
 | AI 抽取缓存永不命中：new-api 系接口每次请求把模型数组/分组列表重新洗牌、还往随机模型上挂随机哈希字段（cun 两次响应字节数相同、顺序不同），证据原样进哈希导致键每轮全变，每轮采集都全额重跑全部批次 | 缓存键先做顺序规范化（`canonical_cache_evidence`：dict/数组按内容排序、整数值浮点归一、剔除 `pricing_version` 噪声键），只影响键不改发给 AI 的证据；排查这类问题先对同一接口连打两次逐字段 diff | 提交见 git log |
+| 厂商一批下线上百个模型（百炼 2026-10-10 批次 6 篇公告 178 个），模型池 85 个里 40 个命中且近 7 天全在用——不清理则下线后池内近半模型必然失败；清理后池被管理台旧表单回滚过一次（45 又被写回 85） | 清单落盘 `.zcode/plans/bailian-offline-20261010.json`（178 个，别重抓公告）；比对五处：`documents.ai.models` / `ai_thinking_models` / `ai_model_limits` / `latest` / `vendor_sources`；改库用 Store 前先备份 `var/backups/`、移除清单记 `var/ai-models-removed-<date>.json`；文案里的模型举例（AdminSettings hint、pricing.md 示例）同步换；**改完提醒刷新管理台设置页**，旧表单保存会把删掉的写回 | 记忆 `bailian-model-offline-audit` |
 | 站点模型名省略版本号对不上，漏采（DeepSeek 案例） | 模型名一侧省略版本号也能匹配，歧义有处理规则 | 提交 3c383d1；pricing.md |
 | "整站没价"被记成错误，用户看不到原因 | 401 这类"没价但不算错误"的原因直接报给用户 | 提交 40124fe |
 | 想采站点全部模型逐个列太累 | models 配置 `["*"]` 通配符全量采集，不可与其他模型混列 | 提交 3459300 |
 | 首页归属地查询逐 IP 打 ip-api 免费接口（45 次/分），失败站点每轮重查把自己打进限流，9 站只剩 1 颗星 | 改 `/batch` 批量接口一轮一请求（≤100 IP/请求，响应按请求顺序对位）；传输层失败记 2 分钟短退避，单 IP 明确失败仍 30 分钟负缓存 | 提交 f0de495 |
 | httpx 0.28 起 `client.get(url, params={})` 会用空参数**整体替换** URL 查询串：采集器对每个端点都默认带 `params={}`，把写在 URL 里的 `page_size`/过滤参数悄悄清掉（302.ai 分页接口只回 20 条默认页；subrouter 的 `source=shared_subscription` 渠道过滤参数此前也一直被吞）。同一 URL 裸发正常、走 kwargs 变薄，极易误判成"站方数据不稳定" | `build_request_kwargs` 仅在 params 非空时才带 `params` 键；排查这类问题先对比 `str(response.request.url)` 与配置 URL 是否一致 | 提交见 git log |
 | 把单次可用的轮换凭据当可反复探测的常量：2000lab 的 rt_ 被探测烧掉后连页面内同源 fetch 都回 REFRESH_TOKEN_INVALID，据此误判「站方续签链断了、只能 24h 重贴」并写进记忆；2026-10-09 用重新登录的新鲜 rt_ 一次刷新即接管成功（同 1for）。推论：全量采集跨到期点时，价格腿先续签烧掉旧 rt_，公告/状态腿仍持轮次开始时的旧快照，再续必然失败刷一条瞬时错误（各腿独立定时任务每次现读库没这问题，下轮自愈） | 轮换制凭据（rt_/refresh cookie）纪律：探测即消费，判"链断了"前必须拿新鲜登录值跑完整路径；接管后原持有方（浏览器）自动续签作废属预期；rt_ 一旦被烧只能重登重取 | sites.md「认证怎么选」§3；记忆 enabled-sites-config-patterns |
+
+| 自动换节点的三种静默失效：mihomo 默认**不开** external-controller（配置里不写就永远连不上）、控制口绑 127.0.0.1 时 api 容器连不进来、组名随手填（Clash Verge 存多份订阅，只有当前那份的组存在，其余 GET/PUT 静默 404 只剩一条 warn） | 容器模板显式 `external-controller: 0.0.0.0:9090` + `secret`（端口不发布，容器网络外摸不到）；组名必须填当前内核里真实存在的组（先 `GET /proxies` 核对）；Clash Verge 的 external controller 改的是**全局选择**——想让采集与自用上网互不干扰，就加一个只监听 `127.0.0.1` 的 listener 绑采集专用组（组用 `include-all + filter` 按关键词自动筛）；mihomo 的 url-test 组接受手动选择并记成 `fixed`，节点活着就一直生效、不会被测速覆盖 | pricing.md；docker-compose.md「采集兜底代理」 |
+| Clash Verge 的「全局扩展组/规则/代理」其实**按订阅档案各自绑定**（`profiles.yaml` 里每个档案 `option.groups/rules/proxies` 指向自己的文件），改了不在当前档案链里的文件等于白改——listener 生效、组缺失就是两边文件没走同一条链；跨档案生效只有全局 Merge/Script，且 Merge 深合并对数组是**整组替换**（往里塞组会清掉订阅全部组） | 跨档案要加的组放全局 `Script.js`（main 里判断同名后 push，每份订阅都生效、切订阅不丢）；listener 引用不存在的组不会弄挂内核，只是那条口不工作——排「专线不通」先 `GET /proxies` 核对组在不在 | Serena 记忆 `proxy-switch-endpoint-facts` |
 
 ## 2. AI 抽取与助手
 
@@ -65,6 +70,7 @@
 | --- | --- | --- |
 | models.dev 的国内价格不可靠 | 国内基准只认厂商定价源，models.dev 国内价不进系统 | 提交 da6c392；pricing.md |
 | 官方目录混入托管/转售条目 | 品牌归属闸门：只收厂商自研模型 | 提交 e05b430 / 55c4d79 |
+| 厂商定价页对下线模型的摘除晚于公告（百炼宣布 10-10 下线 178 个，vendor_sources 里 Alibaba Cloud 目录还挂着 55 个），看到"过时"条目先别手工删采集数据 | 公告页是"下线名单"、定价页是"在售目录"，两者不同步是常态；采集侧 4 小时一轮自然刷新，等一轮再核对 | 记忆 `bailian-model-offline-audit` |
 | 各页排序各搞一套 | 全站统一目录口径：发布日期倒序 + 名称 | 提交 ea29ee7 / 62830d8 |
 | 快照 key 拼法、fingerprint 白名单等隐式契约散落多处 | 收口成唯一常量/函数（`latest_key`、`FINGERPRINT_METADATA_KEYS`） | 提交 a55a65d |
 | 高峰/空闲时段价丢档 | AI 兜底改多档抽取，时段价都保留并带说明 | 提交 0716b3f |
@@ -119,6 +125,7 @@
 | 更新/回滚不知道当前是哪版 | APP_TAG 镜像标签即线上版本号，改 `.env` 即切版本；数据在 var/ 不动 | docker-compose.md 日常运维 |
 | 端口冲突 | API 端口固定 8437（前端 3000） | 提交 0e98ea3 |
 | 备份漏密钥 | SQLite 在线备份；密钥在数据库里随 var/ 一起走 | docker-compose.md |
+| 项目改名那次批量替换把 `docker-compose.yml` 首行 banner 的 `#` 弄丢：整份 YAML 变成字符串标量，`docker compose up -d` 报 `cannot construct !!str ...`，从项目更名起一直没被发现 | 改完 compose 必跑 `docker compose config -q` 验证可解析（纯客户端检查，不需要守护进程） | 本次提交 |
 | 境内新域名上线 1~2 天后突然全站打不开：80 被 302 到 dnspod webblock 页、443 TLS 握手后被 RST，同服务器上已备案域名照常通 | 腾讯云对未备案域名的境内入口拦截，与部署/容器/证书无关（用同 IP 另一域名对照即可定位）；解法只有办备案，或经用户确认后临时换已备案子域名过渡 | 私有部署单 deploy-llmprices.cn.md |
 
 ## 6. 工程习惯（踩出来的规矩）

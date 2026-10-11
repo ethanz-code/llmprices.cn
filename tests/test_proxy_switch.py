@@ -231,3 +231,31 @@ def test_fallback_raises_when_auto_switch_unavailable(monkeypatch):
     with pytest.raises(httpx.ConnectError):
         client.get("https://demo.test/api/pricing")
     assert len(calls["proxy"]) == 4  # 未切换：首轮退避耗尽即失败
+
+
+def test_fetch_groups_normalizes_and_marks(monkeypatch):
+    """组清单：带 all 的才算组、内置 GLOBAL 垫底、信息位与子组都打标；形状不对报错不静默。"""
+    payload = {
+        "proxies": {
+            "GLOBAL": {"type": "Selector", "now": "DIRECT", "all": ["香港01"]},
+            "宝可梦": {"type": "Selector", "now": "自动选择", "all": ["自动选择", "剩余流量：59 GB", "香港01"]},
+            "自动选择": {"type": "URLTest", "now": "香港01", "all": ["香港01"]},
+            "香港01": {"type": "Vless", "now": None},
+        }
+    }
+    monkeypatch.setattr(proxy_switch, "_request", lambda *args, **kwargs: payload)
+    groups = proxy_switch.fetch_groups("http://127.0.0.1:9097", "s3cret")
+
+    assert [group["name"] for group in groups] == ["宝可梦", "自动选择", "GLOBAL"]  # 内置组垫底
+    by_name = {group["name"]: group for group in groups}
+    assert by_name["GLOBAL"]["builtin"] is True
+    assert by_name["宝可梦"]["nodes"] == [
+        {"name": "自动选择", "info": False, "group": True},
+        {"name": "剩余流量：59 GB", "info": True, "group": False},
+        {"name": "香港01", "info": False, "group": False},
+    ]
+    assert by_name["自动选择"]["type"] == "URLTest" and by_name["自动选择"]["now"] == "香港01"
+
+    monkeypatch.setattr(proxy_switch, "_request", lambda *args, **kwargs: {"hello": "world"})
+    with pytest.raises(ValueError):
+        proxy_switch.fetch_groups("http://127.0.0.1:9097", "s3cret")

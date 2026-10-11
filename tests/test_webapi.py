@@ -770,6 +770,47 @@ def test_settings_test_probes_external_services_with_form_values(workspace: Path
     assert client.post("/api/settings/test", json={"target": "nope"}).status_code == 422
 
 
+def test_proxy_groups_route_reads_controller_with_form_values(workspace: Path, monkeypatch) -> None:
+    import urllib.error
+
+    from llm_price_monitor import proxy_switch
+
+    client = _admin_client(workspace)
+
+    # 没填控制接口地址：给人话提示，不落库
+    missing = client.post("/api/settings/proxy-groups", json={"settings": {}})
+    assert missing.status_code == 400 and "控制接口地址" in missing.json()["detail"]
+
+    seen: dict = {}
+
+    def fake_fetch(base, secret, **kwargs):
+        seen["base"], seen["secret"] = base, secret
+        return [
+            {
+                "name": "PROXY",
+                "type": "URLTest",
+                "now": "香港01",
+                "builtin": False,
+                "nodes": [{"name": "香港01", "info": False, "group": False}],
+            }
+        ]
+
+    monkeypatch.setattr(proxy_switch, "fetch_groups", fake_fetch)
+    ok = client.post(
+        "/api/settings/proxy-groups",
+        json={"settings": {"proxy_controller_url": "http://127.0.0.1:9097/", "proxy_controller_secret": "s3cret"}},
+    ).json()
+    assert ok["groups"][0]["nodes"][0]["name"] == "香港01"
+    assert seen == {"base": "http://127.0.0.1:9097", "secret": "s3cret"}  # 用表单当前值，尾斜杠去掉
+
+    def wrong_secret(base, secret, **kwargs):
+        raise urllib.error.HTTPError(base, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(proxy_switch, "fetch_groups", wrong_secret)
+    denied = client.post("/api/settings/proxy-groups", json={"settings": {"proxy_controller_url": "http://127.0.0.1:9097"}})
+    assert denied.status_code == 400 and "密钥" in denied.json()["detail"]
+
+
 def test_settings_test_proxy_checks_connectivity_and_exit_ip(workspace: Path, monkeypatch) -> None:
     import llm_price_monitor.webapi.routes.settings as settings_routes
 

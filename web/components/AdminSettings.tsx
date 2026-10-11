@@ -3,10 +3,19 @@
 /** 系统设置：按「采集调度 / 数据保留 / AI 提取 / 微信通知 WxPusher / 种子导入」分组，AI 与通知可独立测试有效性。 */
 
 import { useEffect, useRef, useState } from "react";
-import { toast, Btn, Input, Sel, Modal, SettingRow, LoadingRows } from "./ui";
+import { toast, Btn, Input, Pick, Sel, Modal, SettingRow, LoadingRows } from "./ui";
+import { TagMultiSelect } from "./sites/MultiSelect";
 import { errorText } from "@/lib/api";
 import { IconEye, IconEyeOff } from "./icons";
 import { apiSend } from "@/lib/api";
+import {
+  filterToTags,
+  groupOptions,
+  nodeOptions,
+  tagsToFilter,
+  type ProxyGroupInfo,
+  type ProxyGroupsResponse,
+} from "@/lib/proxyGroups";
 import type { SettingsData, SiteConfig } from "@/lib/types";
 
 /** 六类采集任务的后台定时间隔（分钟），与后端 settings.schedule 默认值保持一致；0 = 关闭定时。 */
@@ -199,6 +208,9 @@ export function AdminSettings() {
   const [proxyControllerSecret, setProxyControllerSecret] = useState("");
   const [proxySwitchGroup, setProxySwitchGroup] = useState("");
   const [proxySwitchNodeFilter, setProxySwitchNodeFilter] = useState("");
+  /** 从控制接口读到的组清单；null = 还没读（或改了地址/密钥后失效），此时两个字段回落手填 */
+  const [proxyGroups, setProxyGroups] = useState<ProxyGroupInfo[] | null>(null);
+  const [loadingGroups, setLoadingGroups] = useState(false);
   const [aiMaxInputChars, setAiMaxInputChars] = useState("");
   const [aiMaxTokens, setAiMaxTokens] = useState("");
   const [saving, setSaving] = useState(false);
@@ -442,6 +454,38 @@ export function AdminSettings() {
     }
   }
 
+  /** 改控制接口地址/密钥：之前读到的组清单随之作废，组与范围两个字段回落手填，避免拿旧接口的数据填新内核。 */
+  function changeControllerUrl(value: string) {
+    setProxyControllerUrl(value);
+    setProxyGroups(null);
+  }
+
+  function changeControllerSecret(value: string) {
+    setProxyControllerSecret(value);
+    setProxyGroups(null);
+  }
+
+  /** 从控制接口读组与节点清单（用表单当前值，不必先保存）；失败原因直接弹提示。 */
+  async function loadProxyGroups() {
+    const url = proxyControllerUrl.trim();
+    if (!/^https?:\/\//i.test(url)) {
+      toast("先填好控制接口地址（http:// 或 https:// 开头）再读取分组");
+      return;
+    }
+    setLoadingGroups(true);
+    try {
+      const data = await apiSend<ProxyGroupsResponse>("/api/settings/proxy-groups", "POST", {
+        settings: { proxy_controller_url: url, proxy_controller_secret: proxyControllerSecret.trim() },
+      });
+      setProxyGroups(data.groups);
+      toast(data.groups.length ? `已读取 ${data.groups.length} 个代理组` : "连上了，但接口里没读到任何代理组");
+    } catch (error) {
+      toast(errorText(error));
+    } finally {
+      setLoadingGroups(false);
+    }
+  }
+
   /** 一键体检模型池：先弹费用确认，确认后分批交给后端实测，边测边出结果。 */
   function runProbeAll() {
     const pool = parsePoolText(aiModels);
@@ -571,35 +615,83 @@ export function AdminSettings() {
           </SettingsSection>
           <SettingsSection
             title="节点自动切换"
-            description="备用代理的出口也被目标站拒绝（拉黑）时，自动把代理节点切到对该站实测可达的其他节点再重试一次。三项都配置才启用；切换后同一站点 10 分钟内不会反复换。控制接口在 Clash Verge/mihomo 里叫 External Controller"
+            description="备用代理的出口也被目标站拒绝（拉黑）时，自动把节点切到对该站实测可达的其他节点再重试一次。同一站点 10 分钟内不会反复换。控制接口在 Clash Verge/mihomo 里叫 External Controller"
             result={results.proxy}
           >
             <SettingRow label="控制接口地址" hint="例如 http://127.0.0.1:9097（Docker 部署填 mihomo 容器地址）；留空 = 不启用自动切换">
-              <Input
-                value={proxyControllerUrl}
-                onChange={setProxyControllerUrl}
-                placeholder="留空 = 不启用"
-                style={{ width: 260, maxWidth: "100%" }}
-              />
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <Input
+                  value={proxyControllerUrl}
+                  onChange={changeControllerUrl}
+                  placeholder="留空 = 不启用"
+                  style={{ width: 260, maxWidth: "100%" }}
+                />
+                <Btn size="sm" loading={loadingGroups} onClick={loadProxyGroups}>
+                  读取分组
+                </Btn>
+                {proxyGroups !== null && (
+                  <span style={{ fontSize: 12, color: "var(--text-3)" }}>已读到 {proxyGroups.length} 个分组，下面的组名与范围可以直接下拉选</span>
+                )}
+              </div>
             </SettingRow>
             <SettingRow label="控制接口密钥" hint="mihomo 配置里的 secret，没设就留空">
-              <SecretInput value={proxyControllerSecret} onChange={setProxyControllerSecret} placeholder="未设置密钥就留空" />
+              <SecretInput value={proxyControllerSecret} onChange={changeControllerSecret} placeholder="未设置密钥就留空" />
             </SettingRow>
-            <SettingRow label="节点组名" hint="要切换的代理组名称，和代理面板里显示的组名一致（如「🚀 节点选择」）；自动切换时只在这个组内挑节点">
-              <Input
-                value={proxySwitchGroup}
-                onChange={setProxySwitchGroup}
-                placeholder="例如 节点选择"
-                style={{ width: 260, maxWidth: "100%" }}
-              />
+            <SettingRow
+              label="节点组名"
+              hint={
+                proxyGroups !== null
+                  ? "从下拉选要切换的组；自动切换只在这个组里挑节点"
+                  : "填要切换的代理组名称（和代理面板里显示的一致），或点上方「读取分组」后直接下拉选"
+              }
+            >
+              {proxyGroups !== null ? (
+                <Pick
+                  value={proxySwitchGroup}
+                  onChange={setProxySwitchGroup}
+                  style={{ width: 300, maxWidth: "100%" }}
+                  options={[{ value: "", label: "（留空 = 不启用自动切换）" }, ...groupOptions(proxyGroups, proxySwitchGroup)]}
+                />
+              ) : (
+                <Input
+                  value={proxySwitchGroup}
+                  onChange={setProxySwitchGroup}
+                  placeholder="例如 节点选择"
+                  style={{ width: 260, maxWidth: "100%" }}
+                />
+              )}
             </SettingRow>
-            <SettingRow label="切换节点范围" hint="只在名字含关键词的节点里换出口，模糊匹配、英文不分大小写；多个关键词用逗号分隔（如「香港」或「香港,hk」）。留空表示组内所有节点都可换">
-              <Input
-                value={proxySwitchNodeFilter}
-                onChange={setProxySwitchNodeFilter}
-                placeholder="留空 = 不限地区"
-                style={{ width: 260, maxWidth: "100%" }}
-              />
+            <SettingRow
+              label="切换节点范围"
+              hint={
+                proxyGroups !== null
+                  ? "勾选具体节点 = 只在这些节点里换；直接输入关键词（如「香港」）= 名字含关键词的都算。留空 = 组内所有节点都可换"
+                  : "只在名字含关键词的节点里换出口，模糊匹配、英文不分大小写；多个关键词用逗号分隔（如「香港」或「香港,hk」）。留空表示组内所有节点都可换"
+              }
+            >
+              {proxyGroups !== null ? (
+                <TagMultiSelect
+                  value={filterToTags(proxySwitchNodeFilter)}
+                  onChange={(tags) => setProxySwitchNodeFilter(tagsToFilter(tags))}
+                  options={nodeOptions(proxyGroups, proxySwitchGroup)}
+                  ariaLabel="切换节点范围"
+                  inputLabel="搜索节点或输入关键词"
+                  fieldPlaceholder="勾选节点，或输入关键词后回车"
+                  inputPlaceholder="输入过滤候选，或添加自定义关键词"
+                  loadingText="候选加载中…"
+                  emptyText="这个组里没有可勾选的节点，直接输入关键词就行"
+                  failedText="没读到候选"
+                  noMatchText="没有匹配的节点，回车把它加为关键词"
+                  width="min(420px, 100%)"
+                />
+              ) : (
+                <Input
+                  value={proxySwitchNodeFilter}
+                  onChange={setProxySwitchNodeFilter}
+                  placeholder="留空 = 不限地区"
+                  style={{ width: 260, maxWidth: "100%" }}
+                />
+              )}
             </SettingRow>
           </SettingsSection>
           <SettingsSection
@@ -660,7 +752,7 @@ export function AdminSettings() {
             </SettingRow>
             <SettingRow
               label="AI 模型列表"
-              hint="逗号分隔的候选池，请求失败自动换下一个。建议配新一代通用对话模型的轻量档（qwen3.8-flash、deepseek-v4-flash、glm-5.3-flash 这类，认准 flash / mini / turbo 命名）；OCR、分析型等专用模型输出上限小，价格抽取会失败——系统会自动记住每个模型的输出上限，装不下的自动跳过"
+              hint="逗号分隔的候选池，请求失败自动换下一个。建议配新一代通用对话模型的轻量档（qwen3.8-flash、qwen3.7-flash、glm-5.3-flash 这类，认准 flash / mini / turbo 命名）；OCR、分析型等专用模型输出上限小，价格抽取会失败——系统会自动记住每个模型的输出上限，装不下的自动跳过"
             >
               <Input value={aiModels} onChange={setAiModels} placeholder="model-a, model-b" style={{ width: "min(360px, 100%)" }} />
             </SettingRow>
