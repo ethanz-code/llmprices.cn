@@ -98,7 +98,7 @@ function SitesGuide() {
     },
     {
       when: "令牌很快过期（如 new-api 登录会话）",
-      how: "认证方式选「登录会话自动续签」，把浏览器里 new_api_refresh Cookie 的值贴进 Refresh Token 点「测试续签」；Access Token 留空也行，采集被拒时会自动续签补上。贴完回浏览器重新登录一次（两边各用各的会话），每个登录最长保持 30 天",
+      how: "认证方式选「登录会话自动续签」，把浏览器里 new_api_refresh Cookie 的值贴进 Refresh Token 点「测试续签」；Access Token 留空也行，token 快到期会自动提前换新，真被拒了也会自动补上重试。贴完回浏览器重新登录一次（两边各用各的会话），每个登录最长保持 30 天",
     },
     {
       when: "直接抓页面是空壳（价格靠 JS 算，如单页应用）",

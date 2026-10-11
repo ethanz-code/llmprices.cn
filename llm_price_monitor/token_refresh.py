@@ -20,18 +20,85 @@ cookie 型站点（如 new-api）写成 "new_api_refresh=${refresh_token}" 即�
 触发时机：价格采集按"需认证占位记录"判定，渠道状态与公告按接口返回 401/403 判定，
 三者都用新 access_token 重试一次；access_token 落到站点级 auth_token，
 价格/状态/公告的请求头因此统一带上 Authorization。
+此外 token 是 JWT 且配了续签的站点会在到期前主动续签（ensure_fresh_token，三条采集腿
+每站开抓前调用）：轮换型 refresh_token 放着不用会被站方作废或被并发腿抢用，
+等 401 再续对 24h 短效 token 意味着一天死一次；提前换新让续签链一直活着。
 """
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from typing import Any, Callable, TypeVar
 
 import httpx
 
-from llm_price_monitor.config import PriceMonitorError, SiteSpec
+from llm_price_monitor.config import PriceMonitorError, SiteSpec, jwt_claim
+from llm_price_monitor.tasklog import emit as _emit
 from llm_price_monitor.tracker import PriceRecord
 
 T = TypeVar("T")
+
+
+def refresh_due(auth_token: str | None, *, now: float | None = None) -> bool:
+    """access_token 是否该主动续签：剩余寿命不足总寿命 1/6（提前量夹在 60 秒与 6 小时之间）。
+
+    24h token 提前 4 小时续（约一天一换，续签链始终温着）；15 分钟 token 提前 2.5 分钟，
+    赶不上扫描节奏时由 401 后的被动续签兜底。非 JWT（无法判断过期时间）不主动续。
+    """
+    token = str(auth_token or "")
+    exp = jwt_claim(token, "exp")
+    if exp <= 0:
+        return False
+    at = exp - (now if now is not None else time.time())
+    if at <= 0:
+        return True  # 已过期：主动续一次没坏处，省得等下一轮 401
+    iat = jwt_claim(token, "iat")
+    lifetime = max(exp - iat, 0.0) if iat else 0.0
+    margin = min(max(lifetime / 6, 60.0), lifetime / 2, 21600.0) if lifetime else 7200.0
+    return at < margin
+
+
+def _stored_tokens(store: Any, site_id: str) -> tuple[str, str] | None:
+    """读库里的 (access_token, refresh_token)；库里的 access 与 spec 持有的不同说明别的腿刚续签过。"""
+    config = store.get_site_config(site_id)
+    if not isinstance(config, dict):
+        return None
+    access = str(config.get("auth_token") or "")
+    refresh = str((config.get("token_refresh") or {}).get("refresh_token") or "")
+    return (access, refresh) if access and refresh else None
+
+
+def ensure_fresh_token(
+    spec: SiteSpec,
+    *,
+    client: httpx.Client,
+    timeout: float,
+    user_agent: str,
+    store: Any | None,
+) -> SiteSpec:
+    """每站采集开抓前的主动续签：token 快到期就先换新，别等 401。
+
+    返回可直接用于本轮采集的 spec（未到期/没配续签时原样返回）。续签失败不在这里报错——
+    若是真失效，随后的采集会撞 401 并走被动续签链路给出用户可见的失败；若只是撞上并发
+    （别的采集腿刚续签过），直接采用库里已回写的新 token，本轮照常采，不刷瞬时错误。
+    """
+    if not spec.token_refresh or not str(spec.token_refresh.get("refresh_token") or "").strip():
+        return spec
+    if not refresh_due(spec.auth_token):
+        return spec
+    _emit(f"[{spec.id}] access_token 快到期，主动续签…")
+    try:
+        access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
+    except (PriceMonitorError, httpx.HTTPError, ValueError):
+        newer = _stored_tokens(store, spec.id) if store is not None else None
+        if newer and newer[0] and newer[0] != str(spec.auth_token or ""):
+            _emit(f"[{spec.id}] 主动续签撞上并发，采用库里的新 token")
+            return refreshed_spec(spec, *newer)
+        return spec
+    if store is not None:
+        persist_refreshed_config(store, spec.id, access_token, refresh_token)
+    _emit(f"[{spec.id}] token 已主动续签")
+    return refreshed_spec(spec, access_token, refresh_token)
 
 
 def needs_refresh(collected: list[PriceRecord]) -> bool:

@@ -3922,6 +3922,146 @@ def test_refresh_site_token_without_rotation_keeps_old_credential():
     assert (access, refresh) == ("at_new", "rt_old")
 
 
+def _jwt(iat: float, exp: float) -> str:
+    """测试用无签名 JWT：payload 只带 iat/exp，够 jwt_claim 解码就行。"""
+    import base64
+
+    def b64(data: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+
+    return f"{b64({'alg': 'none'})}.{b64({'iat': iat, 'exp': exp})}.sig"
+
+
+def test_refresh_due_thresholds():
+    """主动续签阈值：24h token 提前 4 小时到期该续，新鲜 token 不续，非 JWT 无法判断不续。"""
+    from llm_price_monitor import token_refresh
+
+    now = 1_800_000_000.0
+    day = 86400.0
+    assert token_refresh.refresh_due(_jwt(now - day * 0.85, now + day * 0.15), now=now)  # 剩 3.6h < 24h/6
+    assert not token_refresh.refresh_due(_jwt(now - day * 0.2, now + day * 0.8), now=now)  # 剩 19.2h 不该续
+    assert not token_refresh.refresh_due(_jwt(now - day * 0.8, now + day * 0.2), now=now)  # 剩 4.8h 刚好没进 4h 提前量
+    assert token_refresh.refresh_due(_jwt(now - 840, now + 60), now=now)  # 15 分钟 token 剩 1 分钟
+    assert not token_refresh.refresh_due(_jwt(now - 300, now + 600), now=now)  # 剩 10 分钟 > 7.5 分钟阈值
+    assert token_refresh.refresh_due(_jwt(now - day, now), now=now)  # 已过期：主动续一次兜底
+    assert not token_refresh.refresh_due("not-a-jwt", now=now)
+    assert not token_refresh.refresh_due(None, now=now)
+
+
+def test_ensure_fresh_token_refreshes_and_persists_when_due(tmp_path: Path):
+    """token 快到期的站开抓前主动续签：新 token 回写数据库，返回的 spec 本轮立即可用。"""
+    from llm_price_monitor import token_refresh
+
+    now = time.time()
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"data": {"access_token": "at_new", "refresh_token": "rt_new"}})
+
+    raw_site = {
+        "id": "due",
+        "models": ["m"],
+        "auth_token": _jwt(now - 840, now + 60),
+        "network": {"url": "https://due.test/api/pricing"},
+        "token_refresh": {"url": "https://due.test/auth/refresh", "refresh_token": "rt_old"},
+    }
+    store = Store(tmp_path / "monitor.db")
+    store.upsert_site("due", raw_site)
+    (spec,) = sites_from_raw([raw_site])
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        fresh = token_refresh.ensure_fresh_token(
+            spec, client=client, timeout=5, user_agent="ua", store=store
+        )
+
+    assert calls == ["https://due.test/auth/refresh"]
+    assert fresh.auth_token == "at_new"
+    assert fresh.token_refresh["refresh_token"] == "rt_new"
+    persisted = store.get_site_config("due")
+    assert persisted["auth_token"] == "at_new"
+    assert persisted["token_refresh"]["refresh_token"] == "rt_new"
+
+
+def test_ensure_fresh_token_skips_valid_token_and_missing_refresh():
+    """没到期/没配 refresh_token 的站原样返回，不发续签请求。"""
+    from llm_price_monitor import token_refresh
+
+    def boom(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("不该发出续签请求")
+
+    now = time.time()
+    (valid,) = sites_from_raw([{
+        "id": "valid",
+        "models": ["m"],
+        "auth_token": _jwt(now - 60, now + 86400),
+        "network": {"url": "https://valid.test/api/pricing"},
+        "token_refresh": {"url": "https://valid.test/auth/refresh", "refresh_token": "rt"},
+    }])
+    (no_rt,) = sites_from_raw([{
+        "id": "nort",
+        "models": ["m"],
+        "auth_token": _jwt(now - 840, now + 60),
+        "network": {"url": "https://nort.test/api/pricing"},
+    }])
+    with httpx.Client(transport=httpx.MockTransport(boom)) as client:
+        assert token_refresh.ensure_fresh_token(valid, client=client, timeout=5, user_agent="ua", store=None) is valid
+        assert token_refresh.ensure_fresh_token(no_rt, client=client, timeout=5, user_agent="ua", store=None) is no_rt
+
+
+def test_ensure_fresh_token_adopts_db_token_when_race(tmp_path: Path):
+    """并发竞态：价格腿刚续签过，状态腿拿着旧快照续签撞 401 时直接采用库里的新 token，不刷瞬时错误。"""
+    from llm_price_monitor import token_refresh
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"code": 401, "reason": "REFRESH_TOKEN_INVALID"})
+
+    now = time.time()
+    raw_site = {
+        "id": "race",
+        "models": ["m"],
+        "auth_token": _jwt(now - 840, now + 60),
+        "network": {"url": "https://race.test/api/pricing"},
+        "token_refresh": {"url": "https://race.test/auth/refresh", "refresh_token": "rt_stale"},
+    }
+    store = Store(tmp_path / "monitor.db")
+    # 模拟别的腿已续签回写：库里 access/refresh 都比 spec 快照新
+    store.upsert_site("race", {**raw_site, "auth_token": "at_fresh",
+                               "token_refresh": {**raw_site["token_refresh"], "refresh_token": "rt_fresh"}})
+    (spec,) = sites_from_raw([raw_site])
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        fresh = token_refresh.ensure_fresh_token(spec, client=client, timeout=5, user_agent="ua", store=store)
+
+    assert fresh.auth_token == "at_fresh"
+    assert fresh.token_refresh["refresh_token"] == "rt_fresh"
+
+
+def test_ensure_fresh_token_silent_when_chain_dead(tmp_path: Path):
+    """续签链真死（库里也没有新 token）：静默返回原 spec，不抛错——用户可见的失败交给 401 后的被动续签上报。"""
+    from llm_price_monitor import token_refresh
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"code": 401, "reason": "REFRESH_TOKEN_INVALID"})
+
+    now = time.time()
+    raw_site = {
+        "id": "dead",
+        "models": ["m"],
+        "auth_token": _jwt(now - 840, now + 60),
+        "network": {"url": "https://dead.test/api/pricing"},
+        "token_refresh": {"url": "https://dead.test/auth/refresh", "refresh_token": "rt_stale"},
+    }
+    store = Store(tmp_path / "monitor.db")
+    store.upsert_site("dead", raw_site)
+    (spec,) = sites_from_raw([raw_site])
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = token_refresh.ensure_fresh_token(spec, client=client, timeout=5, user_agent="ua", store=store)
+
+    assert result is spec
+
+
 def test_auth_inject_expands_credentials_per_target():
     """凭证注入按目标展开：价格带 Authorization: Bearer ${access_token}，公告带 Cookie 里的 ${refresh_token}，
     渠道状态不注入；值里的凭证变量续签换新后自动跟随。"""

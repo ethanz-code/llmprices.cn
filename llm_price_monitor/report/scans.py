@@ -12,7 +12,7 @@ from llm_price_monitor.adapters import NetworkAdapter
 from llm_price_monitor.config import AuthRequiredError, MonitorConfig, PriceMonitorError, SiteSpec
 from llm_price_monitor.status import diff_status
 from llm_price_monitor.store import Store, latest_key, latest_site_prefix, split_latest_key
-from llm_price_monitor.token_refresh import needs_refresh, refresh_and_recollect, refresh_and_retry_once
+from llm_price_monitor.token_refresh import ensure_fresh_token, needs_refresh, refresh_and_recollect, refresh_and_retry_once
 from llm_price_monitor.tracker import PriceRecord
 
 # fetch_site_status / fetch_site_notice 运行时经包命名空间回查：
@@ -77,15 +77,19 @@ def _build_network_phase(
         return site_records, site_errors
 
     def network_phase() -> tuple[list[PriceRecord], list[str]]:
-        phase_records, phase_errors = collect_all(spec)
+        # 开抓前先看 token 是否快到期：轮换型 refresh_token 等 401 再续，24h 短效站会一天死一次
+        site_spec = ensure_fresh_token(
+            spec, client=client, timeout=config.settings.timeout, user_agent=user_agent, store=store
+        )
+        phase_records, phase_errors = collect_all(site_spec)
         # 有任一"需认证"且配了续签接口：续签 token、回写数据库并用新 token 重采一次
-        if spec.token_refresh and needs_refresh(phase_records):
+        if site_spec.token_refresh and needs_refresh(phase_records):
             tasklog.emit(f"[{spec.id}] 采集返回需认证，尝试续签 token…")
             # 重采结果整体替换本轮记录与地址错误；续签失败或重采无数据时拿到的是续签前的
             # "需认证"占位记录，保住该状态下面才会跳过分组下线判定（401 是我方凭证问题，
             # 不代表分组真的下线）。错误列表不再被静默清空，重采阶段的地址失败照常上报。
             phase_records, phase_errors = refresh_and_recollect(
-                spec,
+                site_spec,
                 phase_records,
                 collect=collect_all,
                 client=client,
@@ -352,6 +356,7 @@ def _scan_statuses(
     for spec in config.sites:
         if not spec.enabled or not spec.status.get("url"):
             continue
+        spec = ensure_fresh_token(spec, client=client, timeout=config.settings.timeout, user_agent=user_agent, store=store)
         # 逐站留痕：整轮拖长时能直接看出卡在哪个站的哪条腿
         tasklog.emit(f"[{spec.id}] 开始渠道状态采集")
         try:
@@ -421,6 +426,7 @@ def _scan_notices(
     for spec in config.sites:
         if not spec.enabled:
             continue
+        spec = ensure_fresh_token(spec, client=client, timeout=config.settings.timeout, user_agent=user_agent, store=store)
         tasklog.emit(f"[{spec.id}] 开始站点公告采集")
         try:
             notice_record = _run_site_fetch(

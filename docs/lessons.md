@@ -6,7 +6,7 @@
 
 | 途中见到这些词 | 先看 |
 | --- | --- |
-| 401 / 403 / WAF / Cookie / Cloudflare / 认证 / 登录态 | 本页 §1 + Serena 记忆 `dom_url_auth_constraint` |
+| 401 / 403 / WAF / Cookie / Cloudflare / 认证 / 登录态 / 续签 / refresh_token 失效 | 本页 §1 + Serena 记忆 `dom_url_auth_constraint` |
 | 访客统计 / visit_logs / IP 全一样 / XFF / client_ip | 本页 §1 |
 | 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
@@ -46,6 +46,7 @@
 | 首页归属地查询逐 IP 打 ip-api 免费接口（45 次/分），失败站点每轮重查把自己打进限流，9 站只剩 1 颗星 | 改 `/batch` 批量接口一轮一请求（≤100 IP/请求，响应按请求顺序对位）；传输层失败记 2 分钟短退避，单 IP 明确失败仍 30 分钟负缓存 | 提交 f0de495 |
 | httpx 0.28 起 `client.get(url, params={})` 会用空参数**整体替换** URL 查询串：采集器对每个端点都默认带 `params={}`，把写在 URL 里的 `page_size`/过滤参数悄悄清掉（302.ai 分页接口只回 20 条默认页；subrouter 的 `source=shared_subscription` 渠道过滤参数此前也一直被吞）。同一 URL 裸发正常、走 kwargs 变薄，极易误判成"站方数据不稳定" | `build_request_kwargs` 仅在 params 非空时才带 `params` 键；排查这类问题先对比 `str(response.request.url)` 与配置 URL 是否一致 | 提交见 git log |
 | 把单次可用的轮换凭据当可反复探测的常量：2000lab 的 rt_ 被探测烧掉后连页面内同源 fetch 都回 REFRESH_TOKEN_INVALID，据此误判「站方续签链断了、只能 24h 重贴」并写进记忆；2026-10-09 用重新登录的新鲜 rt_ 一次刷新即接管成功（同 1for）。推论：全量采集跨到期点时，价格腿先续签烧掉旧 rt_，公告/状态腿仍持轮次开始时的旧快照，再续必然失败刷一条瞬时错误（各腿独立定时任务每次现读库没这问题，下轮自愈） | 轮换制凭据（rt_/refresh cookie）纪律：探测即消费，判"链断了"前必须拿新鲜登录值跑完整路径；接管后原持有方（浏览器）自动续签作废属预期；rt_ 一旦被烧只能重登重取 | sites.md「认证怎么选」§3；记忆 enabled-sites-config-patterns |
+| 被动续签（撞 401 才续）配 24h 短效 token + 单次轮换 rt_ 是结构性死循环：同一晚集中续签的站第二天同一小时集中掉线（2026-10-11 1for/2000lab/DaiTuAI/totokens 四站 17:11–18:14 依次 401，续签全回 REFRESH_TOKEN_INVALID——轮换出来的新 rt_ 隔 24h 首用即被拒），且 sub2api 的 channels/announcements 匿名也 401 没有旁路；对照 AIHub365 的 15 分钟 token 因被动续签高频触发一直活着，坐实"rt_ 放着不用会死、用得勤才活" | JWT 型 token 配了续签的站改为**到期前主动续签**（`ensure_fresh_token`：三条采集腿每站开抓前检查，剩余寿命 < 总寿命 1/6 就先续签回写；24h token 提前 4h，约一天一换把链温着）；主动续签撞并发腿（别的腿刚续过、rt_ 已被烧）时静默采用库里的新 token 不刷瞬时错误，链真死仍由被动链路上报。判定"已作废 vs 已过期"看 reason：`REFRESH_TOKEN_INVALID` = 被消费/作废只能重贴 | token_refresh.py；提交见 git log |
 
 | 自动换节点的三种静默失效：mihomo 默认**不开** external-controller（配置里不写就永远连不上）、控制口绑 127.0.0.1 时 api 容器连不进来、组名随手填（Clash Verge 存多份订阅，只有当前那份的组存在，其余 GET/PUT 静默 404 只剩一条 warn） | 容器模板显式 `external-controller: 0.0.0.0:9090` + `secret`（端口不发布，容器网络外摸不到）；组名必须填当前内核里真实存在的组（先 `GET /proxies` 核对）；Clash Verge 的 external controller 改的是**全局选择**——想让采集与自用上网互不干扰，就加一个只监听 `127.0.0.1` 的 listener 绑采集专用组（组用 `include-all + filter` 按关键词自动筛）；mihomo 的 url-test 组接受手动选择并记成 `fixed`，节点活着就一直生效、不会被测速覆盖 | pricing.md；docker-compose.md「采集兜底代理」 |
 | Clash Verge 的「全局扩展组/规则/代理」其实**按订阅档案各自绑定**（`profiles.yaml` 里每个档案 `option.groups/rules/proxies` 指向自己的文件），改了不在当前档案链里的文件等于白改——listener 生效、组缺失就是两边文件没走同一条链；跨档案生效只有全局 Merge/Script，且 Merge 深合并对数组是**整组替换**（往里塞组会清掉订阅全部组） | 跨档案要加的组放全局 `Script.js`（main 里判断同名后 push，每份订阅都生效、切订阅不丢）；listener 引用不存在的组不会弄挂内核，只是那条口不工作——排「专线不通」先 `GET /proxies` 核对组在不在 | Serena 记忆 `proxy-switch-endpoint-facts` |

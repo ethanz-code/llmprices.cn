@@ -68,6 +68,16 @@ SITE_FIELD_DEFAULTS: dict[str, Any] = {
 }
 
 
+def jwt_claim(value: str, claim: str) -> float:
+    """取 JWT payload 里的数值声明（exp / iat），供主动续签与认证收口判新旧；非 JWT 或缺失返回 0.0。"""
+    try:
+        part = value.removeprefix("Bearer ").split(".")[1]
+        part += "=" * (-len(part) % 4)
+        return float(json.loads(base64.urlsafe_b64decode(part)).get(claim) or 0)
+    except Exception:
+        return 0.0
+
+
 def slim_site_config(config: dict[str, Any]) -> dict[str, Any]:
     """去掉站点配置里的空值与默认值字段（auth_token: null、enabled: true、空的 params 等）。
 
@@ -112,12 +122,7 @@ def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[
             config.pop("token_refresh", None)
 
     def _jwt_exp(value: str) -> float:
-        try:
-            part = value.removeprefix("Bearer ").split(".")[1]
-            part += "=" * (-len(part) % 4)
-            return float(json.loads(base64.urlsafe_b64decode(part)).get("exp") or 0)
-        except Exception:
-            return 0.0
+        return jwt_claim(value, "exp")
 
     best_token, best_exp, best_where = "", 0.0, ""
 
