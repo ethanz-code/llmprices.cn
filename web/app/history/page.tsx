@@ -3,6 +3,7 @@ import type { FeedData, HistoryListData } from "@/lib/types";
 import { PageDigest } from "@/components/PageDigest";
 import { SiteAlert } from "@/components/SiteAlert";
 import { HistoryView } from "@/components/HistoryView";
+import { loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
 import { alerts } from "@/lib/copy";
 import { formatCount } from "@/lib/format";
 import { pageMetadata } from "@/lib/seo";
@@ -19,11 +20,14 @@ export default async function HistoryPage() {
   let feed: FeedData | null = null;
   let history: HistoryListData | null = null;
   let error: string | null = null;
+  // 站点首页覆盖表：事件卡站名外链用；拉取失败退回内置映射/来源域名兜底
+  let siteHomepages: SiteHomepages = {};
   try {
     // 事件流已由 /api/feed 统一合并（价格+公告），历史记录独立取
-    [feed, history] = await Promise.all([
+    [feed, history, siteHomepages] = await Promise.all([
       apiGet<FeedData>("/api/feed?events_limit=300&notice_limit=100"),
       apiGet<HistoryListData>("/api/history?limit=500"),
+      loadSiteHomepages(),
     ]);
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
@@ -45,6 +49,7 @@ export default async function HistoryPage() {
         <HistoryView
           feed={feed.events}
           history={history}
+          siteHomepages={siteHomepages}
         />
       )}
     </div>

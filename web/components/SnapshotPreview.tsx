@@ -3,7 +3,7 @@
 import { DataTable, type DColumn } from "./DataTable";
 import { formatPrice, formatTimeAgo, toCnyPrice } from "@/lib/format";
 import { chartToneVar, type RateLevel } from "@/lib/channelStatus";
-import { getSiteInfo } from "@/lib/sites";
+import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import type { OverviewRecord } from "@/lib/types";
 import { DiscountBars } from "./DiscountBars";
 import { RiskLink } from "./RiskLink";
@@ -20,6 +20,7 @@ export function SnapshotPreview({
   rate,
   siteLevels,
   snapshotAt,
+  siteHomepages,
 }: {
   rows: OverviewRecord[];
   /** 展示汇率：站点价统一按 RMB 显示，缺失时回落原币数值 */
@@ -28,6 +29,8 @@ export function SnapshotPreview({
   siteLevels?: Record<string, RateLevel | null>;
   /** 快照数据新鲜度：全行最新一次采集时间（秒级时间戳） */
   snapshotAt?: number | null;
+  /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
+  siteHomepages?: SiteHomepages;
 }) {
   const columns: DColumn<OverviewRecord>[] = [
     {
@@ -36,7 +39,7 @@ export function SnapshotPreview({
       // 窄屏自动收缩（vw 上限），375px 首屏三列核心信息尽量不横滚
       width: "min(140px, 24vw)",
       render: (v: string, row) => {
-        const site = getSiteInfo(v, row.source_url);
+        const site = getSiteInfo(v, row.source_url, siteHomepages);
         const level = siteLevels?.[v] ?? null;
         return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>

@@ -1,9 +1,15 @@
-/** 站点展示元数据：id → 名称/官网。前端维护，官网缺失时回退到来源 URL 的域名。 */
+/** 站点展示元数据：id → 名称/官网。名称由前端内置映射维护；
+ *  官网优先用管理台配置的「站点首页」（覆盖表），其次内置映射，最后回退来源 URL 的域名。 */
+
+import { apiGet } from "./api";
 
 export interface SiteInfo {
   name: string;
   homepage: string;
 }
+
+/** 站点首页覆盖表：site_id → 管理台配置的首页地址（只含配过的站） */
+export type SiteHomepages = Record<string, string>;
 
 const SITE_MAP: Record<string, SiteInfo> = {
   sudocode: { name: "SudoCode", homepage: "https://sudocode.chat" },
@@ -23,10 +29,28 @@ function originOf(url: string): string | null {
   }
 }
 
-/** 解析站点信息；映射表没有的 id 回退到 id 本身 + 来源 URL 域名。 */
-export function getSiteInfo(siteId: string, sourceUrl?: string): SiteInfo {
+/** 服务端读取站点首页覆盖表；拉不到返回空表，站名链接退回内置映射/来源域名兜底，不阻塞页面。 */
+export async function loadSiteHomepages(): Promise<SiteHomepages> {
+  try {
+    const data = await apiGet<{ homepages?: SiteHomepages }>("/api/sites/homepages");
+    return data.homepages ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** 解析站点信息：名称按内置映射（没有就用 id）；官网按「配置的首页 > 内置映射 > 来源 URL 域名」。
+ *  homepages 是 loadSiteHomepages 的结果，渲染站名链接的页面/组件要把它传进来；
+ *  入口在 API 子域、来源域名不是可看页面的站（如 4aicode）靠它链到真实首页。 */
+export function getSiteInfo(siteId: string, sourceUrl?: string, homepages?: SiteHomepages): SiteInfo {
   const known = SITE_MAP[siteId];
-  if (known) return known;
+  const configured = homepages?.[siteId];
+  if (known || configured) {
+    return {
+      name: known?.name ?? siteId,
+      homepage: configured ?? known?.homepage ?? (sourceUrl ? originOf(sourceUrl) ?? "" : ""),
+    };
+  }
   const fallback = sourceUrl ? originOf(sourceUrl) : null;
   return {
     name: siteId,

@@ -3,6 +3,7 @@ import { apiGet } from "@/lib/api";
 import { buildSiteViews, type ChannelDotRow } from "@/lib/channelStatus";
 import { loadStatusViews } from "@/lib/statusData";
 import { buildRankingIndex, type RankingHit } from "@/lib/rankings";
+import { loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
 import { catalogModelOrderIndex, type ModelOrderEntry } from "@/lib/modelOrder";
 import type { CatalogData, OverviewData, RankingsData } from "@/lib/types";
 import { alerts } from "@/lib/copy";
@@ -36,20 +37,24 @@ export default async function OverviewPage() {
   // 目录排序索引（模型归一键 → 厂商序+发布日期）：模型下拉按「厂商分块+发布倒序」排的依据；
   // 只传这份轻量映射而非整个目录，拉取失败只影响排序口径（退化为按名称）
   let modelOrder: Record<string, ModelOrderEntry> = {};
+  // 站点首页覆盖表：站名外链用；拉取失败退回内置映射/来源域名兜底（loadSiteHomepages 自带兜底）
+  let siteHomepages: SiteHomepages = {};
   let error: string | null = null;
   try {
     // 在售监测集与总览表共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求
     const overviewPromise = apiGet<OverviewData>("/api/overview", headers);
-    const [overview, statusViews, rankings, catalog] = await Promise.all([
+    const [overview, statusViews, rankings, catalog, homepages] = await Promise.all([
       overviewPromise,
       loadStatusViews(headers, overviewPromise).catch(() => buildSiteViews([])),
       apiGet<RankingsData>("/api/rankings").catch(() => null),
       apiGet<CatalogData>("/api/catalog").catch(() => null),
+      loadSiteHomepages(),
     ]);
     data = overview;
     statusDots = statusViews.channels;
     rankingsIndex = buildRankingIndex(rankings);
     modelOrder = catalogModelOrderIndex(catalog?.models ?? {});
+    siteHomepages = homepages;
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
@@ -69,7 +74,13 @@ export default async function OverviewPage() {
         />
       )}
       {data && (
-        <OverviewTable data={data} statusDots={statusDots} rankingsIndex={rankingsIndex} modelOrder={modelOrder} />
+        <OverviewTable
+          data={data}
+          statusDots={statusDots}
+          rankingsIndex={rankingsIndex}
+          modelOrder={modelOrder}
+          siteHomepages={siteHomepages}
+        />
       )}
     </div>
   );

@@ -19,7 +19,7 @@ import {
 } from "@/lib/channelStatus";
 import type { Tone } from "@/components/ToneTag";
 import type { Metadata } from "next";
-import { getSiteInfo } from "@/lib/sites";
+import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";
 import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
 
@@ -234,11 +234,13 @@ export default async function StatusDetailPage({
   let records: StatusSnapshot[] = [];
   let notices: NoticeSnapshot[] = [];
   let overview: OverviewData | null = null;
+  // 站点首页覆盖表：分享卡的官网地址优先用它（没配退回内置映射/来源域名）
+  let homepages: Record<string, string> = {};
   let error: string | null = null;
   try {
     // 渠道时序走 lib/statusData.ts：每站最近 400 条、近 7 天——首页与总览的渠道统计
     // 也用这同一份口径（数据同源，各页数字才一致），这里是「详情页口径」的本体。
-    const [timeline, noticeData, overviewData] = await Promise.all([
+    const [timeline, noticeData, overviewData, homepageMap] = await Promise.all([
       fetchSiteStatus(siteId),
       // 公告拉取失败只影响公告区，不阻塞整页；只取最新一次采集的存档
       apiGet<{ records: NoticeSnapshot[] }>(
@@ -248,10 +250,12 @@ export default async function StatusDetailPage({
       })),
       // 在售监测集：后端按站过滤的轻量 overview，渠道视图只看本站在售模型/分组
       apiGet<OverviewData>(`/api/overview?site_id=${encodeURIComponent(siteId)}`).catch(() => null),
+      loadSiteHomepages(),
     ]);
     records = timeline;
     notices = noticeData.records ?? [];
     overview = overviewData;
+    homepages = homepageMap;
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
@@ -276,7 +280,7 @@ export default async function StatusDetailPage({
           records.length > 0 ? (
             <ShareSiteButton
               siteName={getSiteInfo(siteId).name || siteId}
-              homepage={getSiteInfo(siteId).homepage}
+              homepage={homepages[siteId] ?? getSiteInfo(siteId).homepage}
               availability={series}
               channels={channels}
             />

@@ -168,6 +168,16 @@ def build_router(store: Store) -> APIRouter:
         doc = store.get_document(SCREENSHOT_DOC) or {}
         return {"screenshots": {key: value for key, value in doc.items() if isinstance(value, dict)}}
 
+    @router.get("/api/sites/homepages")
+    def site_homepages() -> dict[str, Any]:
+        """站点首页覆盖表（site_id → 配置的首页地址，只含配过的站）。
+
+        公开页面的站名链接用它替换「来源 URL 域名」兜底：入口在 API 子域、
+        来源域名不是可看页面的站点（如 4aicode）靠它链到真实首页。没配的站不进表。
+        """
+        config = config_from_store(store)
+        return {"homepages": {site.id: site.homepage for site in config.sites if site.homepage}}
+
     @router.get("/api/sites/{site_id}/screenshot")
     def site_screenshot(site_id: str) -> FileResponse:
         """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。"""

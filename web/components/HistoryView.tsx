@@ -5,7 +5,7 @@ import { Empty, Pick } from "./ui";
 import { IconSync } from "./icons";
 import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
-import { getSiteInfo } from "@/lib/sites";
+import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import type { EventRow } from "@/lib/types";
 import { dayKey, dayLabel, eventMeta, formatTime, isNoticeEvent, noticeExcerpt, noticePlainText } from "@/lib/format";
 import { foldEvents } from "@/lib/events";
@@ -28,7 +28,15 @@ const pillStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-function EventFeed({ events, rate }: { events: FeedEvent[]; rate?: number | null }) {
+function EventFeed({
+  events,
+  rate,
+  siteHomepages,
+}: {
+  events: FeedEvent[];
+  rate?: number | null;
+  siteHomepages?: SiteHomepages;
+}) {
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<FeedEvent | null>(null);
   if (events.length === 0) {
@@ -84,8 +92,8 @@ function EventFeed({ events, rate }: { events: FeedEvent[]; rate?: number | null
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <KindTag kind={event.kind} />
                   <span onClick={(e) => e.stopPropagation()}>
-                    <RiskLink href={getSiteInfo(event.site_id).homepage} variant="site">
-                      <span>{getSiteInfo(event.site_id).name}</span>
+                    <RiskLink href={getSiteInfo(event.site_id, undefined, siteHomepages).homepage} variant="site">
+                      <span>{getSiteInfo(event.site_id, undefined, siteHomepages).name}</span>
                     </RiskLink>
                   </span>
                   <span className="mono" style={{ color: "var(--text-3)", fontSize: 12, marginLeft: "auto" }}>
@@ -108,10 +116,15 @@ function EventFeed({ events, rate }: { events: FeedEvent[]; rate?: number | null
                 <KindTag kind={event.kind} />
                 <span onClick={(e) => e.stopPropagation()}>
                   <RiskLink
-                    href={getSiteInfo(event.site_id, event.current?.source_url ?? event.previous?.source_url).homepage}
+                    href={
+                      getSiteInfo(event.site_id, event.current?.source_url ?? event.previous?.source_url, siteHomepages)
+                        .homepage
+                    }
                     variant="site"
                   >
-                    <span>{getSiteInfo(event.site_id, event.current?.source_url ?? event.previous?.source_url).name}</span>
+                    <span>
+                      {getSiteInfo(event.site_id, event.current?.source_url ?? event.previous?.source_url, siteHomepages).name}
+                    </span>
                   </RiskLink>
                 </span>
                 <span className="mono" style={{ color: "var(--text-2)" }}>{event.model}</span>
@@ -164,7 +177,7 @@ function EventFeed({ events, rate }: { events: FeedEvent[]; rate?: number | null
         })}
       </section>
       ))}
-      <EventDetailModal event={detail} rate={rate} onClose={() => setDetail(null)} />
+      <EventDetailModal event={detail} rate={rate} onClose={() => setDetail(null)} siteHomepages={siteHomepages} />
     </div>
   );
 }
@@ -172,11 +185,14 @@ function EventFeed({ events, rate }: { events: FeedEvent[]; rate?: number | null
 export function HistoryView({
   feed,
   history,
+  siteHomepages,
 }: {
   /** 价格事件与公告事件已按时间合并、按新到旧排序的动态流 */
   feed: FeedEvent[];
   /** 历史接口数据，主要用于取汇率做价格折算 */
   history: HistoryListData;
+  /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
+  siteHomepages?: SiteHomepages;
 }) {
   // 站点价统一按 RMB 展示：汇率由历史接口附带（厂商价快照口径）
   const rate = history.rate ?? null;
@@ -206,7 +222,7 @@ export function HistoryView({
         />
       </div>
 
-      <EventFeed events={filteredEvents} rate={rate} />
+      <EventFeed events={filteredEvents} rate={rate} siteHomepages={siteHomepages} />
     </div>
   );
 }

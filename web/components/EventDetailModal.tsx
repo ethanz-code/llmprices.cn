@@ -6,7 +6,7 @@ import { Modal } from "./ui";
 import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
 import { NoticeBody } from "./NoticeBody";
-import { getSiteInfo } from "@/lib/sites";
+import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import {
   CACHE_PRICE_LABELS,
   cachePriceText,
@@ -174,15 +174,20 @@ export function EventDetailModal({
   event,
   rate,
   onClose,
+  siteHomepages,
 }: {
   event: FeedEvent | null;
   /** 展示汇率（USD→CNY），价格折算用 */
   rate?: number | null;
   onClose: () => void;
+  /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
+  siteHomepages?: SiteHomepages;
 }) {
   if (!event) return null;
   const meta = eventMeta(event.kind);
-  const site = getSiteInfo(event.site_id);
+  // 公告事件没有价格行、拿不到来源地址；价格事件用最近一次的来源地址兜底官网
+  const sourceUrl = isNoticeEvent(event) ? undefined : event.current?.source_url ?? event.previous?.source_url;
+  const site = getSiteInfo(event.site_id, sourceUrl, siteHomepages);
   if (isNoticeEvent(event)) {
     return (
       <Modal open onClose={onClose} title="事件详情" width={520}>

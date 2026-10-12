@@ -179,6 +179,7 @@ def test_screenshot_api_public_under_read_lockdown(workspace: Path, monkeypatch)
     client = TestClient(app)
     assert client.get("/api/sites/screenshots").status_code == 200
     assert client.get("/api/sites/demo/screenshot").status_code == 200
+    assert client.get("/api/sites/homepages").status_code == 200
     # 同前缀的管理接口照旧封锁：匿名拿不到站点配置
     assert client.get("/api/sites").status_code == 401
 
@@ -214,6 +215,19 @@ def test_purge_and_rename_move_screenshot(workspace: Path, monkeypatch):
     assert "renamed" not in (store.get_document(SCREENSHOT_DOC) or {})
     assert not shots.screenshot_path("renamed").exists()
     assert store.get_document(SCREENSHOT_DOC)["other"]["bytes"] == 1
+
+
+def test_homepages_endpoint_lists_configured_sites(workspace: Path):
+    """首页覆盖表：只含配过 homepage 的站；公开可读；改配置后即时生效。"""
+    client = TestClient(_app(workspace))
+    assert client.get("/api/sites/homepages").json() == {"homepages": {}}
+    assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200
+    assert client.post(
+        "/api/sites",
+        json={"config": {"id": "h", "homepage": "https://h.test/", "network": {"url": "https://api.h.test/v1"}}},
+    ).status_code == 200
+    # 未配 homepage 的站（seed 的 demo）不进表
+    assert client.get("/api/sites/homepages").json() == {"homepages": {"h": "https://h.test/"}}
 
 
 def test_site_homepage_roundtrip_through_api(workspace: Path):

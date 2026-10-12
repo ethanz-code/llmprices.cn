@@ -10,7 +10,7 @@ import { DajuSit } from "./DajuArt";
 import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
 import { TermTip } from "./TermTip";
-import { getSiteInfo } from "@/lib/sites";
+import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMinute, formatTime, noticeExcerpt, recordStatusKey, rowReason, statusMeta } from "@/lib/format";
 import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
 import { modelOrderCompare, type ModelOrderEntry } from "@/lib/modelOrder";
@@ -42,6 +42,7 @@ export function OverviewTable({
   statusDots,
   rankingsIndex = {},
   modelOrder = {},
+  siteHomepages,
 }: {
   data: OverviewData;
   statusDots?: Record<string, ChannelDotRow[]>;
@@ -51,6 +52,8 @@ export function OverviewTable({
    *  「厂商分块+发布倒序」排的依据，与站点管理监控模型多选同一套（见 lib/modelOrder），
    *  页面服务端从 /api/catalog 提炼；缺省退化为按名称。 */
   modelOrder?: Record<string, ModelOrderEntry>;
+  /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
+  siteHomepages?: SiteHomepages;
 }) {
   const records = data.records;
   const router = useRouter();
@@ -154,7 +157,7 @@ export function OverviewTable({
       // 不设固定宽度：与公告列一起平分剩余空间（两者都不设 width 即均分），
       // 避免公告在宽屏独吞剩余宽度、也避免窄屏挤压价格列；手机端由 mobileScrollX 兜底
       render: (v: string, row) => {
-        const site = getSiteInfo(v, row.source_url);
+        const site = getSiteInfo(v, row.source_url, siteHomepages);
         // 状态列已去掉：确认/候选/规则价是常态不挂标签；需认证/无数据挂标签
         const statusKey = recordStatusKey(row);
         const showTag = statusKey === "auth_required" || statusKey === "unavailable";

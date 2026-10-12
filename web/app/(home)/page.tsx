@@ -10,7 +10,7 @@ import {
   noticeExcerpt,
   toCnyPrice,
 } from "@/lib/format";
-import { getSiteInfo } from "@/lib/sites";
+import { getSiteInfo, loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
 import { canonicalModel, lowestPriceRowPerModel, orderByReleaseDesc } from "@/lib/priceRows";
 import { foldEvents } from "@/lib/events";
 import {
@@ -71,6 +71,8 @@ interface LandingData {
   rankings: RankingsData | null;
   /** 厂商目录：只取发布日期建排序索引，拉取失败只影响最新价格的排序口径 */
   catalog: CatalogData | null;
+  /** 站点首页覆盖表：站名链接用，拉取失败退回内置映射/来源域名兜底 */
+  homepages: SiteHomepages;
   error: string | null;
 }
 
@@ -85,7 +87,7 @@ async function loadLanding(): Promise<LandingData> {
     // 统一事件流（价格+公告已合并）；渠道检测拉取失败只影响星球与站点卡片，不阻塞整页
     // 在售监测集与首页数据共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求
     const overviewPromise = apiGet<OverviewData>("/api/overview");
-    const [overview, meta, feed, statusViews, geo, rankings, catalog, history] = await Promise.all([
+    const [overview, meta, feed, statusViews, geo, rankings, catalog, history, homepages] = await Promise.all([
       overviewPromise,
       apiGet<MetaData>("/api/meta"),
       apiGet<FeedData>("/api/feed?events_limit=8&notice_limit=8").catch(() => null),
@@ -99,8 +101,10 @@ async function loadLanding(): Promise<LandingData> {
       apiGet<CatalogData>("/api/catalog").catch(() => null),
       // hero 折线是装饰位：拉取失败只影响图表兜底回插画，不阻塞整页报错
       apiGet<HistoryListData>("/api/history?limit=1000").catch(() => null),
+      // 站点首页覆盖表：站名外链用（loadSiteHomepages 自带兜底，取不到返回空表）
+      loadSiteHomepages(),
     ]);
-    return { overview, meta, feed, history, statusViews, geo: geo.geo, rankings, catalog, error: null };
+    return { overview, meta, feed, history, statusViews, geo: geo.geo, rankings, catalog, homepages, error: null };
   } catch (cause) {
     return {
       overview: null,
@@ -111,6 +115,7 @@ async function loadLanding(): Promise<LandingData> {
       geo: {},
       rankings: null,
       catalog: null,
+      homepages: {},
       error: cause instanceof Error ? cause.message : String(cause),
     };
   }
@@ -242,7 +247,7 @@ function BentoDemo({
 }
 
 export default async function LandingPage() {
-  const { overview, meta, feed, history, statusViews, geo, rankings, catalog, error } = await loadLanding();
+  const { overview, meta, feed, history, statusViews, geo, rankings, catalog, homepages, error } = await loadLanding();
   // JSON-LD 里的站点地址要绝对 URL，与 metadataBase 同一推导口径
   const origin = await siteOrigin();
   const records = overview?.records ?? [];
@@ -460,7 +465,13 @@ export default async function LandingPage() {
                 </Link>
               </div>
               <p className="landing-section-sub">{home.sectionSubs.latestPrice}</p>
-              <SnapshotPreview rows={parentRows.slice(0, 12)} rate={rate} siteLevels={siteLevelBySite} snapshotAt={snapshotAt} />
+              <SnapshotPreview
+                rows={parentRows.slice(0, 12)}
+                rate={rate}
+                siteLevels={siteLevelBySite}
+                snapshotAt={snapshotAt}
+                siteHomepages={homepages}
+              />
             </section>
           </Reveal>
         )}
