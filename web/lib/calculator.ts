@@ -1,9 +1,9 @@
 /** 花费计算：单价（每 100 万 token）× 用量 → 各档小计与总价。
  *  与 React 无关的纯函数：便于单测，也供 URL 编解码复用。文案不在此文件，统一放 copy.ts。 */
 
-/** 三个计费档（与站点价目卡一致）。缓存写入/存储价不进总价：收几次取决于
- *  缓存前缀多大、多久重建一次，"总量+命中率"的口径撑不起这个假设，硬算会失真。 */
-export type PriceKey = "input" | "output" | "cacheRead";
+/** 四个计费档（与站点价目卡一致）。口径按 AI Agent 实测用量拆分：输出约占 0.4%，
+ *  输入里约 96% 从缓存读取（命中率可调），其余是首次写入缓存的部分——见 calcCost。 */
+export type PriceKey = "input" | "output" | "cacheRead" | "cacheWrite";
 
 export type CalcPrices = Record<PriceKey, number | null>;
 
@@ -24,20 +24,20 @@ export interface CalcResult {
   total: number;
 }
 
-export const PRICE_KEYS: PriceKey[] = ["input", "output", "cacheRead"];
+export const PRICE_KEYS: PriceKey[] = ["input", "output", "cacheRead", "cacheWrite"];
 
 /** 单价口径：目录与站点价统一按每 100 万 token 标价。 */
 const TOKENS_PER_UNIT = 1_000_000;
 
-/** 缓存命中率默认 98%：反复带同前缀的调用（agent、多轮对话）普遍在这个量级。 */
-const DEFAULT_HIT_RATE = 98;
+/** 缓存命中率默认 96%：反复带同前缀的调用（agent、多轮对话）实测在 96–97% 量级。 */
+export const DEFAULT_HIT_RATE = 96;
 
 /** 总用量快捷档位（与 copy.ts 的 tokenPresets 标签按序对应），默认 1 亿。 */
 export const TOKEN_PRESET_VALUES = [10_000_000, 100_000_000, 1_000_000_000] as const;
 export const DEFAULT_TOTAL_TOKENS: number = TOKEN_PRESET_VALUES[1];
 
-/** 输入占 99.2%：agent 类实际用量口径，成本几乎由输入决定。 */
-const INPUT_SHARE = 0.992;
+/** 输出占总用量 0.4%：agent 类实测口径（Claude Code 7.4 万轮约 0.44%），成本几乎全在输入。 */
+const OUTPUT_SHARE = 0.004;
 
 /** 用量口径：一个总量（快捷档位）+ 缓存命中率，不按计费档分别填。 */
 export interface CalcUsage {
@@ -54,28 +54,36 @@ function positiveTokens(value: number | null | undefined): number {
   return num !== null && num > 0 ? num : 0;
 }
 
-/** 命中率：空/非法回落默认值，越界钳到 0–100。 */
+/** 命中率：空/负数按非法值回落默认值，超过 100 钳到 100。 */
 export function parseHitRate(text: string): number {
   const num = parseAmount(text);
   if (num === null) return DEFAULT_HIT_RATE;
   return Math.min(100, Math.max(0, num));
 }
 
-/** 总花费 = 缓存命中部分×命中价 + 未命中输入×输入价 + 输出×输出价。
- *  输入按命中率切成命中/未命中两段（不含缓存写入/存储费，见 PriceKey 注释）。
- *  三档固定返回：没填价的档 tokens 照常拆出，单价/小计/占比为 null——明细表据此
+/** 总花费 = 缓存读取×读取价 + 缓存写入×写入价 + 未命中输入×输入价 + 输出×输出价。
+ *  用量按 agent 实测口径拆分：输出占 0.4%，其余是输入池；输入池按命中率切两段——
+ *  命中段是从缓存读取的部分，未命中段是本次首次见到的内容，会写入缓存，所以默认按
+ *  缓存写入计；站点没给缓存写入价时（多数站点缓存未命中就是普通输入价）回落按输入价计。
+ *  四档固定返回：没填价的档 tokens 照常拆出，单价/小计/占比为 null——明细表据此
  *  照实展示该档用量并标注「未计入」，不让整行消失后占比看起来失真。 */
 export function calcCost(prices: CalcPrices, usage: CalcUsage): CalcResult {
   const hit = parseHitRate(usage.hitRate != null ? String(usage.hitRate) : "") / 100;
   const totalTokens = positiveTokens(usage.total);
-  const inputTokens = totalTokens * INPUT_SHARE;
-  const outputTokens = totalTokens - inputTokens;
-  const buckets: { key: PriceKey; tokens: number; price: number | null }[] = [
-    { key: "cacheRead", tokens: inputTokens * hit, price: prices.cacheRead },
-    { key: "input", tokens: inputTokens * (1 - hit), price: prices.input },
-    { key: "output", tokens: outputTokens, price: prices.output },
-  ];
-  const lines: CostLine[] = buckets.map(({ key, tokens, price }) => {
+  const outputTokens = totalTokens * OUTPUT_SHARE;
+  const inputTokens = totalTokens - outputTokens;
+  const missTokens = inputTokens * (1 - hit);
+  // 非命中输入：填了缓存写入价就按写入计，否则按输入价计——同一批 token，不重复计
+  const writePriced = prices.cacheWrite !== null && prices.cacheWrite >= 0;
+  const tokensByKey: Record<PriceKey, number> = {
+    input: writePriced ? 0 : missTokens,
+    output: outputTokens,
+    cacheRead: inputTokens * hit,
+    cacheWrite: writePriced ? missTokens : 0,
+  };
+  const lines: CostLine[] = PRICE_KEYS.map((key) => {
+    const tokens = tokensByKey[key];
+    const price = prices[key];
     const unitPrice = price !== null && price >= 0 ? price : null;
     return {
       key,
@@ -134,7 +142,7 @@ export interface CalcState {
   prices: CalcPrices;
   /** 总 token 用量；缺省回落默认档（1 亿） */
   totalTokens: number | null;
-  /** 缓存命中率 0–100；缺省回落默认值（98） */
+  /** 缓存命中率 0–100；缺省回落默认值（96） */
   hitRate: number | null;
 }
 
@@ -142,6 +150,7 @@ export const EMPTY_PRICES: CalcPrices = {
   input: null,
   output: null,
   cacheRead: null,
+  cacheWrite: null,
 };
 
 /** 是否填了至少一档单价：决定结果区显示空态还是明细表。 */
@@ -165,7 +174,7 @@ const PARAM = {
   model: "m",
   site: "s",
   currency: "cur",
-  price: { input: "pi", output: "po", cacheRead: "pr" },
+  price: { input: "pi", output: "po", cacheRead: "pr", cacheWrite: "pw" },
   total: "t",
   hit: "h",
 } as const;

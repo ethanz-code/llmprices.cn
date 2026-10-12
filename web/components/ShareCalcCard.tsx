@@ -9,7 +9,7 @@ import { IconAlertCircle } from "./icons";
 import { chartPanelStyle, SHARE_PALETTES, useShareFontStacks, type ShareTheme } from "./ShareSiteCard";
 
 const BUCKET_LABEL = calculator.buckets;
-const BUCKET_ORDER: PriceKey[] = ["input", "output", "cacheRead"];
+const BUCKET_ORDER: PriceKey[] = ["input", "output", "cacheRead", "cacheWrite"];
 /** 明细表头：与页面结果表同一套文案（copy.calculator.detail） */
 const TABLE_COLUMNS = [
   calculator.detail.bucket,
@@ -48,7 +48,7 @@ export function ShareCalcCard({
   /** 价格来源标签：「厂商官方价」或「中转站价 · 站点名」 */
   sourceLabel: string;
   currency: string;
-  /** 三档单价（每 100 万 token），缺失的档显示 — */
+  /** 四档单价（每 100 万 token），缺失的档显示 — */
   prices: CalcPrices;
   totalTokens: number;
   hitRate: number;
@@ -185,7 +185,7 @@ export function ShareCalcCard({
         ))}
       </div>
 
-      {/* 单价口径：三档并排，没填的档显示 — */}
+      {/* 单价口径：四档并排，没填的档显示 — */}
       <div style={{ display: "flex", gap: 14 }}>
         {BUCKET_ORDER.map((key) => priceChip(key))}
       </div>

@@ -138,7 +138,8 @@ export const calculator = {
   buckets: {
     input: "输入",
     output: "输出",
-    cacheRead: "缓存命中",
+    cacheRead: "缓存读取",
+    cacheWrite: "缓存写入",
   },
   priceTitle: "单价 · 每百万 token",
   usageTotal: "用量",
@@ -148,12 +149,15 @@ export const calculator = {
   tokenPresets: ["10M（一千万）", "100M（一亿）", "1B（十亿）"],
   hitRate: "缓存命中率",
   usageHint:
-    "输入按 99.2% · 输出按 0.8% 拆分：命中部分按缓存命中价，未命中按输入价。",
+    "按 AI Agent 实际用量拆分：输出约占 0.4%；输入里约 96% 从缓存读取（命中率可调），其余首次见到的内容默认按缓存写入计（没填写入价则按输入价）。",
+  /** 缓存两档在各家账单里的别名——叫法不统一，列出来免得对不上号 */
+  bucketAlias:
+    "缓存读取＝命中缓存（也叫缓存命中 / cached tokens）；缓存写入＝首次写入缓存（也叫缓存创建 / cache creation）。",
   resultTitle: "花费结果",
   totalLabel: "合计",
   emptyResult: "填好单价和用量，这里就会显示花费。",
   missingCache:
-    "没查到缓存命中单价，命中的 token 没计入总价；知道单价的话在上面补一格。",
+    "没查到缓存读取单价，从缓存读取的 token 没计入总价；知道单价的话在上面补一格。",
   detail: {
     bucket: "计费项",
     unitPrice: "单价",

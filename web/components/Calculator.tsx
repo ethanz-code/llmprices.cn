@@ -49,7 +49,7 @@ function symbolOf(currency: string): string {
   return "";
 }
 
-/** 目录条目 → 候选模型：缓存命中价缺失就留空，不填估算值；缓存写入价不进计算，不展示。
+/** 目录条目 → 候选模型：缓存读/写价缺失就留空，不填估算值。
  *  国内条目取定价源抓来的人民币原价（list_cny/cache_cny），海外条目取美元原价，均不做汇率换算。 */
 function optionFromCatalog(key: string, entry: CatalogEntry): Option {
   const cn = entry.region === "cn";
@@ -62,13 +62,15 @@ function optionFromCatalog(key: string, entry: CatalogEntry): Option {
       input: (cn ? entry.list_cny?.input : entry.list?.input) ?? null,
       output: (cn ? entry.list_cny?.output : entry.list?.output) ?? null,
       cacheRead: (cn ? entry.cache_cny?.read : entry.cache?.read) ?? null,
+      cacheWrite: (cn ? entry.cache_cny?.write : entry.cache?.write) ?? null,
     },
     currency: cn ? "CNY" : entry.currency || "USD",
   };
 }
 
-/** 站点价记录 → 候选模型：只取输入/输出价，缓存价站点侧不落库，留空。
- *  同一站点同名模型可能按分组各有一条价：value 带上分组保证唯一，选中态才不会亮一排。 */
+/** 站点价记录 → 候选模型：缓存读/写价从记录 metadata 取（与 input/output 同币种同计价单位），
+ *  站点没给就留空。同一站点同名模型可能按分组各有一条价：value 带上分组保证唯一，
+ *  选中态才不会亮一排。 */
 function optionFromRecord(row: OverviewRecord): Option {
   const unit = row.unit || "";
   const group = row.metadata?.group ?? "";
@@ -79,7 +81,8 @@ function optionFromRecord(row: OverviewRecord): Option {
     prices: {
       input: row.input_price ?? null,
       output: row.output_price ?? null,
-      cacheRead: null,
+      cacheRead: row.metadata?.cache_read_price ?? null,
+      cacheWrite: row.metadata?.cache_create_price ?? null,
     },
     currency: unit.split("/")[0]?.trim().toUpperCase() || "",
   };
@@ -161,7 +164,7 @@ export function Calculator({
     return result;
   }, [prices]);
 
-  // 命中率留空回落 98%
+  // 命中率留空回落默认 96%
   const hitNum = parseHitRate(hitRate);
   const result = useMemo(
     () => calcCost(parsedPrices, { total: totalTokens, hitRate: hitNum }),
@@ -170,7 +173,7 @@ export function Calculator({
   // 命中价缺失时命中的 token 不计费，要在结果里挑明，免得总价被悄悄低估
   const missingCacheRead =
     parsedPrices.cacheRead == null && hitNum > 0 && totalTokens > 0;
-  // 至少填了一档单价才有得算：明细表三档常显，空态与导出按钮都以它为准
+  // 至少填了一档单价才有得算：明细表四档常显，空态与导出按钮都以它为准
   const anyPriced = hasAnyPrice(parsedPrices);
 
   const symbol = symbolOf(currency);
@@ -398,15 +401,17 @@ export function Calculator({
               value={hitRate}
               onChange={setHitRate}
               suffix={<span className="calc-affix is-right">%</span>}
-              placeholder="98"
+              placeholder="96"
             />
           </label>
         </div>
         <div className="calc-actions">
           <span className="calc-tip">{calculator.usageHint}</span>
         </div>
+        <div className="calc-actions">
+          <span className="calc-tip">{calculator.bucketAlias}</span>
+        </div>
       </div>
-
       {/* 结果 */}
       <div className="panel calc-block calc-result">
         <div className="calc-head">
@@ -462,7 +467,7 @@ export function Calculator({
                   <tbody>
                     {result.lines.map((line) => {
                       // 没填价的档：单价/小计/占比留空并标注「未计入」，用量照实展示，
-                      // 让三档用量加总与总用量对得上，占比失真的疑问在表内就有答案
+                      // 让各档用量加总与总用量对得上，占比失真的疑问在表内就有答案
                       const unbilled = line.subtotal === null;
                       return (
                         <tr key={line.key} style={unbilled ? { opacity: 0.55 } : undefined}>
