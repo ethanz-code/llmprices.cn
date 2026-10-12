@@ -41,10 +41,6 @@ interface Option {
 
 const BUCKET_LABEL = calculator.buckets;
 
-/** 单价分基础/高级两段：基础只留输入与输出，缓存两档收进「高级配置」减少干扰 */
-const BASIC_PRICE_KEYS: PriceKey[] = ["input", "output"];
-const ADVANCED_PRICE_KEYS: PriceKey[] = ["cacheRead", "cacheWrite"];
-
 /** 厂商分组默认露出的模型条数：超出部分折叠进「更多」，搜索时不限量 */
 const VENDOR_PREVIEW_COUNT = 5;
 
@@ -111,8 +107,6 @@ export function Calculator({
   const [hitRate, setHitRate] = useState(textOfNumber(initial.hitRate));
   const [outputShare, setOutputShare] = useState(textOfNumber(initial.outputShare));
   const [keyword, setKeyword] = useState("");
-  // 高级配置（缓存单价与两个拆分假设）默认收起，主流程只留输入/输出单价与总用量
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   // 厂商分组的展开状态：默认全部折叠，只露每家前几条；深链带着模型进来时自动展开其厂商
   const [expanded, setExpanded] = useState<Set<string>>(() => {
     const vendor = catalog?.models[initial.model]?.vendor;
@@ -380,15 +374,15 @@ export function Calculator({
         <div className="calc-head">
           <span className="calc-label">{calculator.priceTitle}</span>
         </div>
-        <div className="calc-grid" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-          {BASIC_PRICE_KEYS.map(renderPriceField)}
+        <div className="calc-grid">
+          {PRICE_KEYS.map(renderPriceField)}
         </div>
         <div className="calc-head" style={{ margin: "18px 0 0" }}>
           <span className="calc-label">{calculator.usageTotal}</span>
         </div>
         <div
           className="calc-grid"
-          style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
         >
           <label className="calc-field">
             <span className="calc-field-label">{calculator.usageSelect}</span>
@@ -417,65 +411,22 @@ export function Calculator({
               placeholder="96"
             />
           </label>
+          <label className="calc-field">
+            <span className="calc-field-label">{calculator.outputShare}</span>
+            <Input
+              value={outputShare}
+              onChange={setOutputShare}
+              suffix={<span className="calc-affix is-right">%</span>}
+              placeholder="0.4"
+            />
+          </label>
+        </div>
+        <div className="calc-actions">
+          <span className="calc-tip">{calculator.usageHint}</span>
+          <span className="calc-tip">{calculator.bucketAlias}</span>
         </div>
         <div className="calc-actions">
           <span className="calc-tip">{calculator.sourceNote}</span>
-        </div>
-
-        {/* 高级配置：缓存两档单价与用量拆分假设默认收起，避免主流程被口径细节淹没 */}
-        <div style={{ marginTop: 14 }}>
-          <button
-            type="button"
-            onClick={() => setAdvancedOpen((open) => !open)}
-            aria-expanded={advancedOpen}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 10px 4px",
-              border: "none",
-              background: "none",
-              font: "inherit",
-              fontSize: 12,
-              fontWeight: 550,
-              color: "var(--text-3)",
-              cursor: "pointer",
-            }}
-          >
-            {calculator.advanced}
-            <span>{advancedOpen ? calculator.advancedHide : calculator.advancedShow}</span>
-          </button>
-          {advancedOpen && (
-            <div
-              style={{
-                marginTop: 6,
-                paddingTop: 14,
-                borderTop: "1px solid var(--border)",
-              }}
-            >
-              <div className="calc-head" style={{ marginBottom: 10 }}>
-                <span className="calc-label">{calculator.advancedPriceTitle}</span>
-              </div>
-              <div className="calc-grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-                {ADVANCED_PRICE_KEYS.map(renderPriceField)}
-                <label className="calc-field">
-                  <span className="calc-field-label">{calculator.outputShare}</span>
-                  <Input
-                    value={outputShare}
-                    onChange={setOutputShare}
-                    suffix={<span className="calc-affix is-right">%</span>}
-                    placeholder="0.4"
-                  />
-                </label>
-              </div>
-              <div className="calc-actions">
-                <span className="calc-tip">{calculator.usageHint}</span>
-              </div>
-              <div className="calc-actions">
-                <span className="calc-tip">{calculator.bucketAlias}</span>
-              </div>
-            </div>
-          )}
         </div>
       </div>
       {/* 结果 */}

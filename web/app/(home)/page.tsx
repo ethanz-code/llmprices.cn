@@ -14,10 +14,14 @@ import { getSiteInfo, loadSiteHomepages, type SiteHomepages } from "@/lib/sites"
 import { canonicalModel, lowestPriceRowPerModel, orderByReleaseDesc } from "@/lib/priceRows";
 import { foldEvents } from "@/lib/events";
 import {
+  buildSiteViews,
+  chartToneVar,
   rateLevel,
   type RateLevel,
+  type SiteViews,
+  type UptimeBucket,
 } from "@/lib/channelStatus";
-import { loadLatestStatus, type SiteLatestStatus } from "@/lib/statusData";
+import { loadStatusViews } from "@/lib/statusData";
 import type {
   CatalogData,
   DiscountInfo,
@@ -59,8 +63,8 @@ interface LandingData {
   meta: MetaData | null;
   feed: FeedData | null;
   history: HistoryListData | null;
-  /** 各站此刻健康状况：只取每站最新一条检测快照算可用率，不拉 7 天全量历史 */
-  latestStatus: Record<string, SiteLatestStatus>;
+  /** 渠道检测视图（与站点详情页同口径，lib/statusData.ts 统一取数） */
+  statusViews: SiteViews;
   /** 站点 IP 归属地：服务端取好传给首屏地球，读接口封锁后浏览器不再直接调 */
   geo: Record<string, SiteGeo>;
   /** AA 榜单：首页速览用，拉取失败只影响榜单小节 */
@@ -83,13 +87,14 @@ async function loadLanding(): Promise<LandingData> {
     // 统一事件流（价格+公告已合并）；渠道检测拉取失败只影响星球与站点卡片，不阻塞整页
     // 在售监测集与首页数据共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求
     const overviewPromise = apiGet<OverviewData>("/api/overview");
-    const [overview, meta, feed, latestStatus, geo, rankings, catalog, history, homepages] = await Promise.all([
+    const [overview, meta, feed, statusViews, geo, rankings, catalog, history, homepages] = await Promise.all([
       overviewPromise,
       apiGet<MetaData>("/api/meta"),
       apiGet<FeedData>("/api/feed?events_limit=8&notice_limit=8").catch(() => null),
-      // 站点健康只取每站最新一条快照（整轮约 200KB）：完整 7 天历史是详情页的事，
-      // 首页曾经为此每站拉 400 条、整轮 40MB+，列表页不该背这个。
-      loadLatestStatus().catch(() => ({}) as Record<string, SiteLatestStatus>),
+      // 与站点检测详情页同口径（每站最近 400 条、近 7 天）：逐站拉取后合并成视图。
+      // 曾经全局 max_records 抽样按总 id 取模，站内密度失衡会丢渠道、漂移最新可用率，
+      // 与详情页对不上；口径收拢在 lib/statusData.ts，数字与详情页同源。
+      loadStatusViews(undefined, overviewPromise).catch(() => buildSiteViews([])),
       // 站点定位较慢（DNS + 归属地查询），失败只影响地球落点，不阻塞整页
       apiGet<{ geo: Record<string, SiteGeo> }>("/api/geo").catch(() => ({ geo: {} })),
       apiGet<RankingsData>("/api/rankings").catch(() => null),
@@ -99,14 +104,14 @@ async function loadLanding(): Promise<LandingData> {
       // 站点首页覆盖表：站名外链用（loadSiteHomepages 自带兜底，取不到返回空表）
       loadSiteHomepages(),
     ]);
-    return { overview, meta, feed, history, latestStatus, geo: geo.geo, rankings, catalog, homepages, error: null };
+    return { overview, meta, feed, history, statusViews, geo: geo.geo, rankings, catalog, homepages, error: null };
   } catch (cause) {
     return {
       overview: null,
       meta: null,
       feed: null,
       history: null,
-      latestStatus: {},
+      statusViews: buildSiteViews([]),
       geo: {},
       rankings: null,
       catalog: null,
@@ -154,19 +159,39 @@ function collectSites(overview: OverviewData | null, meta: MetaData | null) {
   }));
 }
 
-/** bento 小卡的微缩示例：三种能力各配一块「真实数据缩影」（调价 diff / 折扣条形），
- *  对应数据缺席时整块不渲染，卡片回落纯文案。探测色块示例取消——它要整段 7 天历史，
- *  与「首页不拉全量状态」相冲，7 天走势留给站点详情页。 */
+/** 静态可用率色块条：与详情页 StatusUptimeBars 同一套分桶与三档色（chartToneVar），
+ *  纯展示不带悬停——外层卡片本身可点进详情看交互版；不足 2 桶（数据太少）不渲染。 */
+function UptimeStrip({ buckets }: { buckets: (UptimeBucket | null)[] }) {
+  if (buckets.length < 2) return null;
+  return (
+    <span className="uptime-strip" aria-hidden>
+      {buckets.map((bucket, index) => (
+        <span
+          key={index}
+          className={`uptime-strip-slot${bucket ? "" : " is-empty"}`}
+          style={bucket ? { background: chartToneVar[rateLevel(bucket.avg)] } : undefined}
+        />
+      ))}
+    </span>
+  );
+}
+
+/** bento 小卡的微缩示例：三种能力各配一块「真实数据缩影」（调价 diff / 近 7 天探测色块 /
+ *  折扣条形），对应数据缺席时整块不渲染，卡片回落纯文案。 */
 function BentoDemo({
   kind,
   event,
   eventSite,
+  buckets,
+  bucketSite,
   discount,
   rate,
 }: {
   kind: keyof typeof BENTO_ICONS;
   event: EventRow | null;
   eventSite: string | null;
+  buckets: (UptimeBucket | null)[] | null;
+  bucketSite: string | null;
   discount: DiscountInfo | null;
   rate: number | null;
 }) {
@@ -201,8 +226,16 @@ function BentoDemo({
     );
   }
   if (kind === "monitor") {
-    // 探测色块示例取消：它要整段 7 天历史，首页不再拉；走势见站点详情页
-    return null;
+    if (!buckets || buckets.length < 2 || !bucketSite) return null;
+    return (
+      <div className="bento-demo" aria-hidden>
+        <span className="bento-demo-head">
+          <span className="bento-demo-site">{bucketSite}</span>
+          <span className="bento-demo-note">近 7 天探测</span>
+        </span>
+        <UptimeStrip buckets={buckets} />
+      </div>
+    );
   }
   // aim：折扣一眼看清 —— 真实行的输入/输出折扣条形（与总览表同一组件）
   if (!discount || (discount.input == null && discount.output == null)) return null;
@@ -214,7 +247,7 @@ function BentoDemo({
 }
 
 export default async function LandingPage() {
-  const { overview, meta, feed, history, latestStatus, geo, rankings, catalog, homepages, error } = await loadLanding();
+  const { overview, meta, feed, history, statusViews, geo, rankings, catalog, homepages, error } = await loadLanding();
   // JSON-LD 里的站点地址要绝对 URL，与 metadataBase 同一推导口径
   const origin = await siteOrigin();
   const records = overview?.records ?? [];
@@ -229,21 +262,30 @@ export default async function LandingPage() {
   const latestEventGroups = foldEvents(feed?.events ?? []).slice(0, LATEST_EVENTS_SHOWN);
   const historyRecords = history?.records ?? [];
 
-  // 站点此刻健康：只取每站最新一次检测的可用率（服务端已算好，首页不拉 7 天历史）；
-  // 深入走势交给站点详情页。阈值与详情页一致：可用率 80/60 三档
-  const latestBySite = latestStatus;
+  // 站点检测档案：可用率序列供星球悬停与行列表状态共用；
+  // 阈值与详情页一致：可用率 80/60 三档，延迟 1000/3000ms 三档
+  const siteViews = statusViews;
+  const availBySite = siteViews.availability;
+  const bucketsBySite = siteViews.uptimeBuckets;
   const globeSites: GlobeSite[] = sites.map((site) => {
-    const latest = latestBySite[site.id];
+    const series = availBySite[site.id] ?? [];
+    const latestPoint = series[series.length - 1];
+    // 节点百分比与详情页顶部时段色块同口径：最新一个时段区块的平均正常率
+    // （uptimeBuckets 由服务端用抽稀前的全量序列分桶，均值不受「保峰抽稀只留最差」影响）
+    const siteBuckets = bucketsBySite[site.id] ?? [];
+    const latestBucket = siteBuckets[siteBuckets.length - 1];
+    const availability = latestBucket ? latestBucket.avg : null;
     return {
       id: site.id,
       name: getSiteInfo(site.id, site.sourceUrl).name,
       models: site.models,
       enabled: site.enabled,
-      availability: latest?.pct ?? null,
-      down: latest?.down ?? 0,
-      checks: latest?.checks ?? 0,
+      availability,
+      down: latestPoint?.down.length ?? 0,
+      checks: series.length,
     };
   });
+  // 有检测档案但解析不出时间线的站点，文案与「未接入」区分开
 
   // 行列表（Statuspage 模式）：down 站排最前、warn 次之、无数据其后、停用垫底，封顶取前 SITE_ROW_MAX 行；
   // 平均可用率只算启用且有检测数据的站点，停用站的旧数据不掺进来
@@ -256,9 +298,9 @@ export default async function LandingPage() {
   };
   const rankOf = (site: (typeof sites)[number]) => {
     if (!site.enabled) return LEVEL_RANK.off;
-    const pct = latestBySite[site.id]?.pct;
-    if (pct == null) return LEVEL_RANK.none;
-    return LEVEL_RANK[rateLevel(pct)];
+    const latest = (availBySite[site.id] ?? []).slice(-1)[0];
+    if (!latest) return LEVEL_RANK.none;
+    return LEVEL_RANK[rateLevel(latest.pct)];
   };
   const orderedSites = [...sites].sort((a, b) => rankOf(a) - rankOf(b));
   const wallSites = orderedSites.slice(0, SITE_ROW_MAX);
@@ -279,7 +321,7 @@ export default async function LandingPage() {
   const parentRows = orderByReleaseDesc(lowestPriceRowPerModel(records, rate), releaseByModel);
 
   // bento 小卡微缩示例的数据（全部真实数据，缺席时对应示例不渲染）：
-  // 调价 diff 取最近一条带新旧输入价的调价事件；折扣取最新发布模型的行
+  // 调价 diff 取最近一条带新旧输入价的调价事件；探测色块每次刷新随机取一个有检测数据的站点；折扣取最新发布模型的行
   const demoEvent =
     (feed?.events ?? []).find(
       (event): event is EventRow =>
@@ -288,13 +330,18 @@ export default async function LandingPage() {
   const demoEventSite = demoEvent
     ? getSiteInfo(demoEvent.site_id, demoEvent.current?.source_url ?? demoEvent.previous?.source_url).name
     : null;
+  // 只取色块够画（≥2 桶）的启用站随机挑一个：force-dynamic 下每次请求重渲染，刷新即换示例
+  const demoBucketCandidates = sites.filter((site) => site.enabled && (bucketsBySite[site.id]?.length ?? 0) >= 2);
+  const demoBucketSite = demoBucketCandidates[Math.floor(Math.random() * demoBucketCandidates.length)] ?? null;
+  const demoBuckets = demoBucketSite ? (bucketsBySite[demoBucketSite.id] ?? null) : null;
+  const demoBucketName = demoBucketSite ? getSiteInfo(demoBucketSite.id, demoBucketSite.sourceUrl).name : null;
   const demoDiscount = parentRows[0]?.discount ?? null;
 
   // 快照表附加口径：站点三档状态点（与站点墙同一套）+ 数据新鲜度
   const siteLevelBySite: Record<string, RateLevel | null> = {};
   for (const site of sites) {
-    const pct = latestBySite[site.id]?.pct;
-    siteLevelBySite[site.id] = site.enabled && pct != null ? rateLevel(pct) : null;
+    const latest = (availBySite[site.id] ?? []).slice(-1)[0];
+    siteLevelBySite[site.id] = site.enabled && latest ? rateLevel(latest.pct) : null;
   }
   const snapshotAt = records.length > 0 ? Math.max(...records.map((row) => row.captured_at)) : null;
 
@@ -394,6 +441,8 @@ export default async function LandingPage() {
                       kind={item.icon}
                       event={demoEvent}
                       eventSite={demoEventSite}
+                      buckets={demoBuckets}
+                      bucketSite={demoBucketName}
                       discount={demoDiscount}
                       rate={rate}
                     />
@@ -511,9 +560,10 @@ export default async function LandingPage() {
                   {wallSites.map((site) => {
                     const info = getSiteInfo(site.id, site.sourceUrl);
                     const statusHref = `/overview/status/${encodeURIComponent(site.id)}`;
-                    const latest = latestBySite[site.id];
-                    const pct = site.enabled ? latest?.pct ?? null : null;
+                    const latest = (availBySite[site.id] ?? []).slice(-1)[0];
+                    const pct = site.enabled && latest ? latest.pct : null;
                     const level = pct != null ? rateLevel(pct) : null;
+                    const buckets = site.enabled ? (bucketsBySite[site.id] ?? []) : [];
                     return (
                       <Link
                         key={site.id}
@@ -540,8 +590,9 @@ export default async function LandingPage() {
                             {pct != null ? `${pct}%` : "—"}
                           </span>
                         </span>
+                        <UptimeStrip buckets={buckets} />
                         <span className="site-card-meta">
-                          {latest?.at != null
+                          {latest
                             ? `${formatTimeAgo(latest.at)}检测`
                             : site.enabled
                               ? home.empty.siteNoCheckRecord

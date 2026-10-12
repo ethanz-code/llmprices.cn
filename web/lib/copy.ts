@@ -87,7 +87,7 @@ export const home = {
   viewAll: "查看全部 →",
   viewAllEvents: "全部事件 →",
   submitSite: "提交站点，加入检测",
-  submitSiteDesc: "把站点地址填给我们，逐个核验通过后就开始检测。",
+  submitSiteDesc: "加企业微信客服，把站点发给我们，核验通过后就开始检测。",
   empty: {
     events: "还没有事件记录。",
     sites: "还没有站点数据。",
@@ -148,16 +148,10 @@ export const calculator = {
   /** 总用量快捷档位标签，与 lib/calculator.ts 的 TOKEN_PRESET_VALUES 按序对应 */
   tokenPresets: ["10M（一千万）", "100M（一亿）", "1B（十亿）"],
   hitRate: "缓存命中率",
-  /** 高级配置：输出占比输入框标签 */
+  /** 用量区输入框标签：输出占总用量的百分比 */
   outputShare: "输出占比",
-  /** 高级配置折叠开关标签（默认收起，把口径假设与缓存单价收进去） */
-  advanced: "高级配置",
-  advancedShow: "展开",
-  advancedHide: "收起",
-  /** 高级配置区的分组标题：缓存两档单价 + 用量拆分假设 */
-  advancedPriceTitle: "缓存单价与拆分假设",
   usageHint:
-    "输出占比决定多少 token 记在输出、多少记在输入；缓存命中率决定输入里多少从缓存读取、多少是首次写入缓存。",
+    "输出占比决定多少 token 记在输出、其余记在输入；缓存命中率决定输入里多少从缓存读取、多少是首次写入缓存（未命中部分默认按缓存写入算，没填缓存写入价则按输入价）。",
   /** 缓存两档在各家账单里的别名——叫法不统一，列出来免得对不上号 */
   bucketAlias:
     "缓存读取＝命中缓存（也叫缓存命中 / cached tokens）；缓存写入＝首次写入缓存（也叫缓存创建 / cache creation）。",
@@ -208,9 +202,9 @@ export const alerts = {
 /** 对外联系邮箱：页脚 mailto 用 */
 export const CONTACT_EMAIL = "service@llmprices.cn";
 
-/** 企业微信客服链接：在「企业微信 → 微信客服」后台获取，形如 https://work.weixin.qq.com/kfid/kfXXXX。
- *  填好后页脚与弹窗会出现「联系客服」入口，访客点开即可扫码直接对话；留空则只展示页脚二维码。 */
-export const CONTACT_WECOM_URL = "";
+/** 企业微信客服链接：访客「提建议」「提交站点」都直接打开这里对话（微信客服，手机扫码/电脑直接聊）。
+ *  改客服在「企业微信 → 微信客服」后台重新获取即可。 */
+export const CONTACT_WECOM_URL = "https://work.weixin.qq.com/kfid/kfc554611547f3878a8";
 
 /** 页脚 */
 export const footer = {
@@ -226,9 +220,9 @@ export const footer = {
     github: "GitHub 仓库",
     mail: "邮件联系",
   },
-  /** 企业微信二维码：直接平铺在页脚右列，替换 web/public/wecom-qr.png 即可生效 */
+  /** 企业微信二维码：直接平铺在页脚右列（企业联系人名片码，非客服），替换 web/public/wecom-qr.png 即可生效 */
   wecomQrSrc: "/wecom-qr.png",
-  /** 底部正文提及联系入口时的固定说法（弹窗里也在用） */
+  /** 客服入口的固定说法：页脚二维码旁、各处「找客服」文案共用 */
   wecomContact: "企业微信客服",
 };
 
