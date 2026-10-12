@@ -408,8 +408,9 @@ def _plain_number(value: Any) -> bool:
 def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
     """确定性解析 platforms/supported_models 结构，两种同族形态：
 
-    - totokens 型：pricing.final_prices 按分组展开的每 token 单价，×1,000,000 换算 CNY/1M tokens，
-      接口不标币种按系统约定回落人民币；input/output 齐全为 confirmed，缺一为 candidate。
+    - totokens 型：pricing.final_prices 按分组展开的每 token 单价，×1,000,000 换算 USD/1M tokens，
+      接口不标币种按 sub2api 系站内美元计费口径落美元（页面 $ 明码标价实锤）；input/output
+      齐全为 confirmed，缺一为 candidate。
     - sub2api channels/available 型：pricing 直接带每 token 的 input_price/output_price，
       sub2api 系证据格式为美元，组倍率是否已计入未标明，一律标 candidate 待复核。
     """
@@ -480,8 +481,8 @@ def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> 
                         if key in records:
                             continue
                         metadata = evidence(
-                            "platforms 定价接口直读：final_prices 每 token 单价 ×1,000,000 换算为 CNY/1M tokens；证据未标明币种，按人民币回退。",
-                            "CNY",
+                            "platforms 定价接口直读：final_prices 每 token 单价 ×1,000,000 换算为 USD/1M tokens；接口不标币种，按 sub2api 系站内美元计费口径落美元。",
+                            "USD",
                         )
                         metadata["group"] = group
                         metadata["group_ratio"] = entry.get("rate_multiplier")
@@ -493,7 +494,7 @@ def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> 
                             target.name,
                             input_price,
                             output_price,
-                            "CNY/1M tokens",
+                            "USD/1M tokens",
                             response_source_url,
                             time.time(),
                             metadata,

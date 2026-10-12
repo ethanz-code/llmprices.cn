@@ -4294,6 +4294,9 @@ def test_platform_pricing_records_parses_final_prices():
     assert record.price_status == "confirmed"
     assert record.input_price == pytest.approx(0.89)
     assert record.output_price == pytest.approx(5.34)
+    # sub2api 系站内计费为美元（页面 $ 明码标价），接口不标币种也落 USD，不再按人民币回退
+    assert record.unit == "USD/1M tokens"
+    assert record.metadata["currency"] == "USD"
     assert record.metadata["group_ratio"] == 0.178
     # 缓存读/写价与 input/output 同源同换算；写价站方标 null 落 None
     assert record.metadata["cache_read_price"] == pytest.approx(0.089)

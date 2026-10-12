@@ -11,7 +11,7 @@
 | 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
-| 价格 / 基准价 / 充值汇率 / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 | 本页 §3 |
+| 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 | 本页 §3 |
 | 骨架屏 / 暗色 / 表格 / 窄屏 / 响应式 / 内容超出框 / 横向滚动 / min-width | 本页 §4 |
 | panic / char boundary / code-frame / dev 半死 / 改文件不生效 | 本页 §4 |
 | 强制刷新 / 数据不更新 / 页面旧数据 / revalidate / no-store / 缓存 | 本页 §4 |
@@ -95,6 +95,9 @@
 | AI 别名把站上两个模型（deepseek-v4-flash / v4.1-flash）都列为官方名 deepseek-flash 的候选，`resolve_site_names` 第一趟按 payload 顺序挑一个写库标 confirmed，"宁缺勿猜"护栏被绕过；且同站同族模型排序一变就换人，价格差 40%——**第一趟多命中弃权后必须把歧义传递给第二趟，否则版本号省略兜底接着猜** | 第一趟命中数 >1 即弃权并禁走第二趟；弃权原因写进 failures 留痕（"站点同时挂着同族 N 个版本…"），管理台不再看到笼统的"未捕获响应"；实测三站（AIHub365/cun/123ai）deepseek-flash 全部如实 unavailable | matching.py `resolve_site_names`；adapters.py 留痕分支 |
 | 全站浏览器逐站对照（26 站×价格/公告/渠道状态）又揪出三个计价盲区，全是"JSON 里有、解析器没读"的同族坑：① 显式价与阶梯价数值是展示美元（定价页直显数），此前只有倍率路径乘充值汇率（cun deepseek 页显 $0.77、实付 ¥5.35，却按 0.77 入库标 CNY）；② `billing_multiplier` 是站方对计费表达式的折扣/加价系数（sudocode 0.2~2），漏乘把官方基准价当站价（标称 ¥9 现价实为 ¥4.5），误差最高 5 倍；③ billing_expr 里的官价率池子计费被当成站价（subrouter 表达式 p*10+c*50，站上挂牌 0.6=94% 折扣） | ① 显式价/阶梯价统一乘充值汇率，载荷自带 unit 的不折算；② tiered 分支乘 billing_multiplier 并落 metadata；③ 挂牌价（input_price/output_price）齐全时 tiered 让路走显式价，完整倍率对仍优先的语义不变；修后 AIHub365 渲染价与采集值逐分吻合（¥0.24/0.84=官方3折） | tracker.py `newapi_price_record`；提交 e45dd8d / fb0cf15 |
 | 对照方法论：26 站里 6 个站价格页有登录墙（01tree/totokens/DaiTuAI/1for/1xm/4router 访客 DOM 拿不到价），但**库里有登录态就能注入 Browser Use 真登录**（解码 JWT 确认 exp 在期再用，过期别自己刷 refresh——可能一次性轮换作废采集器手里的 RT）：01tree 注 localStorage `token` 单键，sub2api 系注入 `auth_token`/`refresh_token`/`token_expires_at`(毫秒)/`auth_user` 四键；真没账号的（1xm/4router/2coding）退而用页内 fetch 打同源接口对照——DOM 渲染的正是同一份数据；站方换模型阵容（134-175-71 下架 opus-5-5 系、2000lab 官转组倍率 1.0→1.1 当晚调价）属正常流失/调价，3 轮摘除与变更事件兜底，别当采集 bug 修 | 注入后 01tree/totokens/DaiTuAI/1for/2000lab 五站全部以登录态核对通过（01tree $10/50、totokens $16/80/缓存 1.6、DaiTuAI 官方×7 与分组倍率示例、1for Kiro 通道 0.3 倍率→1.5/7.5 全对）；对照锚点优先用站方自己的营销声明（AIHub365"官方3折"）与站内交叉证据（图片 price_table、页面计价规则文案） | 本次逐站对照记录（2026-10-10）；pricing.md 计价口径 |
+| 接口不标币种时拍脑袋回落 CNY 是第二次踩中（第一次见上上条「显式价是展示美元」）：totokens final_prices 分支「按人民币回退」入库 37 条全标错 CNY，折扣整体错 7.3 倍——**sub2api 系站内计费一律美元**（站内余额/今日消费 $ 明码），接口不声明币种落 USD，页面币种必须浏览器实锤后才能落别的币种 | platforms final_prices 分支改落 USD/1M tokens；趋势表存量 70 行 CNY 标注已 UPDATE 修正（数值没动，只修 unit 标注） | adapters.py `platform_pricing_records`；2026-10-12 采集异常清理记录 |
+| 订阅池转售真价被 sanity 误杀（totokens Haiku CC-MAX 组 14.9 USD=官价 149 倍，站方页面明码，两轮确认照作废）：20 倍上界防的是「提取事故」，但结构化 API 字段直采没有提取环节，只剩单位口径风险——错位量级是千倍/百万倍，**上界按价格来源分级**：直采（pricing_kind=explicit_price 且 adapter=network）放宽到 500，页面/AI 提取维持 20 | discount.py `SANITY_DIRECT_MAX_RATIO=500`；误杀的 totokens Haiku CC-MAX-纯血已恢复 confirmed | discount.py `sanity_violation`；test_catalog.py 分级测试 |
+| 续签失败报错刷屏先看最后一条时间再动手：1for/totokens/DaiTuAI/2000lab 四站 168 条「续签 401」全是 10-11 21:40 前的历史（当晚 21:44 主动续签上线后恢复），流水只增不清会长期挂着旧账 | 判「还在发生吗」看流水最新时间戳 + 解码库里 auth_token 的 JWT exp/iat；icodeeasy「公告 401」同款（10-09 换 token 前尾巴，带库内 token 实测 200） | 任务流水 documents.task_errors；token_refresh.py |
 
 ## 4. 前端
 

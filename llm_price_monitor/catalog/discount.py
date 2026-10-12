@@ -90,23 +90,32 @@ def build_discount(
 # 下界拦"两百万/1M tokens"这类放大百万倍的换算事故；0 元价不在数值上判真伪。
 SANITY_MIN_RATIO = 0.01
 SANITY_MAX_RATIO = 20.0
+# 结构化 API 字段直采（explicit_price + network adapter）无"提取"环节，只剩单位口径
+# 风险——错位量级是千倍/百万倍，上界放宽到 500 以放行订阅池转售真价（totokens CC-MAX
+# 组实测约 149 倍官价，站方页面明码），千倍以上的单位错位仍拦。
+SANITY_DIRECT_MAX_RATIO = 500.0
 
 
 def sanity_violation(row: dict[str, Any], official_models: dict[str, Any], rate: float) -> str | None:
     """价格合理性校验：站点价与厂商价的比例超出可信边界时返回中文原因，正常或无法判据返回 None。
 
     无法判据包括目录无该模型、站点无价；0 元价同样不拦——可能是真免费档，数值上分不清真伪。
+    结构化直采的价（pricing_kind=explicit_price 且 adapter=network）数值直接来自站方接口
+    字段，适用放宽上界；页面文本/AI 提取的价维持严格上界。
     """
     entry, _reason = build_discount(row, official_models, rate)
     if entry is None:
         return None
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    direct = str(metadata.get("pricing_kind") or "") == "explicit_price" and str(metadata.get("adapter") or "") == "network"
+    max_ratio = SANITY_DIRECT_MAX_RATIO if direct else SANITY_MAX_RATIO
     for label, ratio, site_price, official_price in (
         ("输入", entry.input_discount, entry.site_input_cny, entry.official_input_cny),
         ("输出", entry.output_discount, entry.site_output_cny, entry.official_output_cny),
     ):
         if ratio is None:
             continue
-        if ratio < SANITY_MIN_RATIO or ratio > SANITY_MAX_RATIO:
+        if ratio < SANITY_MIN_RATIO or ratio > max_ratio:
             return f"站点{label}价 {site_price} 为厂商价 {official_price} 的 {ratio:.0f} 倍，超出可信区间，判定为提取错误"
     return None
 

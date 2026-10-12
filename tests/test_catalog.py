@@ -113,6 +113,27 @@ def test_sanity_violation_flags_only_absurd_ratios():
     assert sanity_violation(_row(model="unknown-model"), OFFICIAL_MODELS, 6.74) is None
 
 
+def test_sanity_violation_relaxes_bound_for_direct_api_prices():
+    """结构化 API 直采（explicit_price + network）无提取环节，上界放宽：
+    totokens CC-MAX 订阅池真价（约 22 倍官价）放行，百万级单位错位仍拦；
+    同倍数的页面/AI 提取价维持严格上界。"""
+    direct = {"metadata": {"pricing_kind": "explicit_price", "adapter": "network"}}
+    # 约 22 倍：直采放行
+    assert sanity_violation(_row(input_price=741.0, output_price=3_705.0, **direct), OFFICIAL_MODELS, 6.74) is None
+    # 约 149 倍：仍在放宽界内（订阅池真价实锤区间）
+    assert sanity_violation(_row(input_price=94.0, output_price=564.0, **direct), OFFICIAL_MODELS, 6.74) is None
+    # 千倍级单位错位：直采也拦
+    reason = sanity_violation(_row(input_price=33_700.0, output_price=67_400.0, **direct), OFFICIAL_MODELS, 6.74)
+    assert reason and "输入" in reason
+    # 同样 22 倍但来自页面/AI 提取：维持严格上界拦下
+    extracted = {"metadata": {"pricing_kind": "page_table", "adapter": "browser_network"}}
+    reason = sanity_violation(_row(input_price=741.0, output_price=3_705.0, **extracted), OFFICIAL_MODELS, 6.74)
+    assert reason and "输入" in reason
+    # 无 metadata 的行按提取价口径处理
+    reason = sanity_violation(_row(input_price=741.0, output_price=3_705.0), OFFICIAL_MODELS, 6.74)
+    assert reason and "输入" in reason
+
+
 # ---------- modelsdev.fetch_catalog ----------
 
 def _provider(pid: str, name: str, doc: str, models: dict) -> dict:
