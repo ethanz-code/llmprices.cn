@@ -51,8 +51,9 @@ function symbolOf(currency: string): string {
 }
 
 /** 目录条目 → 候选模型：缓存读/写价缺失就留空，不填估算值。
- *  国内条目取定价源抓来的人民币原价（list_cny/cache_cny），海外条目取美元原价，均不做汇率换算。 */
-function optionFromCatalog(key: string, entry: CatalogEntry): Option {
+ *  国内条目取定价源抓来的人民币原价（list_cny/cache_cny），海外条目取美元原价，均不做汇率换算。
+ *  导出供单测直接钉住"哪一档取哪个字段"的接线。 */
+export function optionFromCatalog(key: string, entry: CatalogEntry): Option {
   const cn = entry.region === "cn";
   return {
     value: key,
@@ -71,8 +72,8 @@ function optionFromCatalog(key: string, entry: CatalogEntry): Option {
 
 /** 站点价记录 → 候选模型：缓存读/写价从记录 metadata 取（与 input/output 同币种同计价单位），
  *  站点没给就留空。同一站点同名模型可能按分组各有一条价：value 带上分组保证唯一，
- *  选中态才不会亮一排。 */
-function optionFromRecord(row: OverviewRecord): Option {
+ *  选中态才不会亮一排。导出供单测钉住接线。 */
+export function optionFromRecord(row: OverviewRecord): Option {
   const unit = row.unit || "";
   const group = row.metadata?.group ?? "";
   return {
@@ -380,9 +381,10 @@ export function Calculator({
         <div className="calc-head" style={{ margin: "18px 0 0" }}>
           <span className="calc-label">{calculator.usageTotal}</span>
         </div>
+        {/* 三格用量输入：auto-fit 自动折行，窄屏不必靠 .calc-grid 的固定列数（那套只服务四档单价） */}
         <div
           className="calc-grid"
-          style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
         >
           <label className="calc-field">
             <span className="calc-field-label">{calculator.usageSelect}</span>
@@ -445,6 +447,7 @@ export function Calculator({
               prices={parsedPrices}
               totalTokens={totalTokens}
               hitRate={hitNum}
+              outputShare={outputShareNum}
               result={result}
               missingCacheRead={missingCacheRead}
               disabled={!anyPriced}

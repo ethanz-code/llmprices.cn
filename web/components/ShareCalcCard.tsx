@@ -35,6 +35,7 @@ export function ShareCalcCard({
   prices,
   totalTokens,
   hitRate,
+  outputShare,
   result,
   missingCacheRead,
   domain,
@@ -52,6 +53,8 @@ export function ShareCalcCard({
   prices: CalcPrices;
   totalTokens: number;
   hitRate: number;
+  /** 输出占总用量百分比：与命中率一起标在 KPI 上，看图的人才知道这笔账按什么口径拆的 */
+  outputShare: number;
   result: CalcResult;
   /** 缓存命中价没填时命中的 token 不计费，图上要挑明，免得看图的人把总价当全量 */
   missingCacheRead: boolean;
@@ -144,8 +147,8 @@ export function ShareCalcCard({
         </span>
       </div>
 
-      {/* KPI：总价是主数，用量与命中率说明口径 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+      {/* KPI：总价是主数，用量与两个拆分假设说明口径 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
         {[
           {
             label: "预计总花费",
@@ -154,6 +157,7 @@ export function ShareCalcCard({
           },
           { label: "总用量", value: `${formatTokens(totalTokens)} tokens`, color: c.text },
           { label: "缓存命中率", value: `${hitRate}%`, color: c.text },
+          { label: "输出占比", value: `${outputShare}%`, color: c.text },
         ].map((kpi) => (
           <div
             key={kpi.label}
@@ -171,7 +175,8 @@ export function ShareCalcCard({
                 display: "block",
                 fontFamily: monoStack,
                 fontVariantNumeric: "tabular-nums",
-                fontSize: 28,
+                // 四格后每格变窄，「100M tokens」这类值按 28px 会顶到边；24px 留出余量
+                fontSize: 24,
                 fontWeight: 550,
                 letterSpacing: "-0.02em",
                 lineHeight: 1.2,

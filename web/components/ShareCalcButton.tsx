@@ -20,6 +20,7 @@ export function ShareCalcButton({
   prices,
   totalTokens,
   hitRate,
+  outputShare,
   result,
   missingCacheRead,
   disabled = false,
@@ -31,6 +32,8 @@ export function ShareCalcButton({
   prices: CalcPrices;
   totalTokens: number;
   hitRate: number;
+  /** 输出占总用量百分比：图上与命中率并列显示，标明这笔账的拆分口径 */
+  outputShare: number;
   result: CalcResult;
   missingCacheRead: boolean;
   /** 还没有可展示的花费结果（没填任何单价）时按钮置灰 */
@@ -103,6 +106,7 @@ export function ShareCalcButton({
           prices={prices}
           totalTokens={totalTokens}
           hitRate={hitRate}
+          outputShare={outputShare}
           result={result}
           missingCacheRead={missingCacheRead}
           domain={domain}
