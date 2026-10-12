@@ -11,47 +11,106 @@ async function freshModule() {
   return await import("@/lib/statusData");
 }
 
-/** 一条能让 channelStatus 解析出「一个正常渠道」的最新快照。 */
-const healthySnapshot = (site: string, at: number) => ({
-  site_id: site,
-  captured_at: at,
-  data: { channels: [{ name: "gpt-6", status: "up" }] },
-});
+/** 默认 mock：latest 一个站、逐站状态空、overview 空。 */
+function stubFetch(counter: { n: number }, onStatus?: (url: string) => Response | Promise<Response>) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.includes("/api/status/latest")) return json({ sudocode: {} });
+      if (url.includes("/api/status?")) {
+        counter.n += 1;
+        if (onStatus) return await onStatus(url);
+        return json({ records: [] });
+      }
+      return json({ records: [] });
+    }),
+  );
+}
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("loadLatestStatus", () => {
-  test("按站给出此刻可用率，且 TTL 内重复调用不再拉最新状态", async () => {
-    let calls = 0;
+describe("loadStatusViews 缓存", () => {
+  test("TTL 内重复调用不再拉状态接口", async () => {
+    const counter = { n: 0 };
+    stubFetch(counter);
+    const mod = await freshModule();
+
+    await mod.loadStatusViews();
+    const afterFirst = counter.n;
+    await mod.loadStatusViews();
+
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(counter.n).toBe(afterFirst); // 第二次命中缓存，没有新增请求
+  });
+
+  test("超过 TTL 先返回旧结果、后台再刷新（stale-while-revalidate）", async () => {
+    const counter = { n: 0 };
+    stubFetch(counter);
+    const mod = await freshModule();
+
+    const first = await mod.loadStatusViews();
+    const callsAfterFirst = counter.n;
+
+    // 用可调的 Date.now 快进时间戳判断 TTL 过期，避免假定时器干扰后台刷新
+    const realNow = Date.now;
+    let offset = 0;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow.call(Date) + offset);
+    offset = 6 * 60_000; // 越过 5 分钟 TTL
+
+    const stale = await mod.loadStatusViews();
+    expect(stale).toBe(first); // 先给旧结果，不阻塞本次请求
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(counter.n).toBeGreaterThan(callsAfterFirst); // 后台刷新确实发起了
+
+    const refreshed = await mod.loadStatusViews();
+    expect(refreshed).not.toBe(first); // 刷新落定后取到新结果，不会永远停在旧值
+    spy.mockRestore();
+  });
+
+  test("过期触发后台刷新时，紧随其后的请求仍拿旧值、不等刷新", async () => {
+    let slow = false;
+    const counter = { n: 0 };
+    stubFetch(counter, async () => {
+      if (slow) await new Promise((r) => setTimeout(r, 60));
+      return json({ records: [] });
+    });
+    const mod = await freshModule();
+
+    const realNow = Date.now;
+    let offset = 0;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow.call(Date) + offset);
+
+    const first = await mod.loadStatusViews();
+
+    slow = true;
+    offset = 6 * 60_000;
+    const a = await mod.loadStatusViews();
+    // 刷新还在飞时，紧接着的请求也必须立刻拿到旧值，而不是等它完成
+    const b = await mod.loadStatusViews();
+
+    expect(a).toBe(first);
+    expect(b).toBe(first);
+    spy.mockRestore();
+  });
+
+  test("现算失败会丢弃缓存，下一次重新计算、不会固化失败", async () => {
+    let bad = true;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("/api/status/latest")) {
-          calls += 1;
-          return json({ sudocode: healthySnapshot("sudocode", 1_700_000_000) });
-        }
-        return json({});
+        if (url.includes("/api/status/latest")) return json({ sudocode: {} });
+        if (url.includes("/api/status?")) return json({ records: [] });
+        // overview 记录里 model 缺失会在 buildMonitoredSets 抛错 → 现算整体失败
+        if (url.includes("/api/overview")) return json(bad ? { records: [{}] } : { records: [] });
+        return json({ records: [] });
       }),
     );
     const mod = await freshModule();
 
-    const first = await mod.loadLatestStatus();
-    expect(first.sudocode).toEqual({ pct: 100, down: 0, checks: 1, at: 1_700_000_000 });
-
-    const afterFirst = calls;
-    const second = await mod.loadLatestStatus();
-    expect(calls).toBe(afterFirst); // 命中缓存，没有再拉
-    expect(second).toBe(first);
-  });
-
-  test("最新状态接口失败时返回空表、不抛错", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("boom");
-      }),
-    );
-    const mod = await freshModule();
-    await expect(mod.loadLatestStatus()).resolves.toEqual({});
+    await expect(mod.loadStatusViews()).rejects.toThrow();
+    bad = false;
+    const views = await mod.loadStatusViews();
+    expect(views).toBeTruthy();
   });
 });

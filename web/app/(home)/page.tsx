@@ -32,7 +32,6 @@ import type {
   OverviewData,
   RankingsData,
 } from "@/lib/types";
-import { SiteSubmitButton } from "@/components/SiteSubmitModal";
 import { SectionRail } from "@/components/SectionRail";
 import { Reveal } from "@/components/Reveal";
 import { HeroType } from "@/components/HeroType";
@@ -552,7 +551,6 @@ export default async function LandingPage() {
               <div className="landing-section-title">
                 <h2>{home.sections.sites}</h2>
               </div>
-              <SiteSubmitButton label={home.submitSite} variant="text" />
             </div>
             <p className="landing-section-sub">{home.sectionSubs.sites}</p>
             {sites.length > 0 ? (
