@@ -132,6 +132,7 @@
 | 同一根因的第二种长相：长 nowrap 文本行（模型体检的 403 长报错）在 grid 里把隐式轨道撑到 11822px，整节冲出 860px 面板，行尾耗时列全被推出视野；行和文本都设了 `min-width: 0` 也救不回来——后代的内联尺寸贡献仍按内容算，文本截断（ellipsis）看着写了但没生效 | 给**容器那一层** grid 显式 `grid-template-columns: minmax(0, 1fr)`（实测行宽 11822→802、省略号才真正生效）；排查时在真页面里逐个元素临时改 `min-width`/`grid-template-columns` 看轨道回落，比读代码快 | 系统设置模型池体检实测 |
 | 组件修饰类用裸常用词（如 `empty`）静默继承全局同名工具类——globals.css 里有全局 `.empty { padding: 36px 0 }`，flex 子项被撑高 72px 溢出卡片，视觉上"多出几根悬挂灰条" | 修饰类避开裸常用词（改 `is-empty`）；或像 `.uptime-slot` 那样显式声明 `padding: 0` 压制。新增类名前先 grep globals.css 是否已有同名/同名单类 | 首页站点墙 uptime 色条实测 |
 | 给 space-between 行里的控件外包一层提示容器（如密钥框下的说明文字），宽度留在内层 Input 上：外层容器按内容自适应收缩，内层百分比宽度在里面靠左，输入框整体看着没贴右 | 宽度样式挪到最外层容器（弹性子项），内层全部 100% 跟随；对齐问题先看「宽度定在哪一层」 | 系统设置密钥框对齐实测 |
+| 站点自报的指标字段"有键"不等于"有数"：sub2api v2 监控（2btocken）的 `cache_read_tokens`/`cache_creation_tokens`/`token_count` 在整份响应里恒为 0 占位，只有 `cache_rate` 有值；按 `!= null` 判"站点报了这项"会把 0 占位当真实读数展示（渠道表显示"读 0 · 写 0"） | 判站点有没有报某计数指标用 `> 0` 而不是 `!= null`；站点状态里的缓存指标展示见 `channelStatus.cacheMetricText`（有非零读写才展示读写、否则退回命中率） | 站点检测渠道表加缓存读取/写入实测（2btocken 81 条 token 数全 0） |
 
 ## 5. 部署与运维
 

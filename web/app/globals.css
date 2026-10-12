@@ -5214,10 +5214,10 @@ a.event-card {
   padding-top: 2px;
 }
 
-/* 渠道状态详情页：表头 + 渠道名(含厂商/模型小字) | 当前状态(含近三轮小字) | 延迟·7日可用率 | 成功率·出字速度 | 可用记录条 | 正常次数 */
+/* 渠道状态详情页：表头 + 渠道名(含厂商/模型小字) | 当前状态(含近三轮小字) | 延迟·7日可用率 | 成功率·出字速度 | 缓存读取·缓存写入 | 可用记录条 | 正常次数 */
 .ch-row {
   display: grid;
-  grid-template-columns: minmax(110px, 200px) auto auto 1fr minmax(120px, 220px) auto;
+  grid-template-columns: minmax(110px, 200px) auto auto 1fr auto minmax(120px, 220px) auto;
   gap: 8px;
   align-items: center;
   padding: 5px 0;
@@ -5233,6 +5233,14 @@ a.event-card {
 
 /* 指标型渠道的 24h 成功率 · 出字速度列 */
 .ch-metrics {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* 站点自报的缓存读取/写入（或退化的命中率）列 */
+.ch-cache {
   justify-self: end;
   font-size: 12px;
   color: var(--text-2);
@@ -5282,6 +5290,7 @@ a.event-card {
 
 .ch-head .ch-lat,
 .ch-head .ch-metrics,
+.ch-head .ch-cache,
 .ch-head .ch-rate {
   font-size: 11px;
   color: var(--text-3);
@@ -5301,8 +5310,10 @@ a.event-card {
 
   .ch-row .ch-upt,
   .ch-row .ch-metrics,
+  .ch-row .ch-cache,
   .ch-head .ch-upt,
-  .ch-head .ch-metrics {
+  .ch-head .ch-metrics,
+  .ch-head .ch-cache {
     display: none;
   }
 }

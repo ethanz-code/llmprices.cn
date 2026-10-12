@@ -1,7 +1,7 @@
 /** 非对话渠道过滤：生图/生视频渠道不并入状态列表，先钉住。 */
 import { describe, expect, it } from "vitest";
 
-import { buildMonitoredSets, buildSiteViews, channelDotsBySite } from "@/lib/channelStatus";
+import { buildMonitoredSets, buildSiteViews, cacheMetricText, channelDotsBySite } from "@/lib/channelStatus";
 
 /** 造一条状态记录：items 里的渠道条目带 name + status。 */
 function record(siteId: string, items: { name: string; status: string }[]) {
@@ -95,6 +95,63 @@ describe("channelDotsBySite 指标型条目（无状态词，用成功率表达�
       { site_id: "demo", captured_at: 1760000000, data: { items: [{ name: "claude", success_rate: 97 }] } },
     ])["demo"];
     expect(rows.map((row) => [row.name, row.status, row.ok])).toEqual([["claude", "97.00%", true]]);
+  });
+});
+
+describe("channelDotsBySite 缓存读取/写入指标", () => {
+  it("指标型站点（sub2api v2 监控）：metrics 里的读取/写入 token 数与 0-1 命中率归一为百分数", () => {
+    const rows = channelDotsBySite([
+      { site_id: "demo", captured_at: 1760000000, data: { items: [
+        { platform: "openai", model: "gpt-5.6-sol", metrics: {
+          success_rate: 0.87,
+          cache_read_tokens: 1_280_000,
+          cache_creation_tokens: 48_000,
+          cache_rate: 0.8366,
+        } },
+      ] } },
+    ])["demo"];
+    const dot = rows[0].dots[0];
+    expect(dot.cacheRead).toBe(1_280_000);
+    expect(dot.cacheWrite).toBe(48_000);
+    expect(dot.cacheRate).toBeCloseTo(83.66);
+    // 行级同样带上，供不必逐点取用的展示
+    expect(rows[0].cacheRead).toBe(1_280_000);
+  });
+
+  it("状态词型站点（1for channel-monitors）：顶层百分数命中率，无读写拆分", () => {
+    const rows = channelDotsBySite([
+      { site_id: "demo", captured_at: 1760000000, data: { items: [
+        { id: 48, name: "ChatGPT-Plus", provider: "openai", primary_status: "degraded", cache_rate: 68.24 },
+      ] } },
+    ])["demo"];
+    const dot = rows[0].dots[0];
+    expect(dot.cacheRate).toBeCloseTo(68.24);
+    expect(dot.cacheRead).toBeUndefined();
+    expect(dot.cacheWrite).toBeUndefined();
+  });
+
+  it("站点未上报缓存指标时不凭空造值", () => {
+    const rows = channelDotsBySite([
+      record("demo", [{ name: "claude", status: "up" }]),
+    ])["demo"];
+    const dot = rows[0].dots[0];
+    expect(dot.cacheRead).toBeUndefined();
+    expect(dot.cacheWrite).toBeUndefined();
+    expect(dot.cacheRate).toBeUndefined();
+  });
+
+  it("展示文本：报了非零读写就展示「读 X · 写 Y」，否则退回命中率", () => {
+    expect(cacheMetricText({ status: "up", ok: true, cacheRead: 1_280_000, cacheWrite: 48_000, cacheRate: 84 }))
+      .toBe("读 1.3M · 写 48K");
+    // 只报读取没报写入时只展示读取
+    expect(cacheMetricText({ status: "up", ok: true, cacheRead: 2000 })).toBe("读 2K");
+    // token 数恒为 0 占位（2btocken 实测）时退回命中率
+    expect(cacheMetricText({ status: "up", ok: true, cacheRead: 0, cacheWrite: 0, cacheRate: 68.24 }))
+      .toBe("命中 68%");
+    // 1for 只报命中率
+    expect(cacheMetricText({ status: "deg" as string, ok: false, cacheRate: 92.5 })).toBe("命中 93%");
+    expect(cacheMetricText({ status: "up", ok: true })).toBeNull();
+    expect(cacheMetricText(undefined)).toBeNull();
   });
 });
 

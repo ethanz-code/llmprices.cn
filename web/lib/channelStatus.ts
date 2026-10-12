@@ -3,6 +3,7 @@
  * 这里按启发式找出「渠道名 + 状态」条目，供总览点阵与详情页共用；
  * 渠道自带的时间线（timeline/history 等）会并成该渠道的检测点序列。
  */
+import { formatTokens } from "./format";
 
 interface ChannelStatus {
   name: string;
@@ -12,6 +13,10 @@ interface ChannelStatus {
   model?: string;
   /** 站点自报的 7 日可用率（0–100） */
   availability7d?: number;
+  /** 站点自报的缓存指标：读取/写入 token 数（上报窗口累计）与缓存命中率（0–100）；缺省表示未提供 */
+  cacheRead?: number;
+  cacheWrite?: number;
+  cacheRate?: number;
 }
 
 /** 单个检测点：状态 + 检测时间（秒级时间戳，站点未提供时间时缺省）+ 自报延迟（ms）；
@@ -23,6 +28,10 @@ export interface ChannelDot {
   latency?: number;
   rate?: number;
   tps?: number;
+  /** 站点自报的缓存指标：缓存读取/写入 token 数与缓存命中率（0–100）；不上报的站点缺省 */
+  cacheRead?: number;
+  cacheWrite?: number;
+  cacheRate?: number;
 }
 
 /** 一个渠道的检测点序列（时间升序）。 */
@@ -249,6 +258,18 @@ const SUCCESS_RATE_KEYS = ["success_rate", "successRate"];
 const ERROR_RATE_KEYS = ["error_rate", "errorRate"];
 const TPS_KEYS = ["avg_tps", "tps"];
 const RECENT_RATES_KEYS = ["recent_success_rates", "recentSuccessRates"];
+/** 站点自报的缓存指标键：读取/写入 token 数（上报窗口累计）与缓存命中率（0–1 小数或百分数）。
+ *  sub2api v2 监控（2btocken）落在 metrics 容器里，1for 的 channel-monitors 是顶层百分数。 */
+const CACHE_READ_KEYS = ["cache_read_tokens", "cache_read", "cached_tokens", "cacheRead"];
+const CACHE_WRITE_KEYS = [
+  "cache_creation_tokens",
+  "cache_write_tokens",
+  "cache_create_tokens",
+  "cache_creation",
+  "cache_write",
+  "cacheWrite",
+];
+const CACHE_RATE_KEYS = ["cache_rate", "cache_hit_rate", "cacheRate"];
 /** 站点状态里无名的汇总桶（sub2api v2 监控把未单列模型并进 __other__），不是渠道行。 */
 const SENTINEL_NAMES = new Set(["__other__"]);
 
@@ -283,6 +304,27 @@ function recentRounds(obj: Record<string, unknown>): number[] {
   return [];
 }
 
+/** 渠道自报的缓存指标：读取/写入 token 数与缓存命中率（归一为 0–100 百分数）；缺项为 undefined。 */
+function findCacheMetrics(obj: Record<string, unknown>): Pick<ChannelDot, "cacheRead" | "cacheWrite" | "cacheRate"> {
+  const rate = findMetric(obj, CACHE_RATE_KEYS);
+  return {
+    cacheRead: findMetric(obj, CACHE_READ_KEYS),
+    cacheWrite: findMetric(obj, CACHE_WRITE_KEYS),
+    cacheRate: rate != null ? normalizeRate(rate) : undefined,
+  };
+}
+
+/** 缓存指标的展示文本：站点报了非零的读取/写入 token 数就展示「读 X · 写 Y」（上报窗口累计），
+ *  否则退回「命中 X%」（不少站点只报命中率，token 数恒为 0 占位）；都没报返回 null。 */
+export function cacheMetricText(dot: ChannelDot | undefined): string | null {
+  if (!dot) return null;
+  const read = dot.cacheRead != null && dot.cacheRead > 0 ? `读 ${formatTokens(dot.cacheRead)}` : null;
+  const write = dot.cacheWrite != null && dot.cacheWrite > 0 ? `写 ${formatTokens(dot.cacheWrite)}` : null;
+  if (read || write) return [read, write].filter(Boolean).join(" · ");
+  if (dot.cacheRate != null) return `命中 ${Math.round(dot.cacheRate)}%`;
+  return null;
+}
+
 /** 指标型渠道成功率三档：≥95 正常、≥80 偏低、更低异常。
  *  与站点级聚合的 rateLevel（80/60）口径不同：单渠道的成功率门槛理应更严。 */
 export function successRateLevel(rate: number): RateLevel {
@@ -307,7 +349,13 @@ function timelineDots(node: unknown): ChannelDot[] {
     const statusKey = findStatusKey(obj);
     if (!statusKey) continue;
     const status = String(obj[statusKey]);
-    dots.push({ status, ok: isUp(status), at: parseTime(TIME_KEYS.map((key) => obj[key]).find((v) => v != null)), latency: findLatency(obj) });
+    dots.push({
+      status,
+      ok: isUp(status),
+      at: parseTime(TIME_KEYS.map((key) => obj[key]).find((v) => v != null)),
+      latency: findLatency(obj),
+      ...findCacheMetrics(obj),
+    });
   }
   return dots;
 }
@@ -325,6 +373,7 @@ function collectChannels(node: unknown, fallback: string | null, depth: number, 
   if (statusKey) {
     const nameKey = NAME_KEYS.find((key) => typeof obj[key] === "string" || typeof obj[key] === "number");
     const status = String(obj[statusKey]);
+    const cache = findCacheMetrics(obj);
     own = {
       name: String(nameKey ? obj[nameKey] : (fallback ?? "渠道")),
       status,
@@ -332,7 +381,8 @@ function collectChannels(node: unknown, fallback: string | null, depth: number, 
       provider: typeof obj.provider === "string" ? obj.provider : undefined,
       model: typeof obj.primary_model === "string" ? obj.primary_model : typeof obj.model === "string" ? obj.model : undefined,
       availability7d: availabilityPct(obj.availability_7d, obj.availability),
-      dots: [{ status, ok: isUp(status), latency: findLatency(obj) }],
+      ...cache,
+      dots: [{ status, ok: isUp(status), latency: findLatency(obj), ...cache }],
     };
     if (!isNonChatChannel(own.name)) out.push(own);
   } else {
@@ -352,6 +402,7 @@ function collectChannels(node: unknown, fallback: string | null, depth: number, 
     if (rate != null && name != null && hasSamples && !SENTINEL_NAMES.has(name)) {
       const ok = successRateLevel(rate) === "ok";
       const status = `${rate.toFixed(2)}%`;
+      const cache = findCacheMetrics(obj);
       own = {
         name,
         status,
@@ -359,9 +410,10 @@ function collectChannels(node: unknown, fallback: string | null, depth: number, 
         provider: typeof obj.provider === "string" ? obj.provider : undefined,
         model: typeof obj.primary_model === "string" ? obj.primary_model : typeof obj.model === "string" ? obj.model : undefined,
         availability7d: availabilityPct(obj.availability_7d, obj.availability),
-        dots: [{ status, ok, latency: findLatency(obj), rate, tps: findMetric(obj, TPS_KEYS) }],
+        dots: [{ status, ok, latency: findLatency(obj), rate, tps: findMetric(obj, TPS_KEYS), ...cache }],
         successRate24h: summaryRate != null ? normalizeRate(summaryRate) : undefined,
         recentRates: rounds.length > 0 ? rounds : undefined,
+        ...cache,
       };
       if (!isNonChatChannel(own.name)) out.push(own);
     }
@@ -429,6 +481,9 @@ export function channelDotsBySite(
           latency: first.dots[0]?.latency,
           rate: first.dots[0]?.rate,
           tps: first.dots[0]?.tps,
+          cacheRead: first.dots[0]?.cacheRead,
+          cacheWrite: first.dots[0]?.cacheWrite,
+          cacheRate: first.dots[0]?.cacheRate,
         });
       }
       siteMap.set(name, dots);
@@ -449,6 +504,9 @@ export function channelDotsBySite(
         provider: first?.provider,
         model: first?.model,
         availability7d: first?.availability7d,
+        cacheRead: first?.cacheRead,
+        cacheWrite: first?.cacheWrite,
+        cacheRate: first?.cacheRate,
         successRate24h: first?.successRate24h,
         recentRates: first?.recentRates,
         dots: sorted,

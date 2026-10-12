@@ -7,11 +7,13 @@ import { StatusCharts } from "@/components/StatusCharts";
 import { StatusUptimeBars } from "@/components/StatusUptimeBars";
 import { ShareSiteButton } from "@/components/ShareSiteButton";
 import { ChartLegendProvider } from "@/components/ChartLegendContext";
+import { TermTip } from "@/components/TermTip";
 import { formatTime } from "@/lib/format";
 import {
   buildMonitoredSets,
   buildSiteViews,
   buildUptimeBuckets,
+  cacheMetricText,
   latencyLevel,
   rateLevel,
   successRateLevel,
@@ -321,6 +323,10 @@ export default async function StatusDetailPage({
                     <span>状态</span>
                     <span className="ch-lat">延迟 · 7日可用率</span>
                     <span className="ch-metrics">成功率 · 出字速度</span>
+                    <span className="ch-cache">
+                      缓存读取 · 缓存写入
+                      <TermTip term="cache_metrics" />
+                    </span>
                     <span className="ch-upt">可用记录</span>
                     <span className="ch-rate">正常次数</span>
                   </div>
@@ -405,6 +411,9 @@ export default async function StatusDetailPage({
                           ]
                             .filter(Boolean)
                             .join(" · ") || "—"}
+                        </span>
+                        <span className="mono ch-cache">
+                          {cacheMetricText(last) ?? "—"}
                         </span>
                         <span className="ch-upt">
                           <StatusUptimeBars buckets={uptimeBuckets} />
