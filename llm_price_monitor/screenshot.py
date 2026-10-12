@@ -90,7 +90,11 @@ def capture_screenshot(url: str, dest: Path, *, user_agent: str | None = None) -
         )
         context = browser.new_context(viewport=VIEWPORT, user_agent=user_agent) if user_agent else browser.new_context(viewport=VIEWPORT)
         page = context.new_page()
-        page.goto(url, timeout=SITE_SCREENSHOT_TIMEOUT_SECONDS * 1000, wait_until="domcontentloaded")
+        response = page.goto(url, timeout=SITE_SCREENSHOT_TIMEOUT_SECONDS * 1000, wait_until="domcontentloaded")
+        # 4xx/5xx 是报错页不是站点样子（如 api.* 子域根路径返回 404）：不当作有效截图，
+        # 保留上一张成功图；站点根路径恢复可用后下一轮自然补上
+        if response is not None and response.status >= 400:
+            raise PriceMonitorError(f"首页 {url} 返回 HTTP {response.status}，本次不更新截图")
         page.wait_for_timeout(int(RENDER_WAIT_SECONDS * 1000))
         dest.parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(tmp), type="png")
