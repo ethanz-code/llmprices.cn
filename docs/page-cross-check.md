@@ -17,14 +17,16 @@
    - 差一个组倍率/充值汇率倍数：页面展示的是基准价、计费才乘系数（HeyRoute 型：页面 $12 = 基准，库里 ¥157.68 = $12×组倍率 1.8×充值汇率 7.3）——在 notes 里写明语义即可，不算错。
    - 对不上且说不清倍数：采集口径有误，先修解析器再重采，别在配置里打补丁。
 4. 公告：打开公告入口（弹窗/公告页），正文与 `notice_records` 最新版本对照；页面有公告而库里空，先查公告腿 401（认证没配）与正文字段名（01tree description 键教训）。
+5. **渠道状态**：点开站点的 Channel Status / 监控页，看它实际调用的端点与渲染内容，和 `status.url` 配置对照——**别信老端点还活着**（sub2api 新版把 `/api/v1/channel-monitors` 留成空壳，页面走 `/api/v1/channel-monitor-v2/models`，2026-10-12 2btocken 实锤）。看页面还能量出对的语义：成功率是 0-1 小数还是百分数、首字耗时在哪个字段、无流量模型怎么标。
 
 ## 记录模板
 
 核查结论追加到文末「核查记录」，一行一站：
 
-`日期 | 站点 | 价格页(列表/广场) | 对照模型 | 页面价 | 库里价 | 结论(一致/差倍数已解释/已修) | 公告对照`
+`日期 | 站点 | 价格页(列表/广场) | 对照模型 | 页面价 | 库里价 | 结论(一致/差倍数已解释/已修) | 公告对照 | 渠道状态端点对照`
 
 ## 核查记录
 
 - 2026-10-12 | aheapi(HeyRoute) | 模型列表 /pricing | gpt-6-astra | 页面 $12.00/$60.00（Codex-Pro20x 组，标注 1.8x billing，美元基准价） | 库 ¥157.68/¥788.4 | 一致：页面是未乘组倍率的基准价，$12×1.8×充值汇率 7.3=¥157.68，四组逐分吻合 | 公告「Claude 系列已上架」与 /api/notice 一致；无渠道状态接口（perf/groups 均 404）
-- 2026-10-12 | 2btocken(MaxAPI) | 仅 Model Plaza（无模型列表，/models 是 API Key 网关接口） | gpt-6-astra | 页面 Your Price $4.50/$22.50（PRO池 0.25x） | 库 $4.50/$22.50（candidate） | 已修：初版按源码注释当「已含倍率」存了 $18，页面实锤 pricing 未含倍率，解析器补乘 rate_multiplier（0dd602d）后重采一致 | 公告腿已配 /api/v1/announcements（页面 Announcements 弹窗同源）
+- 2026-10-12 | 2btocken(MaxAPI) | 仅 Model Plaza（无模型列表，/models 是 API Key 网关接口） | gpt-6-astra | 页面 Your Price $4.50/$22.50（PRO池 0.25x） | 库 $4.50/$22.50（candidate） | 已修：初版按源码注释当「已含倍率」存了 $18，页面实锤 pricing 未含倍率，解析器补乘 rate_multiplier（0dd602d）后重采一致 | 公告腿已配 /api/v1/announcements（页面 Announcements 弹窗同源） | **渠道状态**：老 `/channel-monitors` 空壳（items 0），页面走 `/channel-monitor-v2/models?range=90m`（81 条，成功率嵌 metrics 且为 0-1 小数、首字耗时在 metrics.ttft.avg_ms、无流量模型 rate/error 双零）——已改配 v2 端点，前端补嵌套取值/归一/无样本过滤（8087a1a），站点页可用率 2%→25%、渠道 65→4 条真实行
+
