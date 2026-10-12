@@ -148,11 +148,22 @@ export const calculator = {
   /** 总用量快捷档位标签，与 lib/calculator.ts 的 TOKEN_PRESET_VALUES 按序对应 */
   tokenPresets: ["10M（一千万）", "100M（一亿）", "1B（十亿）"],
   hitRate: "缓存命中率",
+  /** 高级配置：输出占比输入框标签 */
+  outputShare: "输出占比",
+  /** 高级配置折叠开关标签（默认收起，把口径假设与缓存单价收进去） */
+  advanced: "高级配置",
+  advancedShow: "展开",
+  advancedHide: "收起",
+  /** 高级配置区的分组标题：缓存两档单价 + 用量拆分假设 */
+  advancedPriceTitle: "缓存单价与拆分假设",
   usageHint:
-    "按 AI Agent 实际用量拆分：输出约占 0.4%；输入里约 96% 从缓存读取（命中率可调），其余首次见到的内容默认按缓存写入计（没填写入价则按输入价）。",
+    "输出占比决定多少 token 记在输出、多少记在输入；缓存命中率决定输入里多少从缓存读取、多少是首次写入缓存。",
   /** 缓存两档在各家账单里的别名——叫法不统一，列出来免得对不上号 */
   bucketAlias:
     "缓存读取＝命中缓存（也叫缓存命中 / cached tokens）；缓存写入＝首次写入缓存（也叫缓存创建 / cache creation）。",
+  /** 默认值的出处：数值不是厂商官方口径，来自一份公开的单人实测样本，标明避免误读 */
+  sourceNote:
+    "默认输出占比 0.4%、命中率 96% 取自一份公开的 Claude Code 实测样本（单人 35 天 / 7.4 万轮，非厂商官方口径），可按自己的实际用量调整。",
   resultTitle: "花费结果",
   totalLabel: "合计",
   emptyResult: "填好单价和用量，这里就会显示花费。",
@@ -197,6 +208,10 @@ export const alerts = {
 /** 对外联系邮箱：页脚 mailto 用 */
 export const CONTACT_EMAIL = "service@llmprices.cn";
 
+/** 企业微信客服链接：在「企业微信 → 微信客服」后台获取，形如 https://work.weixin.qq.com/kfid/kfXXXX。
+ *  填好后页脚与弹窗会出现「联系客服」入口，访客点开即可扫码直接对话；留空则只展示页脚二维码。 */
+export const CONTACT_WECOM_URL = "";
+
 /** 页脚 */
 export const footer = {
   brandLine:
@@ -213,6 +228,8 @@ export const footer = {
   },
   /** 企业微信二维码：直接平铺在页脚右列，替换 web/public/wecom-qr.png 即可生效 */
   wecomQrSrc: "/wecom-qr.png",
+  /** 底部正文提及联系入口时的固定说法（弹窗里也在用） */
+  wecomContact: "企业微信客服",
 };
 
 /** 分享图 */

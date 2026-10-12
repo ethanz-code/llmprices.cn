@@ -36,13 +36,16 @@ export const DEFAULT_HIT_RATE = 96;
 export const TOKEN_PRESET_VALUES = [10_000_000, 100_000_000, 1_000_000_000] as const;
 export const DEFAULT_TOTAL_TOKENS: number = TOKEN_PRESET_VALUES[1];
 
-/** 输出占总用量 0.4%：agent 类实测口径（Claude Code 7.4 万轮约 0.44%），成本几乎全在输入。 */
-const OUTPUT_SHARE = 0.004;
+/** 输出占总用量默认 0.4%：参考一份公开的 Claude Code 实测样本（单人 35 天 / 7.4 万轮
+ *  约 0.44%），agent 类成本几乎全在输入；不是厂商官方口径，可在页面「高级配置」里改。 */
+export const DEFAULT_OUTPUT_SHARE = 0.4;
 
-/** 用量口径：一个总量（快捷档位）+ 缓存命中率，不按计费档分别填。 */
+/** 用量口径：一个总量（快捷档位）+ 两个拆分假设（缓存命中率、输出占比），不按计费档分别填。 */
 export interface CalcUsage {
   total: number | null;
   hitRate: number | null;
+  /** 输出占总用量百分比 0–100；缺省回落默认值（0.4） */
+  outputShare: number | null;
 }
 
 function finiteOrNull(value: number | null | undefined): number | null {
@@ -61,16 +64,24 @@ export function parseHitRate(text: string): number {
   return Math.min(100, Math.max(0, num));
 }
 
+/** 输出占比：空/负数按非法值回落默认值，超过 100 钳到 100。 */
+export function parseOutputShare(text: string): number {
+  const num = parseAmount(text);
+  if (num === null) return DEFAULT_OUTPUT_SHARE;
+  return Math.min(100, Math.max(0, num));
+}
+
 /** 总花费 = 缓存读取×读取价 + 缓存写入×写入价 + 未命中输入×输入价 + 输出×输出价。
- *  用量按 agent 实测口径拆分：输出占 0.4%，其余是输入池；输入池按命中率切两段——
+ *  用量按参考口径拆分：输出占 outputShare，其余是输入池；输入池按命中率切两段——
  *  命中段是从缓存读取的部分，未命中段是本次首次见到的内容，会写入缓存，所以默认按
  *  缓存写入计；站点没给缓存写入价时（多数站点缓存未命中就是普通输入价）回落按输入价计。
  *  四档固定返回：没填价的档 tokens 照常拆出，单价/小计/占比为 null——明细表据此
  *  照实展示该档用量并标注「未计入」，不让整行消失后占比看起来失真。 */
 export function calcCost(prices: CalcPrices, usage: CalcUsage): CalcResult {
   const hit = parseHitRate(usage.hitRate != null ? String(usage.hitRate) : "") / 100;
+  const outputShare = parseOutputShare(usage.outputShare != null ? String(usage.outputShare) : "") / 100;
   const totalTokens = positiveTokens(usage.total);
-  const outputTokens = totalTokens * OUTPUT_SHARE;
+  const outputTokens = totalTokens * outputShare;
   const inputTokens = totalTokens - outputTokens;
   const missTokens = inputTokens * (1 - hit);
   // 非命中输入：填了缓存写入价就按写入计，否则按输入价计——同一批 token，不重复计
@@ -144,6 +155,8 @@ export interface CalcState {
   totalTokens: number | null;
   /** 缓存命中率 0–100；缺省回落默认值（96） */
   hitRate: number | null;
+  /** 输出占总用量百分比 0–100；缺省回落默认值（0.4） */
+  outputShare: number | null;
 }
 
 export const EMPTY_PRICES: CalcPrices = {
@@ -166,6 +179,7 @@ export const EMPTY_STATE: CalcState = {
   prices: EMPTY_PRICES,
   totalTokens: DEFAULT_TOTAL_TOKENS,
   hitRate: DEFAULT_HIT_RATE,
+  outputShare: DEFAULT_OUTPUT_SHARE,
 };
 
 /** URL 参数名：短键，保证分享链接不至于过长。 */
@@ -177,6 +191,7 @@ const PARAM = {
   price: { input: "pi", output: "po", cacheRead: "pr", cacheWrite: "pw" },
   total: "t",
   hit: "h",
+  outputShare: "os",
 } as const;
 
 function compact(value: number | null): string | undefined {
@@ -201,10 +216,13 @@ export function encodeCalcState(state: CalcState): URLSearchParams {
   if (state.hitRate != null && state.hitRate !== DEFAULT_HIT_RATE) {
     params.set(PARAM.hit, String(state.hitRate));
   }
+  if (state.outputShare != null && state.outputShare !== DEFAULT_OUTPUT_SHARE) {
+    params.set(PARAM.outputShare, String(state.outputShare));
+  }
   return params;
 }
 
-/** query 参数 → 状态；总量只认快捷档位，命中率缺失回落默认值。 */
+/** query 参数 → 状态；总量只认快捷档位，命中率/输出占比缺失回落默认值。 */
 export function decodeCalcState(params: URLSearchParams): CalcState {
   const prices = { ...EMPTY_PRICES };
   for (const key of PRICE_KEYS) {
@@ -218,5 +236,6 @@ export function decodeCalcState(params: URLSearchParams): CalcState {
     prices,
     totalTokens: presetTotal(parseAmount(params.get(PARAM.total) ?? "")),
     hitRate: parseHitRate(params.get(PARAM.hit) ?? ""),
+    outputShare: parseOutputShare(params.get(PARAM.outputShare) ?? ""),
   };
 }
