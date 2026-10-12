@@ -62,8 +62,28 @@ export interface OverviewData {
   collect_status?: Record<string, SiteStatus>;
   /** 各站点最新公告（每站一条；没采集到公告的站点无键） */
   notices?: Record<string, { content: string; captured_at?: number | null }>;
-  /** 各站点配置信息完整度（0–3）：监控模型、认证凭证、附加采集地址各 1 分 */
+  /** 各站点配置信息完整度（0–3）：监控模型、认证凭证、附加采集地址各 1 分；兼容用途，站点综合分走 site_flags */
   site_completeness?: Record<string, number>;
+  /** 各站点配置标志（结构化）：站点综合分里「配置完整」一项的输入（见 lib/siteRanking） */
+  site_flags?: Record<string, SiteFlags>;
+}
+
+/** 站点采集配置的布尔标志（后端 /api/overview 下发），逐项表示该项是否已配置。 */
+export interface SiteFlags {
+  /** 价格接口（network.url） */
+  network: boolean;
+  /** 渠道状态接口 */
+  status: boolean;
+  /** 公告源（显式配置；留空时后端会按价格地址推导） */
+  notice: boolean;
+  /** 附加价格接口 */
+  networks: boolean;
+  /** 认证续签配置 */
+  token_refresh: boolean;
+  /** 站点首页地址 */
+  homepage: boolean;
+  /** 站点是否启用采集 */
+  enabled: boolean;
 }
 
 /** 单站点最近一次采集状态（后端 documents.collect_status，与 run_once/site_status_from_records 对齐）。 */

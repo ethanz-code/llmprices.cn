@@ -1,7 +1,7 @@
 """只读数据端点：首页总览、最新快照、历史、事件、meta、健康检查与内嵌文档。"""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,25 @@ from llm_price_monitor.report import summary_row
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import auth
 from llm_price_monitor.webapi.deps import catalog_models, is_admin, load_config, require_catalog_rate
+
+
+def site_config_flags(sites: Iterable[Any]) -> dict[str, dict[str, bool]]:
+    """各站采集配置的布尔标志：前端「站点综合分·配置完整」一项的输入，逐项表示是否已配置。
+
+    与 /api/overview 里的 site_completeness（只剩兼容用途）是两套口径，新增项以这份为准。
+    """
+    return {
+        site.id: {
+            "network": bool(site.network),
+            "status": bool(site.status),
+            "notice": bool(site.notice),
+            "networks": bool(site.networks),
+            "token_refresh": bool(site.token_refresh),
+            "homepage": bool(site.homepage),
+            "enabled": bool(site.enabled),
+        }
+        for site in sites
+    }
 
 
 def build_router(store: Store) -> APIRouter:
@@ -64,10 +83,14 @@ def build_router(store: Store) -> APIRouter:
             )
             for site in load_config(store).sites
         }
+        # 站点配置标志（结构化）：站点综合分里「配置完整」一项的输入，逐项布尔、前端定清单与权重。
+        # 与上面的 site_completeness 是两套口径（那一套只剩兼容用途），新增项以这份为准
+        site_flags = site_config_flags(load_config(store).sites)
         return {
             "records": records,
             "notices": notices,
             "site_completeness": site_completeness,
+            "site_flags": site_flags,
             # 汇率口径与折扣页一致：优先实时值（拉取失败回落官方价目录缓存并标注）
             "catalog": {
                 **meta,

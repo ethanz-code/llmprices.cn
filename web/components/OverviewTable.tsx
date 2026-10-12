@@ -13,6 +13,7 @@ import { TermTip } from "./TermTip";
 import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMinute, formatTime, noticeExcerpt, recordStatusKey, rowReason, statusMeta } from "@/lib/format";
 import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
+import { siteScoreRank, type SiteScore } from "@/lib/siteRanking";
 import { modelOrderCompare, type ModelOrderEntry } from "@/lib/modelOrder";
 import { rankingHit, type RankingHit } from "@/lib/rankings";
 import { DiscountBars } from "./DiscountBars";
@@ -26,6 +27,16 @@ const rowKeyOf = (row: OverviewRecord) =>
 
 /** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
 const ACTIVE_MODEL_KEY = "overview-active-model";
+
+/** 站点综合分悬停明细：总分 + 四项分项（0–100）。 */
+function siteScoreTitle(score: SiteScore): string {
+  const pct = (value: number) => Math.round(value * 100);
+  return [
+    `站点综合分 ${score.score.toFixed(1)} / 100`,
+    `价格 ${pct(score.price)} · 渠道稳定 ${pct(score.stability)} · 配置完整 ${pct(score.completeness)} · 公告新鲜 ${pct(score.notice)}`,
+    "价格按缓存加权实付成本算，分项越接近 100 越好。",
+  ].join("\n");
+}
 
 interface ModelGroup {
   /** 归一后的分组键：大小写/连字符等写法差异不产生重复的表 */
@@ -44,6 +55,7 @@ export function OverviewTable({
   rankingsIndex = {},
   modelOrder = {},
   siteHomepages,
+  siteScores = {},
 }: {
   data: OverviewData;
   /** AA 榜单匹配索引：给当前选中模型挂排名徽标；榜单未生成时缺省不显示 */
@@ -54,6 +66,8 @@ export function OverviewTable({
   modelOrder?: Record<string, ModelOrderEntry>;
   /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
   siteHomepages?: SiteHomepages;
+  /** 站点综合分（服务端算好，见 lib/siteRanking）：行排序主键，缺省退回按价格排 */
+  siteScores?: Record<string, SiteScore>;
 }) {
   const records = data.records;
   const router = useRouter();
@@ -123,10 +137,9 @@ export function OverviewTable({
     }
   }, [activeModel, modelReady, models]);
 
-  // 默认行序（智能排序）：综合价（输入 3 : 输出 1）乘可靠性系数，扣分只看数据滞后，
-  // 满档虚增 20%；点表头排序循环回"无排序"即回到此序。
-  // 渠道健康度不再参与排序——点阵改为进入视口后才由各行的懒加载组件单独取，
-  // 服务端排序阶段拿不到，排序也就不该为看不见的东西负责。
+  // 默认行序：站点综合分（价格/渠道稳定/配置完整/公告新鲜，服务端算好）高者在前，
+  // 同站或同分再按可靠性加权综合价（数据滞后扣分，满档虚增 20%）与折扣、抓取时间破平。
+  // 点表头排序循环回"无排序"即回到此序。
   const parentRows = useMemo(
     () =>
       smartOrderRows(
@@ -140,8 +153,9 @@ export function OverviewTable({
           return penalty / 3;
         },
         rate,
+        (row) => siteScoreRank(siteScores, row.site_id),
       ),
-    [active, rate],
+    [active, rate, siteScores],
   );
 
   const attentionSites = useMemo(() => {
@@ -150,22 +164,28 @@ export function OverviewTable({
       .map(([siteId, status]) => ({ siteId, ...status }) satisfies { siteId: string } & SiteStatus);
   }, [data.collect_status]);
 
-  // 公告按站点只在首行展示：同站点多分组行贴的是同一份公告，逐行重复只会制造噪音
-  const noticeRowKeys = useMemo(() => {
+  // 每站首行的行键：站点综合分与公告都只在首行展示——同站点多分组行贴的是同一个分/同一份公告，
+  // 逐行重复只会制造噪音
+  const firstRowKeys = useMemo(() => {
     const seenSites = new Set<string>();
-    const firstRowKeys = new Set<string>();
+    const keys = new Set<string>();
     for (const row of parentRows) {
       if (!seenSites.has(row.site_id)) {
         seenSites.add(row.site_id);
-        firstRowKeys.add(rowKeyOf(row));
+        keys.add(rowKeyOf(row));
       }
     }
-    return firstRowKeys;
+    return keys;
   }, [parentRows]);
 
   const columns: DColumn<OverviewRecord>[] = [
     {
-      title: "站点",
+      title: (
+        <>
+          站点
+          <TermTip term="site_score" />
+        </>
+      ),
       dataIndex: "site_id",
       // 不设固定宽度：与公告列一起平分剩余空间（两者都不设 width 即均分），
       // 避免公告在宽屏独吞剩余宽度、也避免窄屏挤压价格列；手机端由 mobileScrollX 兜底
@@ -179,11 +199,18 @@ export function OverviewTable({
         const tip = [reason, row.last_price_at != null ? `上次拿到数据：${formatTime(row.last_price_at)}` : null]
           .filter(Boolean)
           .join("\n") || undefined;
+        // 站点综合分只在每站首行显示（同站多分组行贴的是同一个分，逐行重复是噪音）
+        const score = firstRowKeys.has(rowKeyOf(row)) ? siteScores[row.site_id] : undefined;
         return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
             <RiskLink href={site.homepage || row.source_url} variant="site">
               <span className="mono">{site.name}</span>
             </RiskLink>
+            {score && (
+              <span className="mono" title={siteScoreTitle(score)} style={{ fontSize: 11, color: "var(--text-3)" }}>
+                {score.score.toFixed(1)}
+              </span>
+            )}
             {showTag && (
               <span title={tip}>
                 <ToneTag tone={meta.tone}>{meta.label}</ToneTag>
@@ -290,7 +317,7 @@ export function OverviewTable({
       mobileHide: true,
       render: (_v: unknown, row) => {
         const notice = data.notices?.[row.site_id];
-        if (!notice?.content || !noticeRowKeys.has(rowKeyOf(row))) return <span style={{ color: "var(--text-3)" }}>—</span>;
+        if (!notice?.content || !firstRowKeys.has(rowKeyOf(row))) return <span style={{ color: "var(--text-3)" }}>—</span>;
         const tip = [
           noticeExcerpt(notice.content, 6),
           notice.captured_at ? `发布于 ${formatTime(notice.captured_at)}` : null,

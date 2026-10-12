@@ -80,19 +80,26 @@ function reliabilityWeightedPrice(
   return blend * (1 + RELIABILITY_CAP * reliabilityDeficit);
 }
 
-/** 智能排序（总览表默认行序）：有价在前 → 可靠性加权综合价低的在前
- *  （综合价 × (1 + 20% × 归一化扣分)，扣分由调用方按渠道健康与数据滞后计算、0–1 归一，
- *  让渠道挂掉/数据过期的站点真实下沉，但最多让位 20% 不淹没价格信号）→
+/** 智能排序（总览表默认行序）：有价在前 → 站点综合分高者在前（传 rankOf 时，见 lib/siteRanking）
+ *  → 可靠性加权综合价低的在前（综合价 × (1 + 20% × 归一化扣分)，扣分由调用方按数据滞后计算、
+ *  0–1 归一，让数据过期的站点真实下沉，但最多让位 20% 不淹没价格信号）→
  *  折扣与抓取时间破平。规则价与确认价同等对待；点表头单列排序循环回"无排序"即回到此序。 */
 export function smartOrderRows(
   rows: OverviewRecord[],
   reliabilityDeficitOf: (row: OverviewRecord) => number,
   rate: number | null,
+  /** 站点综合分（0–100，越大越靠前）；缺省不退到站点分、按价格排 */
+  rankOf?: (row: OverviewRecord) => number,
 ): OverviewRecord[] {
   return [...rows].sort((a, b) => {
     const pricedA = hasUsablePrice(a);
     const pricedB = hasUsablePrice(b);
     if (pricedA !== pricedB) return pricedA ? -1 : 1;
+    if (pricedA && rankOf) {
+      const rankA = rankOf(a);
+      const rankB = rankOf(b);
+      if (rankA !== rankB) return rankB - rankA;
+    }
     if (pricedA) {
       const keyA = reliabilityWeightedPrice(a, reliabilityDeficitOf(a), rate);
       const keyB = reliabilityWeightedPrice(b, reliabilityDeficitOf(b), rate);
