@@ -1,5 +1,10 @@
 """模型名匹配：版本号省略关系的边界与歧义取舍。"""
-from llm_price_monitor.matching import canonical_target, resolve_site_names, version_omitted_match
+from llm_price_monitor.matching import (
+    canonical_target,
+    highest_same_family,
+    resolve_site_names,
+    version_omitted_match,
+)
 
 
 def test_version_omitted_match_accepts_name_without_version():
@@ -31,13 +36,24 @@ def test_resolve_site_names_prefers_exact_then_claims_once():
     assert resolved == {"deepseek-v4-flash": "deepseek-v4-flash"}
 
 
-def test_resolve_site_names_gives_up_when_two_versions_are_present():
+def test_resolve_site_names_takes_highest_version_for_versionless_target():
+    """deepseek-flash 对站点同族多版本时取最新那版（V4.1），不整组放弃。"""
     resolved = resolve_site_names(
         ["deepseek-v4-flash", "deepseek-v4.1-flash"],
         {"deepseek-flash": ("deepseek-flash",)},
     )
 
-    assert resolved == {}
+    assert resolved == {"deepseek-flash": "deepseek-v4.1-flash"}
+
+
+def test_highest_same_family_follows_new_release():
+    """新版上架（v5）自动顶上来，不必逐版往配置里加。"""
+    assert highest_same_family(["deepseek-v4.1-flash", "deepseek-v5-flash"], "deepseek-flash") == "deepseek-v5-flash"
+    assert highest_same_family(["deepseek-v4-flash", "deepseek-v4.1-flash"], "deepseek-flash") == "deepseek-v4.1-flash"
+    # 目标自己带版本号、或候选里混进了别的家族，都不猜
+    assert highest_same_family(["deepseek-v4-flash"], "deepseek-v4-flash") is None
+    assert highest_same_family(["glm-5.3-flash", "qwen4-max"], "deepseek-flash") is None
+    assert highest_same_family(["deepseek-flash", "deepseek-v4-flash"], "deepseek-flash") == "deepseek-v4-flash"
 
 
 def test_resolve_site_names_uses_ai_alias_before_version_rule():

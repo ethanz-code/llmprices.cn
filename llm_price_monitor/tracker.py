@@ -301,9 +301,11 @@ def newapi_denomination_from_status(status_payload: Any) -> dict[str, Any] | Non
     `price` 是站方「充值汇率」（1 美元额度卖多少人民币，充值页按它收款），
     `quota_per_unit` 是 1 美元额度对应的 quota；1 倍率 = 1e6/quota_per_unit 美元额度，
     实付人民币基准 = (1e6/quota_per_unit) × price。15 站实测双向验证：
-    price=1 的站（123ai/1-cnmz/4zapi）倍率×2 恰为人民币实付价；
+    price=1 且页面按人民币展示的站（123ai/1-cnmz）倍率×2 恰为人民币实付价；
     price=6.8 的 AIHub365 倍率×13.6 与站方「官方3折」标价、图片价表（¥0.2 = model_price×6.8）
     同时精确吻合。`usd_exchange_rate` 只是前端显示换算（1-cnmz 报 7.3 实收按 1），不能当基准。
+    `currency_type=USD`（4zapi）是另一回事：充值价 1 只说明 1 美元额度卖 1 元人民币，
+    定价页标的是美元，这时不再把倍率折成人民币。
     """
     data = status_payload.get("data") if isinstance(status_payload, dict) else None
     if not isinstance(data, dict):
@@ -315,10 +317,12 @@ def newapi_denomination_from_status(status_payload: Any) -> dict[str, Any] | Non
     ratio_base_price = 1e6 / quota_per_unit * topup_price
     if not 0.5 <= ratio_base_price <= 50:
         return None
+    display_currency = str(data.get("currency_type") or "").strip().upper()
     return {
         "ratio_base_price": round(ratio_base_price, 6),
         "quota_per_unit": quota_per_unit,
         "topup_cny_per_usd": topup_price,
+        "display_currency": display_currency or None,
         "source": "api_status",
     }
 
@@ -369,12 +373,19 @@ def newapi_price_record(
     elif not denomination_v2 and denomination:
         # v1 载荷不带计价声明，用 /api/status 的充值口径（price×quota_per_unit）修正基准；
         # AIHub365 实锤：默认按 ¥2 算会把它这类美元充值站的价格整体低算 6.8 倍。
-        ratio_base_price = float(denomination["ratio_base_price"])
+        # currency_type=USD 的站（4zapi）页面标的就是美元：倍率按 1 美元额度计，不乘充值价。
+        if str(denomination.get("display_currency") or "").upper() == "USD":
+            configured_currency = "USD"
+            configured_unit = "USD/1M tokens"
+            ratio_base_price = 1e6 / float(denomination["quota_per_unit"])
+        else:
+            ratio_base_price = float(denomination["ratio_base_price"])
     # 倍率价与显式价/阶梯价的量纲不同：倍率价按 基准价×倍率 折算，而 input_price、
     # pricing_rules.tiers 里的数值已经是"展示美元"（new-api 定价页直接显示的数），
     # 人民币实付 = 展示美元 × 充值汇率。v2 的显式价是 USD，乘 cny_rate；v1 未声明
     # 充值口径的站按 1 处理（历史口径）。载落数值自 带 unit 的（官方参考价）不折算。
     explicit_rate = currency_multiplier
+    # 页面按人民币标价时，展示美元 × 充值汇率才是实付；页面本身标美元（currency_type=USD）则不折算
     if not denomination_v2 and denomination and configured_currency == "CNY":
         explicit_rate = float(denomination["topup_cny_per_usd"])
     request_rules = item.get("request_rules")
@@ -446,6 +457,12 @@ def newapi_price_record(
                     metadata[field_name] = value * price_rate
             return PriceRecord(model, input_price * price_rate, output_price * price_rate if output_price is not None else None, explicit_unit or configured_unit, source_url, time.time(), metadata, "confirmed" if output_price is not None else "candidate")
     if model_ratio is not None:
+        # model_ratio=0 在 new-api 里表示该模型未定价/未启用（占位），不是"免费用它"：
+        # 曾按公式算成 0 元 confirmed 上架成假免费价（123ai-ai-wx grok-4.6/4.7 站方接口
+        # 返回 model_ratio=0 且定价页根本不展示）；真免费档是显式 0 价，不走倍率分支。
+        if model_ratio == 0:
+            metadata["pricing_kind"] = "ratio_zero_placeholder"
+            return PriceRecord(model, None, None, configured_unit, source_url, time.time(), metadata, "unavailable")
         global _RATIO_BASE_WARNED
         if denomination is None and not denomination_v2 and not _RATIO_BASE_WARNED:
             _RATIO_BASE_WARNED = True
@@ -463,6 +480,17 @@ def newapi_price_record(
             "cache_read_price": input_price * cache_ratio if cache_ratio is not None else None,
             "cache_create_price": input_price * create_cache_ratio if create_cache_ratio is not None else None,
         })
+        # 载荷带非标准字段 display_prices = 站方改过计费的 fork（heyroute/aheapi 实锤）：定价页把
+        # 「官方参考价」与「本站实收价」并排显示，而 group_ratio 是「Nx 计费」额度倍率、不是价格
+        # 折扣——标准倍率公式算出的恰是页面上被删除线划掉的参考价列，站方实收另有按充值/套餐汇率
+        # 现算的折扣（不在任何 JSON 里，公式不可复现）。不拦价（可能只是图片模型带展示价），但降为
+        # candidate 并留痕，交人工核对，避免再出现整站偏高数十倍还标 confirmed。
+        if isinstance(payload.get("display_prices"), (dict, list)) and payload.get("display_prices"):
+            metadata["review"] = (
+                "载荷含 display_prices（站方自有计价 fork），实收价可能不等于倍率价，待人工核对；"
+                "识别与处置见 docs/sites.md「站方自有计价站」"
+            )
+            return PriceRecord(model, input_price, output_price, configured_unit, source_url, time.time(), metadata, "candidate")
         return PriceRecord(model, input_price, output_price, configured_unit, source_url, time.time(), metadata, "confirmed")
     metadata["pricing_kind"] = "unavailable"
     return PriceRecord(model, None, None, configured_unit, source_url, time.time(), metadata, "unavailable")

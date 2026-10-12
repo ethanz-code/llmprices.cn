@@ -618,8 +618,8 @@ def test_network_pricing_matches_site_model_name_that_omits_version():
     assert "matched_model_name" not in by_model["glm-5.3-flash"].metadata
 
 
-def test_network_pricing_refuses_ambiguous_versionless_target():
-    """站点同时挂着 v4 与 v4.1 两版时，没版本号的目标不猜，宁可标 unavailable。"""
+def test_network_pricing_takes_highest_version_for_versionless_target():
+    """站点同时挂着 v4 与 v4.1 两版时，没版本号的目标取最新那版（v4.1）。"""
     spec = SiteSpec(
         id="demo",
         network={"url": "https://demo.test/pricing"},
@@ -633,17 +633,18 @@ def test_network_pricing_refuses_ambiguous_versionless_target():
             "group_ratio": {"default": 1},
             "data": [
                 {"model_name": "deepseek-v4-flash", "enable_groups": ["default"], "model_ratio": 0.125, "completion_ratio": 4},
-                {"model_name": "deepseek-v4.1-flash", "enable_groups": ["default"], "model_ratio": 0.125, "completion_ratio": 4},
+                {"model_name": "deepseek-v4.1-flash", "enable_groups": ["default"], "model_ratio": 0.5, "completion_ratio": 4},
             ],
         },
     }])
 
-    assert records[0].price_status == "unavailable"
-    assert records[0].input_price is None
+    assert records[0].price_status == "confirmed"
+    assert records[0].metadata["matched_model_name"] == "deepseek-v4.1-flash"
+    assert records[0].input_price == 1.0
 
 
 def test_network_pricing_prefers_exact_model_name_over_versionless_target():
-    """精确命中优先：带版本号的目标拿到自己的条目，没版本号的目标不能抢同一个条目。"""
+    """精确命中优先：带版本号的目标先认领自己的条目；没版本号的目标退到同族最高版本。"""
     spec = SiteSpec(
         id="demo",
         network={"url": "https://demo.test/pricing"},
@@ -657,6 +658,7 @@ def test_network_pricing_prefers_exact_model_name_over_versionless_target():
             "group_ratio": {"default": 1},
             "data": [
                 {"model_name": "deepseek-v4-flash", "enable_groups": ["default"], "model_ratio": 0.125, "completion_ratio": 4},
+                {"model_name": "deepseek-v4.1-flash", "enable_groups": ["default"], "model_ratio": 0.5, "completion_ratio": 4},
             ],
         },
     }])
@@ -664,8 +666,8 @@ def test_network_pricing_prefers_exact_model_name_over_versionless_target():
 
     assert by_model["deepseek-v4-flash"].price_status == "confirmed"
     assert by_model["deepseek-v4-flash"].input_price == 0.25
-    assert by_model["deepseek-flash"].price_status == "unavailable"
-    assert by_model["deepseek-flash"].input_price is None
+    assert by_model["deepseek-flash"].metadata["matched_model_name"] == "deepseek-v4.1-flash"
+    assert by_model["deepseek-flash"].input_price == 1.0
 
 
 def test_network_adapter_uses_ai_alias_before_newapi_calculation(monkeypatch):
@@ -3283,10 +3285,12 @@ def test_price_sanity_voids_absurd_extraction(tmp_path: Path, monkeypatch):
 
 def test_price_sanity_first_violation_kept_with_flag(tmp_path: Path, monkeypatch):
     """首轮异常不作废：这次采集到的价照常展示，只挂 sanity_suspect 待复核标记，
-    官方价目录自身带错（如厂商页提取列错位）时不误杀真数据。"""
+    官方价目录自身带错（如厂商页提取列错位）时不误杀真数据。
+    注：高倍端（站价 > 官价）现行由「折扣>100% 不展示」产品口径直接丢弃，故这里用
+    低价端（放大百万倍的换算事故）验两轮确认。"""
     rounds = [
         [PriceRecord("demo-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {"group": "default"})],
-        [PriceRecord("demo-model", 2_000_000, 6_000_000, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "default"})],
+        [PriceRecord("demo-model", 0.01, 0.02, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "default"})],
     ]
 
     def collect(*_args):
@@ -3302,17 +3306,34 @@ def test_price_sanity_first_violation_kept_with_flag(tmp_path: Path, monkeypatch
     run_once(config, store=store, client=httpx.Client())
 
     suspect = store.latest_all()["demo:demo-model:default"]
-    assert suspect["input_price"] == 2_000_000  # 本轮采集到的价原样展示
+    assert suspect["input_price"] == 0.01  # 本轮采集到的价原样展示
     assert suspect["price_status"] == "confirmed"
     assert "可信区间" in (suspect.get("metadata") or {}).get("sanity_suspect", "")
 
 
+def test_above_official_price_is_dropped_not_stored(tmp_path: Path, monkeypatch):
+    """站价高于官方价（折扣 > 100%）＝中转站比官价还贵、没有选择价值：不入快照。"""
+    def collect(*_args):
+        return [PriceRecord("demo-model", 200.0, 400.0, "CNY/1M tokens",
+                            "https://demo.test/pricing", 0, {"group": "default"})]
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_config(tmp_path)), encoding="utf-8")
+    store = Store(tmp_path / "monitor.db")
+    store.set_document("catalog", _sanity_catalog())  # 官方 33.7/202.2 CNY，200/33.7=5.9 倍
+    monkeypatch.setattr(NetworkAdapter, "collect", collect)
+    run_once(load_config(config_path), store=store, client=httpx.Client())
+
+    assert "demo:demo-model:default" not in store.latest_all()
+
+
 def test_price_sanity_rereads_catalog_each_site(tmp_path: Path, monkeypatch):
-    """sanity 判据每站现读：一轮采集中途目录修正后，后续站点不再被启动时的坏判据误杀。"""
+    """sanity 判据每站现读：一轮采集中途目录修正后，后续站点不再被启动时的坏判据误杀。
+    坏目录把官价抬到离谱，使站点价被算成"低到不可能"，验低价端两轮确认。"""
     bad_catalog = {
         "usd_cny_rate": 6.74,
         "models": {"demomodel": {"found": True, "currency": "USD",
-                                 "list": {"input": 0.003, "output": 0.006}, "source_url": "https://demo.test"}},
+                                 "list": {"input": 300.0, "output": 600.0}, "source_url": "https://demo.test"}},
     }
     good_catalog = {
         "usd_cny_rate": 6.74,
@@ -3341,7 +3362,7 @@ def test_price_sanity_rereads_catalog_each_site(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(NetworkAdapter, "collect", collect)
     run_once(load_config(config_path), store=store, client=httpx.Client())
 
-    # 首站 0.6 对坏判据 0.02 = 30 倍：首轮只挂待复核标记不作废，价照常入库
+    # 首站 0.6 对坏判据 2022 元 = 0.0003 倍：首轮只挂待复核标记不作废，价照常入库
     first = store.latest_all()["first:demo-model:default"]
     assert first["input_price"] == 0.6
     assert "可信区间" in (first.get("metadata") or {}).get("sanity_suspect", "")

@@ -7,12 +7,13 @@ HTML 页面内嵌价格表按结构特征识别，命中目标模型即确定性
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -401,8 +402,247 @@ def network_pricing_records(
             )
     return list(records.values())
 
+# ---------------------------------------------------------------------------
+# 站方自有计价 fork（heyroute 型「双列价格」）
+#
+# 少数 new-api fork 在 /api/pricing 顶层多带一个非标准字段 display_prices，定价页把
+# 「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示：
+#     实收价 = 参考价 × 分组折扣%，  参考价 = model_ratio × 2 / a
+#     折扣%  = floor( group_ratio × 100 × a / rate )   （下限 1）
+#   a    = 7（分组属 cn-models 时，站方前端 cnPriced 常量）否则 1
+#   rate = min(钱包充值汇率 wallet_recharge_rate, 套餐汇率 monthlyRate) × usdToLocal
+# 这三项都不在定价 JSON 里：汇率在 /api/user/topup/info、套餐在 /api/subscription/plans，
+# 由前端现算。所以标准倍率公式只会拿到**被划掉的参考价那一列**（整站偏高数十倍）。
+# 本解析器复刻该算法，2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证通过。
+# ---------------------------------------------------------------------------
+_CN_PRICED_GROUPS = frozenset({"cn-models"})
+# 站方前端的内部别名分组（不在 group_ratio 里、也不在定价页显示）→ 归一到真实分组
+_FORK_GROUP_ALIASES = {"cn-models": ("cn-models-ent",)}
+_DISPLAY_FORK_BASE_USD = 2.0  # 1 倍率 = $2/1M（与 new-api 定价页口径一致）
+
+
+def _resolve_fork_group(group: str, group_ratio: dict[str, Any]) -> str:
+    if group in group_ratio:
+        return group
+    for real, aliases in _FORK_GROUP_ALIASES.items():
+        if group in aliases:
+            return real
+    return group
+
+
+def looks_like_display_price_fork(payload: Any) -> bool:
+    """new-api 载荷 + 顶层非标准字段 display_prices = 自有计价 fork。"""
+    if not isinstance(payload, dict):
+        return False
+    display = payload.get("display_prices")
+    return bool(display) and isinstance(display, (dict, list)) and looks_like_newapi_pricing(payload)
+
+
+def _positive_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
+
+
+def _plan_days(plan: dict[str, Any]) -> float:
+    value = _positive_number(plan.get("duration_value")) or 1.0
+    unit = str(plan.get("duration_unit") or "month")
+    if unit == "day":
+        return value
+    if unit == "year":
+        return value * 365
+    if unit == "custom":
+        seconds = _positive_number(plan.get("custom_seconds"))
+        return max(1.0, math.ceil(seconds / 86400)) if seconds else 1.0
+    return value * 30  # month / 缺省
+
+
+def _display_fork_rates(
+    client: httpx.Client,
+    spec: SiteSpec,
+    user_agent: str,
+    timeout: float,
+    origin: str,
+    quota_per_unit: float,
+) -> list[float]:
+    """复刻站方前端的汇率候选：钱包充值汇率 + 套餐汇率；取不到返回空表。
+
+    站方前端对每个汇率各算一个折扣百分比，再取**百分比的最小值**（最便宜的那档）。
+    """
+    kwargs = build_request_kwargs(
+        EndpointRequest(url=origin), spec, user_agent, timeout, target="price"
+    )
+    rates: list[float] = []
+    try:
+        payload = client.get(f"{origin}/api/user/topup/info", **kwargs).json()
+    except Exception:
+        payload = None
+    info = payload.get("data") if isinstance(payload, dict) else None
+    info = info.get("data") if isinstance(info, dict) and isinstance(info.get("data"), dict) else info
+    if isinstance(info, dict):
+        wallet = _positive_number(info.get("wallet_recharge_rate"))
+        # overseas 市场按 1 计（本地货币 = 美元）；其余市场前端另有汇率函数，此处保守取 1
+        if wallet and wallet > 1:
+            rates.append(wallet)
+    try:
+        payload = client.get(f"{origin}/api/subscription/plans", **kwargs).json()
+    except Exception:
+        payload = None
+    plans = payload.get("data") if isinstance(payload, dict) else None
+    plans = plans.get("data") if isinstance(plans, dict) and isinstance(plans.get("data"), list) else plans
+    best = 0.0
+    for entry in plans if isinstance(plans, list) else []:
+        if not isinstance(entry, dict) or entry.get("temporarily_unavailable"):
+            continue
+        plan = entry.get("plan") if isinstance(entry.get("plan"), dict) else entry
+        price = _positive_number(plan.get("price_amount"))
+        total = _positive_number(plan.get("total_amount"))
+        if not price or not total or quota_per_unit <= 0:
+            continue
+        days = _plan_days(plan) if str(plan.get("quota_reset_period")) == "daily" else 1.0
+        best = max(best, total * days / quota_per_unit / price)
+    if best > 1:
+        rates.append(best)
+    return rates
+
+
+def display_fork_price_records(
+    spec: SiteSpec,
+    captured: list[dict[str, Any]],
+    *,
+    client: httpx.Client,
+    user_agent: str,
+    timeout: float,
+    resolved_aliases: dict[str, tuple[str, ...]] | None = None,
+) -> list[PriceRecord]:
+    """自有计价 fork 的确定性计价：实收价 = 参考价 × 分组折扣。"""
+    response = captured[0]
+    payload = response.get("payload")
+    source_url = str(response.get("url") or spec.network.get("url") or "")
+    if not isinstance(payload, dict) or not looks_like_display_price_fork(payload):
+        return network_pricing_records(spec, captured, resolved_aliases)
+    data = [value for value in payload.get("data", []) if isinstance(value, dict)]
+    group_ratio = payload.get("group_ratio") if isinstance(payload.get("group_ratio"), dict) else {}
+    denomination = _newapi_denomination(client, source_url, timeout)
+    quota_per_unit = _positive_number((denomination or {}).get("quota_per_unit")) or 500000.0
+    origin = _origin(source_url)
+    rates = _display_fork_rates(client, spec, user_agent, timeout, origin, quota_per_unit) if origin else []
+    if not rates:
+        return [
+            PriceRecord(
+                target.name, None, None, "USD/1M tokens", source_url, time.time(),
+                {
+                    "adapter": "network",
+                    "pricing_kind": "display_fork_unavailable",
+                    "group": group,
+                    "currency": "USD",
+                    "notes": "自有计价 fork 需要站方充值/套餐汇率才能算出实收价，本次未取到（/api/user/topup/info 与 /api/subscription/plans）",
+                    "network_evidence": [],
+                    "page_evidence": [],
+                },
+                "unavailable",
+            )
+            for target in spec.models for group in _fork_groups(data, target.name, resolved_aliases)
+        ]
+    accepted = {
+        target.name: (target.name, *(resolved_aliases or {}).get(target.name, ()))
+        for target in spec.models
+    }
+    matched = resolve_site_names(
+        [str(value.get("model_name", "")) for value in data if str(value.get("model_name", ""))],
+        accepted,
+    )
+    records: dict[str, PriceRecord] = {}
+    for target in spec.models:
+        site_name = matched.get(target.name)
+        if site_name is None:
+            continue
+        item = _newapi_item(data, site_name)
+        if item is None:
+            continue
+        for group in _fork_groups(data, target.name, {target.name: (site_name,)}, item=item):
+            effective = _resolve_fork_group(group, group_ratio)
+            multiplier = _positive_number(group_ratio.get(effective)) or 1.0
+            record = _display_fork_record(target.name, item, group, multiplier, rates, source_url, effective)
+            if record is not None:
+                records[f"{target.name}:{group}"] = record
+    if not records:
+        return network_pricing_records(spec, captured)
+    return list(records.values())
+
+
+def _fork_groups(
+    data: list[dict[str, Any]],
+    target_name: str,
+    resolved_aliases: dict[str, tuple[str, ...]] | None,
+    *,
+    item: dict[str, Any] | None = None,
+) -> list[str]:
+    if item is None:
+        names = {target_name.casefold(), *((resolved_aliases or {}).get(target_name) or ())}
+        item = next(
+            (v for v in data if str(v.get("model_name", "")).casefold() in {str(n).casefold() for n in names}),
+            None,
+        )
+    if not isinstance(item, dict):
+        return ["default"]
+    groups = [name for name in item.get("enable_groups", []) if isinstance(name, str) and name]
+    return list(dict.fromkeys(groups or ["default"]))
+
+
+def _display_fork_record(
+    model: str,
+    item: dict[str, Any],
+    group: str,
+    multiplier: float,
+    rates: list[float],
+    source_url: str,
+    effective_group: str | None = None,
+) -> PriceRecord | None:
+    model_ratio = _positive_number(item.get("model_ratio"))
+    if model_ratio is None:
+        return None
+    priced_group = effective_group or group
+    divisor = 7.0 if priced_group.casefold() in _CN_PRICED_GROUPS else 1.0
+    official = model_ratio * _DISPLAY_FORK_BASE_USD / divisor
+    # 站方前端对每个汇率各算一个折扣百分比，取最小值（最便宜那档）
+    percent = max(1.0, min(math.floor(multiplier * 100 * divisor / rate) for rate in rates))
+    input_price = round(official * percent / 100, 6)
+    completion_ratio = _positive_number(item.get("completion_ratio"))
+    output_price = round(input_price * (completion_ratio if completion_ratio else 1.0), 6)
+    cache_ratio = _positive_number(item.get("cache_ratio"))
+    create_ratio = _positive_number(item.get("create_cache_ratio"))
+    metadata: dict[str, Any] = {
+        "adapter": "browser_network",
+        "pricing_kind": "display_fork_price",
+        "group": group,
+        "group_ratio": multiplier,
+        "model_ratio": model_ratio,
+        "completion_ratio": completion_ratio,
+        "enable_groups": item.get("enable_groups", []),
+        "currency": "USD",
+        "display_fork_rates": rates,
+        "display_fork_percent": percent,
+        "notes": (
+            "自有计价 fork（heyroute 型）：实收价 = 参考价(model_ratio×2/a) × 分组折扣"
+            f" floor(组倍率×100×a/rate)，rate=充值/套餐汇率；本模型实收 = 参考价 {official} × {percent}%"
+        ),
+        "cache_read_price": round(input_price * cache_ratio, 6) if cache_ratio else None,
+        "cache_create_price": round(input_price * create_ratio, 6) if create_ratio else None,
+        "network_evidence": [],
+        "page_evidence": [],
+    }
+    return PriceRecord(model, input_price, output_price, "USD/1M tokens", source_url, time.time(), metadata, "confirmed")
+
+
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+
+
 def _plain_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
 
 
 def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
@@ -1265,6 +1505,12 @@ class NetworkAdapter:
             # 接口直采不做Headless自动回退：抓到空壳/风控页就按采集失败上报，
             # 需要浏览器渲染的站点由管理员显式切到「网页模式」（headless.enabled）
             return self._collect_from_html(spec, network, entry, client, timeout, user_agent, ai, response, captured)
+        if looks_like_display_price_fork(payload):
+            # 站方自有计价 fork（heyroute 型双列价格）：实收价 = 参考价 × 分组折扣，
+            # 折扣按站方充值/套餐汇率现算 → 专门解析，不能走标准倍率公式（会偏高数十倍）
+            return display_fork_price_records(
+                spec, [captured], client=client, user_agent=user_agent, timeout=timeout
+            )
         if looks_like_newapi_pricing(payload):
             denomination = _newapi_denomination(client, str(response.url), timeout)
             direct_records = network_pricing_records(spec, [captured], denomination=denomination)

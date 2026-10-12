@@ -110,6 +110,45 @@ def test_newapi_regular_ratio_applies_group_and_cache_multipliers():
     assert record.unit == "CNY/1M tokens"
 
 
+def test_newapi_zero_model_ratio_is_placeholder_not_free():
+    """model_ratio=0 是占位（未定价/未启用），不能算成 0 元免费价。"""
+    payload = {
+        "group_ratio": {"default": 1},
+        "data": [{
+            "model_name": "grok-4.7",
+            "enable_groups": ["default"],
+            "model_ratio": 0,
+            "completion_ratio": 0,
+        }],
+    }
+
+    record = newapi_price_record(payload, "grok-4.7", "https://x.test/api/pricing", group="default")
+
+    assert record.input_price is None
+    assert record.output_price is None
+    assert record.price_status == "unavailable"
+
+
+def test_newapi_display_prices_fork_marked_candidate_for_review():
+    """载荷带非标准 display_prices（站方自有计价 fork，heyroute 型）时降为 candidate 并留痕。"""
+    payload = {
+        "group_ratio": {"grok": 1},
+        "display_prices": {"grok-imagine-image": {"": {"CNY": 0.14, "USD": 0.02}}},
+        "data": [{
+            "model_name": "grok-4.7",
+            "enable_groups": ["grok"],
+            "model_ratio": 1,
+            "completion_ratio": 3,
+        }],
+    }
+
+    record = newapi_price_record(payload, "grok-4.7", "https://heyroute.test/api/pricing", group="grok")
+
+    assert record.input_price == 2.0
+    assert record.price_status == "candidate"
+    assert "display_prices" in record.metadata["review"]
+
+
 def test_newapi_missing_group_ratio_is_not_inferred_from_other_fields():
     """group_ratio 未覆盖的分组不再从 group_definitions / first_topup_offer 静默推断倍率。"""
     payload = {
@@ -142,9 +181,14 @@ def test_newapi_denomination_from_status_derives_topup_base():
         "ratio_base_price": 13.6,
         "quota_per_unit": 500000,
         "topup_cny_per_usd": 6.8,
+        "display_currency": None,
         "source": "api_status",
     }
     assert newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 1}})["ratio_base_price"] == 2.0
+    usd = newapi_denomination_from_status(
+        {"data": {"quota_per_unit": 500000, "price": 1, "currency_type": "USD"}}
+    )
+    assert usd is not None and usd["display_currency"] == "USD"
 
 
 def test_newapi_denomination_from_status_rejects_missing_or_absurd_values():
@@ -175,6 +219,29 @@ def test_newapi_ratio_price_applies_topup_denomination():
     assert record.metadata["ratio_base_price"] == 13.6
     assert record.metadata["denomination"]["topup_cny_per_usd"] == 6.8
     assert record.metadata["cache_read_price"] == pytest.approx(0.24 * 0.2875, abs=1e-6)
+
+
+def test_newapi_usd_display_keeps_dollar_prices():
+    """4zapi：currency_type=USD，充值价 1 只是卖额度的人民币，页面标的是美元，不能折成人民币。"""
+    payload = {
+        "data": [{
+            "model_name": "gpt-6-luna", "model_ratio": 0.00325,
+            "completion_ratio": 5, "cache_ratio": 0.1,
+        }],
+        "group_ratio": {"default": 1},
+    }
+    denomination = newapi_denomination_from_status(
+        {"data": {"quota_per_unit": 500000, "price": 1, "currency_type": "USD"}},
+    )
+
+    record = newapi_price_record(
+        payload, "gpt-6-luna", "https://4zapi.test/api/pricing", group="default", denomination=denomination,
+    )
+
+    assert record.unit == "USD/1M tokens"
+    assert record.input_price == pytest.approx(0.0065, abs=1e-6)
+    assert record.output_price == pytest.approx(0.0325, abs=1e-6)
+    assert record.metadata["currency"] == "USD"
 
 
 def test_newapi_explicit_and_tiered_prices_scale_by_topup_rate():

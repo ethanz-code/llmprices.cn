@@ -96,6 +96,25 @@ SANITY_MAX_RATIO = 20.0
 SANITY_DIRECT_MAX_RATIO = 500.0
 
 
+# 产品口径（与上面的提取校验分开）：站点价折合后**高于官方价**（折扣 > 100%）对用户没有
+# 参考意义——「比官价还贵」中转站没有选择价值。这类行不展示、采集侧也不入快照。
+# 判定要有官方基准才成立：目录没收录/没价的条目无法比较，放行。
+ABOVE_OFFICIAL_MAX_RATIO = 1.0
+
+
+def above_official(row: dict[str, Any], official_models: dict[str, Any], rate: float) -> bool:
+    """站点价折算 CNY 后是否高于官方价（输入/输出任一轴折扣 > 100% 即为真）。无基准返回 False。"""
+    if not official_models or rate is None:
+        return False
+    entry, _reason = build_discount(row, official_models, rate)
+    if entry is None:
+        return False
+    for ratio in (entry.input_discount, entry.output_discount):
+        if isinstance(ratio, (int, float)) and ratio > ABOVE_OFFICIAL_MAX_RATIO:
+            return True
+    return False
+
+
 def sanity_violation(row: dict[str, Any], official_models: dict[str, Any], rate: float) -> str | None:
     """价格合理性校验：站点价与厂商价的比例超出可信边界时返回中文原因，正常或无法判据返回 None。
 

@@ -112,8 +112,17 @@ def attach_catalog_discounts(output: dict[str, Any], catalog_report: dict[str, A
                 "rate_source": rate_source,
                 "generated_at": catalog_report.get("generated_at_iso"),
             })
+            kept: list[dict[str, Any]] = []
             for row in output["records"]:
                 entry, _reason = catalog_discount.build_discount(summary_row(row), models, rate)
+                # 站价高于官方价（折扣 > 100%）不展示：与采集侧同一口径
+                if entry is not None and any(
+                    isinstance(value, (int, float)) and value > catalog_discount.ABOVE_OFFICIAL_MAX_RATIO
+                    for value in (entry.input_discount, entry.output_discount)
+                ):
+                    continue
                 row["discount"] = entry.as_dict() if entry is not None else None
+                kept.append(row)
+            output["records"] = kept
     output["catalog"] = context
     return output

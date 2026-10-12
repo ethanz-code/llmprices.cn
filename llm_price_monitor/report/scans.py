@@ -9,6 +9,7 @@ import httpx
 
 from llm_price_monitor import tasklog
 from llm_price_monitor.adapters import NetworkAdapter
+from llm_price_monitor.catalog.discount import above_official
 from llm_price_monitor.config import AuthRequiredError, MonitorConfig, PriceMonitorError, SiteSpec
 from llm_price_monitor.status import diff_status
 from llm_price_monitor.store import Store, latest_key, latest_site_prefix, split_latest_key
@@ -204,6 +205,17 @@ def _scan_prices(
             current = _apply_price_sanity(
                 _backfill_rule_price(record_dict(spec.id, record)), sanity_models, sanity_rate, previous, sanity_state, key
             )
+            # 站价折合后高于官方价（折扣 > 100%）：中转站比官价还贵，对用户没有选择价值 →
+            # 不入快照、不展示（显式摘除该 key，且不走"沿用旧价"分支，免得旧高价又挂回来）
+            if _has_price(current) and above_official(current, sanity_models, sanity_rate):
+                tasklog.emit(
+                    f"[{spec.id}] {record.model} 站价高于官方价（折扣>100%），按无参考意义丢弃",
+                    "info",
+                )
+                latest.pop(key, None)
+                touched_keys.add(key)
+                removed_keys.add(key)
+                continue
             if not _has_price(current):
                 if previous is None or not _has_price(previous):
                     # 本次没拿到数据、上次也没有可用价：不新增占位记录，避免快照与历史重复膨胀

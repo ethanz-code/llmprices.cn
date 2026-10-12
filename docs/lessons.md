@@ -11,7 +11,7 @@
 | 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
-| 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 | 本页 §3 |
+| 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 / 双列价格 / 删除线 / 官方价X% / display_prices / 自定义计费 / 高于官价 / 折扣>100% / 比官价还贵 | 本页 §3 |
 | 骨架屏 / 暗色 / 表格 / 窄屏 / 响应式 / 内容超出框 / 横向滚动 / min-width | 本页 §4 |
 | panic / char boundary / code-frame / dev 半死 / 改文件不生效 | 本页 §4 |
 | 强制刷新 / 数据不更新 / 页面旧数据 / revalidate / no-store / 缓存 | 本页 §4 |
@@ -102,6 +102,8 @@
 | 接口不标币种时拍脑袋回落 CNY 是第二次踩中（第一次见上上条「显式价是展示美元」）：totokens final_prices 分支「按人民币回退」入库 37 条全标错 CNY，折扣整体错 7.3 倍——**sub2api 系站内计费一律美元**（站内余额/今日消费 $ 明码），接口不声明币种落 USD，页面币种必须浏览器实锤后才能落别的币种 | platforms final_prices 分支改落 USD/1M tokens；趋势表存量 70 行 CNY 标注已 UPDATE 修正（数值没动，只修 unit 标注） | adapters.py `platform_pricing_records`；2026-10-12 采集异常清理记录 |
 | 订阅池转售真价被 sanity 误杀（totokens Haiku CC-MAX 组 14.9 USD=官价 149 倍，站方页面明码，两轮确认照作废）：20 倍上界防的是「提取事故」，但结构化 API 字段直采没有提取环节，只剩单位口径风险——错位量级是千倍/百万倍，**上界按价格来源分级**：直采（pricing_kind=explicit_price 且 adapter=network）放宽到 500，页面/AI 提取维持 20 | discount.py `SANITY_DIRECT_MAX_RATIO=500`；误杀的 totokens Haiku CC-MAX-纯血已恢复 confirmed | discount.py `sanity_violation`；test_catalog.py 分级测试 |
 | 续签失败报错刷屏先看最后一条时间再动手：1for/totokens/DaiTuAI/2000lab 四站 168 条「续签 401」全是 10-11 21:40 前的历史（当晚 21:44 主动续签上线后恢复），流水只增不清会长期挂着旧账 | 判「还在发生吗」看流水最新时间戳 + 解码库里 auth_token 的 JWT exp/iat；icodeeasy「公告 401」同款（10-09 换 token 前尾巴，带库内 token 实测 200） | 任务流水 documents.task_errors；token_refresh.py |
+| 站价**高于**官方价（折扣 > 100%）的行照样入库、上首页——中转站比官价还贵，对用户没有选择价值（2026-10-12 用户定：这类价「完全没有意义」）| 产品口径（与提取校验分开）：`catalog/discount.above_official`（任一轴折扣 > 1.0），采集侧 `scans.py` 直接摘除该 key（不入快照、不走"沿用旧价"分支），展示侧 `data.py /api/overview`、`report/summary.attach_catalog_discounts` 再兜一层（兼顾旧行）；无官方基准的条目放行。**注意这也让 `_apply_price_sanity` 的高倍端作废路径退居二线**（>1 已先被丢弃，低倍端因 `round2` 把 <0.005 折成 0 基本够不到），改口径时两条测试要跟着调 | `catalog/discount.above_official`；`report/scans.py`；`webapi/routes/data.py` |
+| 站方定价页把「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示，实收价 = 参考价 × 按充值/套餐汇率实时算出的折扣（heyroute/aheapi 实锤：Grok 组 `$2.00`(划线)→`$0.040`，badge「≈2% of xAI official price」；CN-Models 56%）。标准 new-api 公式（model_ratio×基准×group_ratio）拿到的恰是**被划掉的参考价列**，`group_ratio` 是「Nx 计费」额度倍率、不是价格折扣，两者方向相反 → 整站偏高 2–50 倍（页面上 heyroute 显成「比官价还贵」，与它自己「省 95%」的口号自相矛盾，是排查入口） | 识别三特征：页面每格两个数（前灰删除线后加粗）、分组 badge「≈X% of official price」、`/api/pricing` 顶层带非标准字段 `display_prices`（全站扫过一次，仅 heyroute 一家）。**采集侧已内置该形态确定性解析**（`adapters.display_fork_price_records`，靠 `display_prices` 自动分派）：实收 = 参考价(model_ratio×2/a) × 分组折扣 `floor(组倍率×100×a/rate)`，rate = 钱包充值汇率(`/api/user/topup/info`)与套餐汇率(`/api/subscription/plans`)各算百分比后**取最小**，cn-models 分组 a=7；2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证通过。教训通用化：**标准公式自洽 ≠ 与页面一致**，倍率/表价类站必须先看页面每格到底几个数 | adapters.py `display_fork_price_records`；page-cross-check.md 2026-10-12（并更正了当日把删除线列当基准判「一致」的旧记录）；sites.md「站方自有计价站」 |
 
 ## 4. 前端
 

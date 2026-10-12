@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from llm_price_monitor.catalog import fx
-from llm_price_monitor.catalog.discount import build_discount
+from llm_price_monitor.catalog.discount import ABOVE_OFFICIAL_MAX_RATIO, build_discount
 from llm_price_monitor.report import summary_row
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import auth
@@ -65,7 +65,15 @@ def build_router(store: Store) -> APIRouter:
         for row in latest.values():
             if not isinstance(row, dict):
                 continue
-            records.append({**row, "discount": discount_of(row) if discount_of else None})
+            discount = discount_of(row) if discount_of else None
+            # 站价高于官方价（折扣 > 100%）不展示：中转站比官价还贵，没有选择价值。
+            # 采集侧已不入快照，这里再兜一层，兼顾改造前入库的旧行。
+            if discount is not None and any(
+                isinstance(discount.get(axis), (int, float)) and discount[axis] > ABOVE_OFFICIAL_MAX_RATIO
+                for axis in ("input", "output")
+            ):
+                continue
+            records.append({**row, "discount": discount})
         # 各站点最新公告（每站一条，原样带给前端做单行摘要；没采集到公告的站点无键）
         notices: dict[str, dict[str, Any]] = {}
         for site_id in {str(row.get("site_id")) for row in records if isinstance(row, dict)}:

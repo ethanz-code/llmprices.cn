@@ -79,10 +79,21 @@
 2. **甄别渠道**：按上表口径过一遍模型页/渠道页，确认官方共享渠道的过滤参数或专用接口；空壳渠道（供货统计全 0、价格「不限」）直接排除。
 3. **确认价格接口**：优先公开 pricing 接口；拿不准时看网络面板（DevTools MCP）找返回模型+价格的请求。返回 HTML 的页面地址必须免登录——httpx 直采没有浏览器环境（详见 `dom_url_auth_constraint`）。顺带确认公告与渠道状态接口（new-api 系候选：`/api/notice`、`/api/status`、`/api/model_status/groups`；渠道分组接口不少部署没有，公开性能汇总 `/api/perf-metrics/summary?hours=24` 是常见替代，两者都匿名可读才配）。sub2api 系端点家族：`/api/v1/model-plaza`（模型广场，匿名性逐站不同）、`/api/v1/channels/available`（可用渠道，带每 token 直读价）、`/api/v1/model-prices`（分组实付价，2026-10-08 新增确定性解析器：按分组展开已含倍率的 CNY 价，登录后可读）、`/api/v1/groups/rates`（分组倍率，多为要登录）、`/api/v1/announcements`（公告）、`/api/v1/channel-monitors`（渠道可用率/延迟，登录后可读）；注意「实收 = 官方美元价 × 分组倍率」的 CNY 计费站，倍率表拿不到就别采——采到的只是没乘倍率的官方价（2xapi 教训）。自研美元计价站（「基准价 × 套餐倍率」那种）先想清楚抽取路径：非 new-api 格式走 AI 兜底，抽取不稳就先别开——错价比没价糟（118.ink 教训，lessons.md §2）。
    **计价口径不用配但必须懂**（2026-10-10 定稿，修 AIHub365 全站价低 6.8 倍后收口）：v1 new-api 站的倍率基准价 = `(1e6/quota_per_unit) × price`，两数都取自该站 `/api/status`（`price` 是充值汇率：1 美元额度卖几块钱；`usd_exchange_rate` 是前端显示换算，不能当基准——1-cnmz 报 7.3 实收按 1）。中文 1:1 站 price=1 基准即 2；AIHub365 6.8→13.6、cun 6.95→13.9、128api/2coding/134-175-71 7.3→14.6。采集层自动读 status 推导（含 marketplace 等非 /api/pricing 地址，剥不出后缀退回 URL 起源），v2 载荷（billing_denomination_version=2）以站方声明优先——配站零动作，但核对价格、跟用户解释折扣时按这个口径心算。另两条解析层既有语义：站方挂牌价（input_price/output_price）优先于 billing_expr 表达式（subrouter 实锤：表达式是官价池计费 p*10+c*50，站上挂牌 0.6=94% 折扣）；`billing_multiplier` 是站方对表达式的折扣系数（sudocode 0.2~2），漏乘即错最高 5 倍。
+   **⚠️ 站方自有计价站（充值折扣/展示价）——配站必查，2026-10-12 heyroute 实锤**：少数 fork 站的定价页把「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示，实收价 = 参考价 × 按充值/套餐汇率**实时算出**的折扣（heyroute：Grok 组 `$2.00`→`$0.040`、badge「≈2% of xAI official price」）。标准公式拿到的是**被划掉的那一列**（`group_ratio` 是「Nx 计费」额度倍率、不是价格折扣），方向相反 → 整站偏高 2–50 倍。**识别特征**：① 页面每格两个数（前灰删除线、后加粗）；② 分组标题挂在「≈X% of official price」＋「Nx billing」；③ `/api/pricing` 顶层带非标准字段 `display_prices`（标准 new-api 没有这个键）。**这类站的实收价在任何 JSON 里都没有**（前端用 `/api/user/topup/info` 的 `wallet_recharge_rate` + `/api/subscription/plans` 现算），标准公式不可复现。**采集侧已内置该形态的确定性解析**（`adapters.display_fork_price_records`：实收 = 参考价(model_ratio×2/a) × 分组折扣 floor(组倍率×100×a/rate)，rate 取钱包/套餐汇率各算百分比后取最小，cn-models 组 a=7；2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证），配站零动作、走 `display_prices` 自动分派；配站收尾仍要用浏览器实锤**逐个数字**是站方实收价（heyroute 当初只对「基准价×倍率」自洽就误判成「一致」）。
 4. **试探认证**：先匿名请求接口；401/403 再配认证。new-api 系注意 `New-Api-User` 头与 Referer 坑（lessons.md §1）。**撞到登录墙（定价/接口要登录才给数据）**：不硬试——每个站单独开一个注册页标签页交给用户注册登录（2026-10-08 与用户跑通的流程），登录后直接从浏览器会话读 localStorage/Cookie 取凭证，按现役范式配（共享登录态走站点级 `request_headers`，短效凭证配 `token_refresh` 自动续签，浏览器存储登录态走 headless 注入）；凭证运行时贴入，不落仓库。**httpOnly Cookie 页面脚本读不出来**，但 IAB（ZCode 内嵌浏览器）的 cookie 库是本地明文 SQLite，拷库直查即可（2026-10-09 cun 实证）：`cp "~/Library/Application Support/ZCode/session/Partitions/zcode-embedded-browser/Cookies" /tmp/iab_cookies.db && sqlite3 /tmp/iab_cookies.db "SELECT name, value FROM cookies WHERE host_key LIKE '%站域%'"`；若 value 是加密形态（`v10` 开头）才退回让用户从 DevTools 手抄。
 5. **录入配置**：管理台新增/编辑站点，价格、公告、渠道状态三件套配齐（能采就采），填认证；凭证运行时贴入，不落仓库。
 6. **自验**：站点行「测试采集」干跑（默认不调 AI、零费用），或 `POST /api/collect` 带 `site_id`；核对采到的模型与价格同站内页面一致、渠道来源符合口径。价格核对拿页面渲染值对数，流程与记录模板见 [page-cross-check.md](page-cross-check.md)（**模型列表页优先，Model Plaza 只在没有模型列表时兜底**；页面渲染值是唯一事实源，接口字段语义与源码注释都可能误导）。公开页直接看 DOM，登录墙站用库内凭证注入浏览器（localStorage 四键，见 lessons.md §3）或页内 fetch 同源接口；数值对不上先怀疑充值口径、组倍率计入位置与 billing_multiplier 这类解析层盲区，站方换模型阵容才是正常流失。
 7. **收尾沉淀**：新坑进 lessons.md 对应分类，跨会话硬约束写 Serena 记忆。
+
+## 新站速判（配前 3 分钟过一遍，2026-10-12 定）
+
+配一个新站前按顺序打这几枪，命中任何一条都先停下来想清楚再决定采不采：
+
+1. **页面每格几个数？** 打开 `/pricing`（无则模型列表页），看模型行里价格单元格。一格一个数＝常规 new-api，标准公式可用；一格**两个数且前一个灰色删除线**＝站方自有计价（见上方「站方自有计价站」），标准公式会采到被划掉那列 → 采集已内置该形态解析（靠顶层 `display_prices` 自动分派），但配站收尾仍要逐数字实锤。
+2. **分组标题写了什么？** 只有「Nx」＝常规倍率；出现「≈X% of official price」这类对照官价的营销口径＝大概率用了充值/套餐折扣体系。
+3. **`/api/pricing` 顶层有哪些键？** 标准站是 `data / group_ratio / usable_group / pricing_version`；若多出 `display_prices`、`wallet_recharge_rate` 之类非标准键＝改过计费的 fork，先按「自有计价」对待。一条命令扫全库同类站：拉各站 pricing URL 看顶层键（本轮扫描脚本思路见 `.zcode/plans`）。
+4. **实收口径必须逐个数字实锤**：别用「基准价 × 倍率 = 库里值」自证（自洽不等于对），要点开模型行读页面**实收那个数**与库里比；对不上且说不清倍数就是口径错。参照 `docs/page-cross-check.md` 的对照流程与记录模板。
+5. **站价高于官价的行会被系统丢弃**（产品口径，2026-10-12 用户定）：折合 CNY 后折扣 > 100% 即「比官价还贵、没有选择价值」，采集侧不入快照、展示侧过滤。所以某站在库里「少了几个模型/分组」时，先看是不是它本来就卖得比官价贵——不是采集故障。
 
 ## 红线
 
