@@ -15,9 +15,8 @@ import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMin
 import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
 import { modelOrderCompare, type ModelOrderEntry } from "@/lib/modelOrder";
 import { rankingHit, type RankingHit } from "@/lib/rankings";
-import { dotsOfGroup, dotsSuccessRate, type ChannelDot, type ChannelDotRow } from "@/lib/channelStatus";
-import { ChannelDotMatrix } from "./ChannelDotMatrix";
 import { DiscountBars } from "./DiscountBars";
+import { LazyChannelDots } from "./LazyChannelDots";
 import { PriceCell, CachePriceCell } from "./PriceCell";
 import type { OverviewData, OverviewRecord, SiteStatus } from "@/lib/types";
 
@@ -42,13 +41,11 @@ interface ModelGroup {
 
 export function OverviewTable({
   data,
-  statusDots,
   rankingsIndex = {},
   modelOrder = {},
   siteHomepages,
 }: {
   data: OverviewData;
-  statusDots?: Record<string, ChannelDotRow[]>;
   /** AA 榜单匹配索引：给当前选中模型挂排名徽标；榜单未生成时缺省不显示 */
   rankingsIndex?: Record<string, RankingHit>;
   /** 模型名归一键（canonicalModel）→ 目录排序依据（厂商序+发布日期）：模型下拉按
@@ -126,39 +123,25 @@ export function OverviewTable({
     }
   }, [activeModel, modelReady, models]);
 
-  // 渠道点阵按行取数：只认与本行分组名对得上的渠道行，不做全量回退；
-  // 没有分组或匹配不上（渠道形态接口，行名不是分组名）时不显示点阵
-  const dotsByRowKey = useMemo(() => {
-    const result = new Map<string, ChannelDot[]>();
-    for (const row of active?.rows ?? []) {
-      const dots = dotsOfGroup(statusDots?.[row.site_id], row.metadata?.group);
-      if (dots) result.set(rowKeyOf(row), dots);
-    }
-    return result;
-  }, [active, statusDots]);
-
-  // 默认行序（智能排序）：可靠性加权综合价低的在前——综合价（输入 3 : 输出 1）乘可靠性系数，
-  // 扣分只看渠道健康与数据滞后，满档虚增 20%；点表头排序循环回"无排序"即回到此序
+  // 默认行序（智能排序）：综合价（输入 3 : 输出 1）乘可靠性系数，扣分只看数据滞后，
+  // 满档虚增 20%；点表头排序循环回"无排序"即回到此序。
+  // 渠道健康度不再参与排序——点阵改为进入视口后才由各行的懒加载组件单独取，
+  // 服务端排序阶段拿不到，排序也就不该为看不见的东西负责。
   const parentRows = useMemo(
     () =>
       smartOrderRows(
         active?.rows ?? [],
         (row) => {
-          // 渠道按本行分组的成功率扣 0–3 分；没配置渠道状态扣 1（没监测=不知道好坏，轻微不可信）
-          const success = dotsSuccessRate(dotsByRowKey.get(rowKeyOf(row)));
-          let penalty = 0;
-          if (success == null) penalty += 1;
-          else penalty += (1 - success) * 3;
           // 数据滞后扣分：价格是沿用上次快照的（last_price_at 落后 captured_at），多半是 token 过期
           // 没取到新数据；滞后超过 1 天开始扣，每多滞后一天多扣 1 分，最多 3 分
           const staleSeconds = row.captured_at - (row.last_price_at ?? row.captured_at);
-          penalty += Math.min(3, Math.max(0, staleSeconds / 86400 - 1));
-          // 满分 6 分（渠道 3 + 滞后 3）归一到 0–1，乘 20% 上限后满档让综合价虚增 20%
-          return penalty / 6;
+          const penalty = Math.min(3, Math.max(0, staleSeconds / 86400 - 1));
+          // 满分 3 分归一到 0–1，乘 20% 上限后满档让综合价虚增 20%
+          return penalty / 3;
         },
         rate,
       ),
-    [active, dotsByRowKey, rate],
+    [active, rate],
   );
 
   const attentionSites = useMemo(() => {
@@ -292,16 +275,13 @@ export function OverviewTable({
       key: "channels",
       width: 200,
       mobileHide: true,
-      render: (_v: unknown, row) => {
-        const dots = dotsByRowKey.get(rowKeyOf(row));
-        return (
-          <ChannelDotMatrix
-            dots={dots}
-            name={row.metadata?.group ?? row.model}
-            href={`/overview/status/${encodeURIComponent(row.site_id)}`}
-          />
-        );
-      },
+      render: (_v: unknown, row) => (
+        <LazyChannelDots
+          site={row.site_id}
+          group={row.metadata?.group}
+          href={`/overview/status/${encodeURIComponent(row.site_id)}`}
+        />
+      ),
     },
     {
       title: "公告",
