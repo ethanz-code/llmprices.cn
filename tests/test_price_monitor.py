@@ -4506,8 +4506,8 @@ def test_rate_pair_pricing_dict_form_same_semantics():
 
 
 def test_marketplace_groups_pricing_effective_per_token():
-    """模型广场 plaza groups 型（groups[].models[].pricing 每 token）：×1e6 归一，
-    实收口径不再乘分组倍率，模型名剥通道前缀，1h 缓存写价随行采集。"""
+    """模型广场 plaza groups 型（groups[].models[].pricing 每 token）：×1e6 归一后乘分组倍率
+    得实付价（页面 Your Price 列实证 pricing 未含倍率），模型名剥通道前缀，1h 缓存写价随行。"""
     from llm_price_monitor.adapters import looks_like_marketplace_pricing, marketplace_price_records
 
     payload = {"code": 0, "message": "success", "data": {"description": "", "groups": [
@@ -4527,17 +4527,18 @@ def test_marketplace_groups_pricing_effective_per_token():
     by_model = {r.model: r for r in records}
     assert set(by_model) == {"deepseek-v4.1-flash", "gpt-6-astra"}
     astra = by_model["gpt-6-astra"]
-    assert astra.input_price == pytest.approx(18.0)
-    assert astra.output_price == pytest.approx(90.0)
-    assert astra.price_status == "confirmed"
+    # $18 × 0.25x = $4.50（与广场页 Your Price 列一致）
+    assert astra.input_price == pytest.approx(4.5)
+    assert astra.output_price == pytest.approx(22.5)
+    assert astra.price_status == "candidate"
     assert astra.unit == "USD/1M tokens"
     assert astra.metadata["group"] == "PRO池"
     assert astra.metadata["group_ratio"] == 0.25
-    assert astra.metadata["cache_read_price"] == pytest.approx(1.8)
-    assert astra.metadata["cache_create_price"] == pytest.approx(18.0)
+    assert astra.metadata["cache_read_price"] == pytest.approx(0.45)
+    assert astra.metadata["cache_create_price"] == pytest.approx(4.5)
     ds = by_model["deepseek-v4.1-flash"]
-    assert ds.input_price == pytest.approx(0.4)
-    assert ds.metadata["cache_create_1h_price"] == pytest.approx(2.0)
+    assert ds.input_price == pytest.approx(0.1)
+    assert ds.metadata["cache_create_1h_price"] == pytest.approx(0.5)
 
 
 def test_billing_rate_items_records_micro_usd():

@@ -926,14 +926,19 @@ def marketplace_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) ->
             if key in records:
                 continue
             rate = group.get("rate_multiplier")
+            multiplier = rate if _plain_number(rate) else 1
+            # groups 形态的 pricing 是未乘组倍率的基准价：实付 = pricing × rate_multiplier
+            # （2btocken 广场页 Your Price 列实证：$18 × 0.25x = $4.50）
+            input_price = input_price * multiplier if input_price is not None else None
+            output_price = output_price * multiplier if output_price is not None else None
             metadata = {
                 "adapter": "network",
                 "pricing_kind": "explicit_price",
                 "group": group_name,
                 "group_ratio": rate if _plain_number(rate) else None,
-                "cache_read_price": per_million("cache_read_price"),
-                "cache_create_price": per_million("cache_write_price"),
-                "cache_create_1h_price": per_million("cache_write_1h_price"),
+                "cache_read_price": per_million("cache_read_price") * multiplier if _plain_number(per_million("cache_read_price")) else None,
+                "cache_create_price": per_million("cache_write_price") * multiplier if _plain_number(per_million("cache_write_price")) else None,
+                "cache_create_1h_price": per_million("cache_write_1h_price") * multiplier if _plain_number(per_million("cache_write_1h_price")) else None,
                 "currency": "USD",
                 "network_evidence": [{
                     "source": "model_list",
@@ -943,9 +948,9 @@ def marketplace_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) ->
                     "payload_sha256": payload_hash(payload),
                 }],
                 "page_evidence": [],
-                "notes": "模型广场牌价直读：groups[].models[].pricing 每 token 单价 ×1e6 归一为 USD/1M tokens；接口为实收口径（倍率已计入），不再乘分组倍率。",
+                "notes": "模型广场牌价直读：groups[].models[].pricing 每 token ×1e6 归一后乘分组倍率得实付价（广场页 Your Price 列对照验证）；分时/长上下文档以页面对照为准复核。",
             }
-            status = "confirmed" if input_price is not None and output_price is not None else "candidate"
+            status = "candidate"
             records[key] = PriceRecord(
                 target.name,
                 input_price,
