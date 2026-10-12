@@ -280,6 +280,9 @@ def fetch_site_status(
 
 # 状态接口里时间戳类字段（滑动窗口游标等）每次轮询必变，diff 时跳过，避免噪音变化刷屏
 VOLATILE_TIME_KEYS = {"time", "timestamp", "ts", "datetime", "updated", "last_update"}
+# 数据新鲜度/覆盖窗口元数据（sub2api v2 监控的 coverage：请求窗口、落库滞后秒数、计算时刻）：
+# 随每轮滑动必变但不代表渠道状态，不进 diff，否则每轮刷「状态变化」
+VOLATILE_METADATA_KEYS = {"coverage"}
 
 
 def _is_volatile_time_key(key: str) -> bool:
@@ -292,6 +295,8 @@ def diff_status(previous: Any, current: Any, path: str = "$") -> list[dict[str, 
         changes: list[dict[str, Any]] = []
         for key in sorted(set(previous) | set(current), key=str):
             if _is_volatile_time_key(str(key)):
+                continue
+            if str(key).lower() in VOLATILE_METADATA_KEYS:
                 continue
             if str(key).lower() in TIMELINE_KEYS:
                 # 时间线是站点返回的滚动窗口：新点进、旧点出，按下标的 diff 会把整条历史错位报成噪音变化；

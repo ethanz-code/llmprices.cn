@@ -181,6 +181,17 @@ def test_diff_status_reports_add_and_remove():
     assert diff_status({"same": 1}, {"same": 1}) == []
 
 
+def test_diff_status_skips_coverage_metadata():
+    """数据新鲜度元数据（sub2api v2 coverage）随轮滑动必变，不进 diff，否则每轮刷状态变化。"""
+    previous = {"coverage": {"aggregation_lag_seconds": 30, "data_through": "t1"}, "items": [{"model": "m", "metrics": {"success_rate": 0.9}}]}
+    current = {"coverage": {"aggregation_lag_seconds": 70, "data_through": "t2"}, "items": [{"model": "m", "metrics": {"success_rate": 0.9}}]}
+    assert diff_status(previous, current) == []
+    current["items"][0]["metrics"]["success_rate"] = 0.5
+    assert diff_status(previous, current) == [
+        {"op": "change", "path": "$.items[0].metrics.success_rate", "old": 0.9, "new": 0.5}
+    ]
+
+
 def test_diff_status_skips_volatile_time_fields():
     previous = {"status": "up", "checked_at": 1, "time": 5, "updated_at": 10}
     current = {"status": "up", "checked_at": 2, "time": 6, "updated_at": 11}
