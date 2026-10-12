@@ -732,10 +732,11 @@ def sub2api_model_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) 
 
 
 def looks_like_marketplace_pricing(payload: Any) -> bool:
-    """模型广场牌价结构（sub2api marketplace/models 两代形态，按响应结构分派非按站）：
+    """模型广场牌价结构（sub2api marketplace/plaza 各代形态，按响应结构分派非按站）：
 
     - items 型：data.items[].model_name + pricing.input_price/output_price（unit 声明 per_1m_tokens 或 per_token）
     - models 型：data.models[].name + input_cost_per_token 等每 token 单价
+    - groups 型：data.groups[].models[].pricing（plaza 实收口径，按 token 单价；模型名可带 "global:" 之类通道前缀）
     """
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
         return False
@@ -747,9 +748,19 @@ def looks_like_marketplace_pricing(payload: Any) -> bool:
     ):
         return True
     models = data.get("models")
-    return isinstance(models, list) and any(
+    if isinstance(models, list) and any(
         isinstance(model, dict) and _plain_number(model.get("input_cost_per_token"))
         for model in models
+    ):
+        return True
+    groups = data.get("groups")
+    return isinstance(groups, list) and any(
+        isinstance(group, dict)
+        and any(
+            isinstance(model, dict) and isinstance(model.get("pricing"), dict)
+            for model in group.get("models") or []
+        )
+        for group in groups
     )
 
 
@@ -870,6 +881,69 @@ def marketplace_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) ->
             metadata,
             status,
         )
+    for group in data.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        group_name = str(group.get("name") or "default")
+        for model in group.get("models") or []:
+            if not isinstance(model, dict):
+                continue
+            model_name = str(model.get("name") or "")
+            # 通道范围前缀（如 "global:"）不是模型名的一部分
+            if ":" in model_name:
+                model_name = model_name.rsplit(":", 1)[-1]
+            pricing = model.get("pricing")
+            if not isinstance(pricing, dict):
+                continue
+            target = next(
+                (t for t in spec.models if t.name.casefold() == model_name.casefold()),
+                None,
+            )
+            if target is None:
+                continue
+
+            def per_million(field: str, pricing: dict[str, Any] = pricing) -> float | None:
+                value = pricing.get(field)
+                return value * 1_000_000 if _plain_number(value) else None
+
+            input_price = per_million("input_price")
+            output_price = per_million("output_price")
+            if input_price is None and output_price is None:
+                continue
+            key = (target.name, group_name)
+            if key in records:
+                continue
+            rate = group.get("rate_multiplier")
+            metadata = {
+                "adapter": "network",
+                "pricing_kind": "explicit_price",
+                "group": group_name,
+                "group_ratio": rate if _plain_number(rate) else None,
+                "cache_read_price": per_million("cache_read_price"),
+                "cache_create_price": per_million("cache_write_price"),
+                "cache_create_1h_price": per_million("cache_write_1h_price"),
+                "currency": "USD",
+                "network_evidence": [{
+                    "source": "model_list",
+                    "url": redact_url(str(captured[0].get("url", ""))),
+                    "resource_type": captured[0].get("resource_type"),
+                    "status": captured[0].get("status"),
+                    "payload_sha256": payload_hash(payload),
+                }],
+                "page_evidence": [],
+                "notes": "模型广场牌价直读：groups[].models[].pricing 每 token 单价 ×1e6 归一为 USD/1M tokens；接口为实收口径（倍率已计入），不再乘分组倍率。",
+            }
+            status = "confirmed" if input_price is not None and output_price is not None else "candidate"
+            records[key] = PriceRecord(
+                target.name,
+                input_price,
+                output_price,
+                "USD/1M tokens",
+                response_source_url,
+                time.time(),
+                metadata,
+                status,
+            )
     return list(records.values())
 
 

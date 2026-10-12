@@ -4479,6 +4479,41 @@ def test_rate_pair_pricing_dict_form_same_semantics():
     assert record.metadata["cache_read_price"] == pytest.approx(0.2)
 
 
+def test_marketplace_groups_pricing_effective_per_token():
+    """模型广场 plaza groups 型（groups[].models[].pricing 每 token）：×1e6 归一，
+    实收口径不再乘分组倍率，模型名剥通道前缀，1h 缓存写价随行采集。"""
+    from llm_price_monitor.adapters import looks_like_marketplace_pricing, marketplace_price_records
+
+    payload = {"code": 0, "message": "success", "data": {"description": "", "groups": [
+        {"id": 889, "name": "PRO池", "platform": "openai", "rate_multiplier": 0.25,
+         "models": [
+             {"name": "global:deepseek-v4.1-flash", "platform": "openai", "pricing": {
+                 "billing_mode": "token", "input_price": 4e-07, "output_price": 1.6e-06,
+                 "cache_read_price": 4e-08, "cache_write_price": 8e-08, "cache_write_1h_price": 2e-06}},
+             {"name": "gpt-6-astra", "platform": "openai", "pricing": {
+                 "billing_mode": "token", "input_price": 1.8e-05, "output_price": 9e-05,
+                 "cache_read_price": 1.8e-06, "cache_write_price": 1.8e-05}},
+         ]},
+    ]}}
+    assert looks_like_marketplace_pricing(payload)
+    spec = SiteSpec(id="lab", models=[ModelTarget("deepseek-v4.1-flash"), ModelTarget("gpt-6-astra")], network={"url": "https://lab.test/api/v1/model-plaza"})
+    records = marketplace_price_records(spec, [{"url": "https://lab.test/api/v1/model-plaza", "status": 200, "resource_type": "fetch", "payload": payload}])
+    by_model = {r.model: r for r in records}
+    assert set(by_model) == {"deepseek-v4.1-flash", "gpt-6-astra"}
+    astra = by_model["gpt-6-astra"]
+    assert astra.input_price == pytest.approx(18.0)
+    assert astra.output_price == pytest.approx(90.0)
+    assert astra.price_status == "confirmed"
+    assert astra.unit == "USD/1M tokens"
+    assert astra.metadata["group"] == "PRO池"
+    assert astra.metadata["group_ratio"] == 0.25
+    assert astra.metadata["cache_read_price"] == pytest.approx(1.8)
+    assert astra.metadata["cache_create_price"] == pytest.approx(18.0)
+    ds = by_model["deepseek-v4.1-flash"]
+    assert ds.input_price == pytest.approx(0.4)
+    assert ds.metadata["cache_create_1h_price"] == pytest.approx(2.0)
+
+
 def test_billing_rate_items_records_micro_usd():
     """billing 费率清单：per_1m 微美元 ÷1e6 归一 USD/1M tokens；unit 按次行与缺价行跳过。"""
     from llm_price_monitor.adapters import looks_like_billing_rate_items, billing_rate_item_records
