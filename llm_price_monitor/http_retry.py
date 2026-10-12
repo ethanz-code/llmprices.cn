@@ -107,8 +107,9 @@ class RetryingTransport(httpx.BaseTransport):
 class FallbackTransport(httpx.BaseTransport):
     """直连优先、代理兜底：仅对幂等的 GET/HEAD 生效（与重试同一原则，避免续签等
     POST 被消费两次）。直连整体失败（内层退避重试耗尽）或返回 403/451 时记入失败
-    记忆并换备用代理重试一次；记忆 TTL 内的请求直接走代理，过期后放行一次短连接
-    超时的直连重探，成功即切回直连。无头浏览器经 egress 共用这份记忆（只读）。
+    记忆并换备用代理重试一次；代理出口同样被 403/451 拉黑时，自动换到对该站可达的
+    节点再试一次。记忆 TTL 内的请求直接走代理，过期后放行一次短连接超时的直连重探，
+    成功即切回直连。无头浏览器经 egress 共用这份记忆（只读）。
     """
 
     def __init__(self, direct: httpx.BaseTransport, proxied: httpx.BaseTransport) -> None:
@@ -121,7 +122,7 @@ class FallbackTransport(httpx.BaseTransport):
         host = urlsplit(str(request.url)).hostname or ""
         decision = egress.plan(host)
         if decision.use_proxy:
-            return self._proxied.handle_request(request)
+            return self._via_proxy(request, host)
         # 直连腿自带建连超时上限（_DirectConnectCapTransport），用完自行还原请求，
         # 失败残留不会泄漏到代理腿
         try:
@@ -131,16 +132,7 @@ class FallbackTransport(httpx.BaseTransport):
                 raise
             egress.mark_direct_failed(host)
             tasklog.emit(f"[{host}] 直连失败（{exc}），改走备用代理重试", "warn")
-            try:
-                return self._proxied.handle_request(request)
-            except httpx.TransportError as proxy_exc:
-                # 代理出口也被目标站拒绝：配置了控制接口就自动换到对该站可达的节点，
-                # 重试一次；未启用/冷却中/无可达节点维持原样失败上报
-                switched = proxy_switch.auto_switch_for(host, str(request.url))
-                if switched is None:
-                    raise proxy_exc
-                tasklog.emit(f"[{host}] 节点已切换，重试一次代理请求")
-                return self._proxied.handle_request(request)
+            return self._via_proxy(request, host)
         if response.status_code in _FALLBACK_STATUS_CODES:
             egress.mark_direct_failed(host)
             tasklog.emit(
@@ -148,9 +140,28 @@ class FallbackTransport(httpx.BaseTransport):
                 "warn",
             )
             response.close()
-            return self._proxied.handle_request(request)
+            return self._via_proxy(request, host)
         egress.mark_direct_ok(host)
         return response
+
+    def _via_proxy(self, request: httpx.Request, host: str) -> httpx.Response:
+        """走代理；出口连不上或被 403/451 拉黑时换到对该站可达的节点再试一次。"""
+        try:
+            response = self._proxied.handle_request(request)
+        except httpx.TransportError as proxy_exc:
+            switched = proxy_switch.auto_switch_for(host, str(request.url))
+            if switched is None:
+                raise proxy_exc
+            tasklog.emit(f"[{host}] 节点已切换，重试一次代理请求")
+            return self._proxied.handle_request(request)
+        if response.status_code not in _FALLBACK_STATUS_CODES:
+            return response
+        switched = proxy_switch.auto_switch_for(host, str(request.url))
+        if switched is None:
+            return response
+        tasklog.emit(f"[{host}] 代理出口返回 HTTP {response.status_code}，已切换节点 → {switched}，重试一次")
+        response.close()
+        return self._proxied.handle_request(request)
 
 
 def build_client(

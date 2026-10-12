@@ -209,6 +209,35 @@ def test_fallback_retries_proxy_once_after_auto_switch(monkeypatch):
     assert len(calls["proxy"]) == 5  # 首轮 4 次 + 切换后重试 1 次
 
 
+def test_fallback_switches_node_when_proxy_returns_block_page(monkeypatch):
+    """代理出口拿到 403 拉黑页也换节点重试：cun.ai 这类 Cloudflare 拒收不是连接失败。"""
+    switched: list[str] = []
+    monkeypatch.setattr(
+        "llm_price_monitor.proxy_switch.auto_switch_for",
+        lambda host, url: switched.append(host) or "新节点",
+    )
+    calls = {"proxy": []}
+
+    def direct(request):
+        raise httpx.ConnectError("reset", request=request)
+
+    def proxied(request):
+        calls["proxy"].append(1)
+        return httpx.Response(403 if len(calls["proxy"]) == 1 else 200)
+
+    monkeypatch.setattr("llm_price_monitor.http_retry.time.sleep", lambda _s: None)
+    client = httpx.Client(
+        timeout=5,
+        transport=FallbackTransport(
+            direct=RetryingTransport(httpx.MockTransport(direct)),
+            proxied=RetryingTransport(httpx.MockTransport(proxied)),
+        ),
+    )
+    assert client.get("https://demo.test/api/pricing").status_code == 200
+    assert switched == ["demo.test"]
+    assert len(calls["proxy"]) == 2
+
+
 def test_fallback_raises_when_auto_switch_unavailable(monkeypatch):
     monkeypatch.setattr("llm_price_monitor.proxy_switch.auto_switch_for", lambda host, url: None)
     calls = {"proxy": []}
