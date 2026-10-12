@@ -387,123 +387,121 @@ export function StatusLoading() {
   );
 }
 
-/** 花费计算页：摘要条 2 项 + 模型选择块 + 价格/用量块 + 结果块（对齐 Calculator 三面板）。 */
+/** 花费计算页：摘要条 2 项 + 模型选择块（来源切换 + 搜索 + 厂商分节候选）
+ *  + 单价/用量块（四档单价、三格用量、两组提示）+ 结果块（合计 + 五列明细表）。
+ *  容器与列数逐条对齐 Calculator：880 居中、候选带上厂商节头、用量三格、结果表直接铺 .dtable。 */
 export function CalcLoading() {
   return (
-    <div className="page">
+    <div className="page page-calc">
       <DigestSkeleton labels={["官方价模型", "站点"]} />
-      <div style={{ display: "grid", gap: 16 }}>
-        <section className="panel calc-block" aria-hidden>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-              marginBottom: 14,
-            }}
-          >
-            <Skel w={88} h={15} />
-            <Skel
-              w={150}
-              h={34}
-              style={{ borderRadius: 6, marginLeft: "auto" }}
-              delay={60}
-            />
+      <div className="calculator" aria-hidden>
+        <section className="panel calc-block">
+          <div className="calc-head">
+            <Skel w={150} h={28} style={{ borderRadius: 6 }} />
+            <Skel w={280} h={34} style={{ borderRadius: 6, maxWidth: "100%" }} delay={60} />
           </div>
-          <Skel w="100%" h={34} style={{ borderRadius: 6 }} delay={100} />
-          <div style={{ display: "grid", gap: 2, marginTop: 10 }}>
-            {[0, 1, 2, 3, 4, 5].map((row) => (
-              <div
-                key={row}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "8px 10px",
-                }}
-              >
-                <Skel w={`${46 - (row % 3) * 6}%`} h={13} delay={row * 90} />
-                <Skel w={92} h={13} delay={row * 90 + 40} />
+          <div className="calc-options">
+            <div className="calc-vendor">
+              <Skel w={92} h={12} />
+            </div>
+            {[0, 1, 2, 3, 4].map((row) => (
+              <div key={row} className="calc-option">
+                <span className="calc-option-main">
+                  <Skel w={`${44 - (row % 3) * 6}%`} h={13} delay={row * 90} />
+                  <Skel w={56} h={11} delay={row * 90 + 30} style={{ flexShrink: 0 }} />
+                </span>
+                <Skel w={92} h={12} delay={row * 90 + 50} style={{ flexShrink: 0 }} />
               </div>
             ))}
           </div>
         </section>
-        <section className="panel calc-block" aria-hidden>
-          <Skel w={96} h={15} style={{ marginBottom: 14 }} />
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-              gap: 12,
-            }}
-          >
+
+        <section className="panel calc-block">
+          <div className="calc-head">
+            <Skel w={96} h={15} />
+          </div>
+          <div className="calc-grid">
             {[0, 1, 2, 3].map((index) => (
-              <div key={index} style={{ display: "grid", gap: 6 }}>
+              <div key={index} className="calc-field">
                 <Skel w={72} h={12} delay={index * 60} />
-                <Skel
-                  w="100%"
-                  h={34}
-                  style={{ borderRadius: 6 }}
-                  delay={index * 60 + 20}
-                />
+                <Skel w="100%" h={34} style={{ borderRadius: 6 }} delay={index * 60 + 20} />
               </div>
             ))}
           </div>
-          <Skel w={72} h={15} style={{ margin: "18px 0 14px" }} />
+          <div className="calc-head" style={{ margin: "18px 0 0" }}>
+            <Skel w={40} h={15} />
+          </div>
+          {/* 用量三格（总用量 / 缓存命中率 / 输出占比）：与真实页同列模板，窄屏自动折行 */}
           <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              gap: 12,
-            }}
+            className="calc-grid"
+            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
           >
-            {[0, 1].map((index) => (
-              <div key={index} style={{ display: "grid", gap: 6 }}>
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="calc-field">
                 <Skel w={84} h={12} delay={index * 60 + 240} />
-                <Skel
-                  w="100%"
-                  h={34}
-                  style={{ borderRadius: 6 }}
-                  delay={index * 60 + 260}
-                />
+                <Skel w="100%" h={34} style={{ borderRadius: 6 }} delay={index * 60 + 260} />
               </div>
             ))}
           </div>
-          <Skel w={220} h={12} style={{ marginTop: 14 }} delay={380} />
+          <div className="calc-actions">
+            <Skel w="58%" h={12} delay={380} />
+            <Skel w={128} h={12} delay={400} />
+          </div>
+          <div className="calc-actions">
+            <Skel w="46%" h={12} delay={420} />
+          </div>
         </section>
-        <section className="panel calc-block" aria-hidden>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-              marginBottom: 14,
-            }}
-          >
+
+        <section className="panel calc-block calc-result">
+          <div className="calc-head">
             <Skel w={72} h={15} />
-            <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-              <Skel w={96} h={28} style={{ borderRadius: 6 }} delay={60} />
-              <Skel w={64} h={28} style={{ borderRadius: 6 }} delay={100} />
+            <span style={{ marginLeft: "auto", display: "inline-flex", gap: 8 }}>
+              <Skel w={100} h={28} style={{ borderRadius: 6 }} delay={60} />
+              <Skel w={112} h={28} style={{ borderRadius: 6 }} delay={100} />
+            </span>
+          </div>
+          <div className="calc-total">
+            <Skel w={40} h={13} />
+            <Skel w={150} h={28} delay={80} />
+          </div>
+          {/* 明细表：五列（计费项/单价/用量/小计/费用占比）四行，直接铺 .dtable，不再嵌一层面板 */}
+          <div className="dtable-wrap">
+            <div className="dtable-scroll">
+              <table className="dtable">
+                <thead>
+                  <tr>
+                    <th>
+                      <Skel w={44} h={11} />
+                    </th>
+                    {[28, 28, 28, 52].map((w, index) => (
+                      <th key={w + index} style={{ textAlign: "right" }}>
+                        <Skel w={w} h={11} delay={30 + index * 30} style={{ marginLeft: "auto" }} />
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[0, 1, 2, 3].map((row) => (
+                    <tr key={row}>
+                      <td>
+                        <Skel w={56} h={13} delay={row * 90} />
+                      </td>
+                      {[40, 72, 48, 32].map((w, col) => (
+                        <td key={col} style={{ textAlign: "right" }}>
+                          <Skel
+                            w={w}
+                            h={13}
+                            delay={row * 90 + (col + 1) * 20}
+                            style={{ marginLeft: "auto" }}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 10,
-              marginBottom: 16,
-            }}
-          >
-            <Skel w={64} h={13} />
-            <Skel w={140} h={26} delay={80} />
-          </div>
-          <PanelTable
-            cols={["minmax(0,1.4fr)", 110, 110, 110, 90]}
-            rows={4}
-          />
         </section>
       </div>
     </div>

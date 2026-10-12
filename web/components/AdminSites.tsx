@@ -353,6 +353,9 @@ export function AdminSites() {
                 }}
                 style={{
                   width: 56,
+                  /* 这个数字框内嵌在 12px 说明文字中间，类里的 34px 高把它撑成胖胶囊、
+                     数字上下空一大截；这里压到 24px 与旁侧文字行高相称 */
+                  height: 24,
                   padding: "3px 6px",
                   borderRadius: 9999,
                   fontSize: 12,

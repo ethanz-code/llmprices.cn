@@ -21,9 +21,9 @@
   /* 卡片：白底色块在浅灰页底上自然分层，无边框无投影（与暗色同一套逻辑） */
   --shadow-panel: none;
   --card-border: none;
-  /* 输入类控件（.sel/.input）：无边框填充底，静态只靠底色分层，聚焦才换强调描边+光晕 */
-  --field-bg: var(--panel-2);
-  --field-bg-hover: #ececec;
+  /* 输入类控件（.sel/.input/.seg）：比卡片嵌套底再深一档，白页上才看得出是可点的控件 */
+  --field-bg: #e6e6e6;
+  --field-bg-hover: #dcdcdc;
   /* 激活 tab / 分段控件的轻投影（卡片不用，仅导航与 seg 的激活态） */
   --shadow-pop: 0 1px 6px rgba(0, 0, 0, 0.1);
   /* 亮色彩色 tone：饱和度优先（徽标文字/折扣条/渠道点共用），对比度 ≥4.5:1 */
@@ -564,6 +564,15 @@ body > main {
 
 .dtable thead th:last-child {
   border-top-right-radius: 12px;
+}
+
+/* 表头上面还有一行（如定价页的模型选择行 + 表头栏）时，色带不是容器顶边，
+   圆角会切出一个悬浮的缺口：这种位置的表头一律直角，圆角只留给贴顶的表格。
+   DenseTable / DataTable 都包在 .dtable-wrap 里，面板内非首个子项即"上方还有内容" */
+.dtable-wrap:not(:first-child) > .dtable-scroll .dtable thead th,
+.dtable-wrap:not(:first-child) > .dtable thead th {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 /* 可排序列头：右侧预留排序图标槽位，文字最多到槽位为止，不与右上角图标重叠 */
@@ -1187,6 +1196,10 @@ body > main {
 .switch {
   width: 36px;
   height: 20px;
+  /* 清掉 <button> 默认的 2px 外框与 1px/6px 内边距：border-box 下这两项会把定位参照系挤偏，
+     圆球随之下沉 2px。清零后 padding box 就是完整的 36×20，圆球按 (20-14)/2 居中 */
+  border: none;
+  padding: 0;
   border-radius: 9999px;
   background: var(--tone-gray-bg);
   position: relative;
@@ -1202,8 +1215,8 @@ body > main {
 
 .switch .knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: 3px;
+  left: 3px;
   width: 14px;
   height: 14px;
   border-radius: 50%;
@@ -1798,6 +1811,11 @@ body > main {
   font-weight: 550;
 }
 
+html:not([data-theme="dark"]) .nav-pop-item.active {
+  background: var(--text);
+  color: var(--panel);
+}
+
 .nav-pop-theme {
   margin-top: 8px;
   padding: 10px 4px 2px;
@@ -2031,6 +2049,15 @@ html:not([data-theme="dark"]) .nav-pop {
 .nav-pill-item.active {
   color: var(--text);
   font-weight: 550;
+}
+
+/* 亮色下白指示器浮在白胶囊上几乎看不见：激活项改近黑底、白字 */
+html:not([data-theme="dark"]) .nav-pill-indicator {
+  background: var(--text);
+}
+
+html:not([data-theme="dark"]) .nav-pill-item.active {
+  color: var(--panel);
 }
 
 /* 汉堡菜单仅移动端：提升特异性，避免被 AntD .ant-btn 的 display 覆盖 */
@@ -3684,6 +3711,17 @@ button.footer-icon {
 .site-footer-qr-text .qr-sub {
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* 企业微信客服入口：二维码右侧那行可点文字，用强调色让它显眼 */
+.site-footer-qr-text .qr-link {
+  font-size: 12px;
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+.site-footer-qr-text .qr-link:hover {
+  text-decoration: underline;
 }
 
 .site-footer-meta {

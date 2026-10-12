@@ -45,7 +45,7 @@ export default function SetupPage() {
       <div className="auth-card auth-card-wide">
         <LogoMark size={36} />
         <h1 className="auth-title">开始使用</h1>
-        <p className="auth-sub">首次运行需完成四步：创建管理员账号、配置必需的密钥、选择要检测的模型、添加要检测的站点。</p>
+        <p className="auth-sub">首次运行需完成四步：创建管理员账号、配置必需的密钥、选择要检测的模型、开始使用。完成后进控制台添加站点，系统就会自动开始采集。</p>
         <ol className="setup-steps">
           {STEPS.map((item) => (
             <li key={item.id} className={item.id === step ? "on" : item.id < step ? "done" : ""}>
