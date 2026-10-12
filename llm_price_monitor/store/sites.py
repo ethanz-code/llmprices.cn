@@ -77,7 +77,7 @@ class SiteStoreMixin(StoreBase):
                 )
                 conn.execute("UPDATE documents SET name = ? WHERE name = ?", (f"status_ref:{new_id}", f"status_ref:{old_id}"))
                 # collect_status 与 site_collect_health 都是 site_id → 状态 的文档，改名同步搬迁（与 delete_site 对齐）
-                for doc_name in ("collect_status", "site_collect_health"):
+                for doc_name in ("collect_status", "site_collect_health", "site_screenshots"):
                     row = conn.execute("SELECT content FROM documents WHERE name = ?", (doc_name,)).fetchone()
                     if row:
                         merged = json.loads(row[0]) or {}
@@ -87,6 +87,17 @@ class SiteStoreMixin(StoreBase):
                                 "UPDATE documents SET content = ? WHERE name = ?",
                                 (json.dumps(merged, ensure_ascii=False), doc_name),
                             )
+        if renamed:
+            # 截图文件按站点 id 命名，改名后图片跟着走，否则详情页按新 id 找不到图
+            from llm_price_monitor.screenshot import screenshot_path
+
+            try:
+                old_path, new_path = screenshot_path(old_id), screenshot_path(new_id)
+            except Exception:
+                return renamed  # id 不合法时本来就没有对应文件
+            if old_path.is_file():
+                new_path.parent.mkdir(parents=True, exist_ok=True)
+                old_path.replace(new_path)
         return renamed
 
     def replace_sites(self, configs: list[dict[str, Any]]) -> None:

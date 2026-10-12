@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import httpx
@@ -159,11 +160,41 @@ def build_router(store: Store) -> APIRouter:
             "refresh_token_rotated": rotated,
         }
 
+    @router.get("/api/sites/screenshots")
+    def list_screenshots() -> dict[str, Any]:
+        """全部站点截图的元数据（地址与拍摄时间）；图片本体走单站截图接口。"""
+        from llm_price_monitor.screenshot import SCREENSHOT_DOC
+
+        doc = store.get_document(SCREENSHOT_DOC) or {}
+        return {"screenshots": {key: value for key, value in doc.items() if isinstance(value, dict)}}
+
+    @router.get("/api/sites/{site_id}/screenshot")
+    def site_screenshot(site_id: str) -> FileResponse:
+        """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。"""
+        from llm_price_monitor.screenshot import SCREENSHOT_DOC, screenshot_path
+
+        meta = (store.get_document(SCREENSHOT_DOC) or {}).get(site_id)
+        if not isinstance(meta, dict):
+            raise HTTPException(status_code=404, detail="这个站点还没有截图")
+        try:
+            path = screenshot_path(site_id)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail="这个站点还没有截图") from exc
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="这个站点还没有截图")
+        # 浏览器按地址缓存，地址里的版本参数变了才重新取；这里再标不可协商缓存兜底
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
     @router.delete("/api/sites/{site_id}")
     def delete_site(site_id: str, purge: bool = False) -> dict[str, Any]:
         """purge 为真时同时清理该站点的历史价格、事件与状态数据（删除弹窗里的可选项）。"""
         if not store.delete_site(site_id, purge=purge):
             raise HTTPException(status_code=404, detail=f"站点不存在: {site_id}")
+        if purge:
+            # 截图文件在 var/screenshots 不在数据库里，purge 时随站点数据一起清掉
+            from llm_price_monitor.screenshot import remove_screenshot
+
+            remove_screenshot(store, site_id)
         return {"deleted": site_id, "purged": purge}
 
     return router

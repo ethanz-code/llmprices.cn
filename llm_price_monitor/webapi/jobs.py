@@ -405,6 +405,17 @@ def vendor_source_refresh_job(store: Store, vendor: str) -> Callable[[], dict[st
     return _run
 
 
+def screenshot_scan_job(config: MonitorConfig, store: Store) -> Callable[[], dict[str, Any]]:
+    """站点截图任务体：逐站截首页首屏，图片落 var/screenshots，失败的站保留上一张。"""
+    from llm_price_monitor.screenshot import scan_screenshots
+    from llm_price_monitor.useragent import choose_user_agent
+
+    def _run() -> dict[str, Any]:
+        return scan_screenshots(config, store, user_agent=choose_user_agent(config))
+
+    return _run
+
+
 def discovery_refresh_job(store: Store) -> Callable[[], dict[str, Any]]:
     """新站发现任务体：拉默认聚合源合并进候选池，只拿站点与简介，不探测（秒级）。"""
     def _run() -> dict[str, Any]:

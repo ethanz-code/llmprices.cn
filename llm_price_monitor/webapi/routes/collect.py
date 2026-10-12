@@ -16,7 +16,7 @@ from llm_price_monitor.report import attach_catalog_discounts, run_once, summary
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import tasks
 from llm_price_monitor.webapi.deps import load_config
-from llm_price_monitor.webapi.jobs import notice_scan_job, price_scan_job, status_scan_job
+from llm_price_monitor.webapi.jobs import notice_scan_job, price_scan_job, screenshot_scan_job, status_scan_job
 
 
 class CollectBody(BaseModel):
@@ -105,6 +105,11 @@ def build_router(store: Store) -> APIRouter:
     @router.post("/api/collect/notice")
     def collect_notice(body: CollectBody) -> dict[str, str]:
         return _submit("collect-notice", body, notice_scan_job)
+
+    @router.post("/api/collect/screenshot")
+    def collect_screenshot(body: CollectBody) -> dict[str, str]:
+        """手动触发站点截图：与定时任务同一任务体，可指定站点。"""
+        return _submit("collect-screenshot", body, screenshot_scan_job)
 
     @router.get("/api/tasks")
     def list_tasks() -> dict[str, Any]:

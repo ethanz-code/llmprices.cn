@@ -14,7 +14,8 @@
       "notice": 30,
       "catalog": 1440,
       "rankings": 1440,
-      "discovery": 1440
+      "discovery": 1440,
+      "screenshot": 1440
     }
   },
   "ai": {

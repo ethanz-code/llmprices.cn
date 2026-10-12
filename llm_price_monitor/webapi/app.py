@@ -192,11 +192,16 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         设置 PRICE_WEB_INTERNAL_TOKEN 后，公开读接口进一步要求内网令牌或管理员
         会话，匿名浏览器请求一律 401（见 public_get_paths 注释）。
         """
+        # 站点截图是详情页的公开内容：元数据列表与单张图片都对访客开放。
+        # 图片由浏览器 <img> 直链拉取，生产封锁下匿名请求拿不到内网令牌，不放行详情页的图会 401
+        public_screenshot = request.method == "GET" and (
+            request.url.path == "/api/sites/screenshots" or request.url.path.endswith("/screenshot")
+        )
         needs_admin = (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
             or request.url.path in admin_get_paths
             or request.url.path.startswith(admin_get_prefixes)
-        ) and request.url.path not in routes.auth.PUBLIC_WRITE_PATHS
+        ) and request.url.path not in routes.auth.PUBLIC_WRITE_PATHS and not public_screenshot
         if needs_admin:
             has_admin = auth.get_admin(store) is not None
             # 首次启动只放行 /api/setup；其余写接口一律 401
@@ -207,6 +212,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         elif (
             internal_token
             and request.method == "GET"
+            and not public_screenshot
             and request.url.path not in public_get_paths
             and (
                 request.url.path.startswith("/api/")

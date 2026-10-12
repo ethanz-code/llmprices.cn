@@ -383,6 +383,7 @@ const TASK_KIND_LABELS: Record<string, string> = {
   "collect-price": "价格采集",
   "collect-status": "渠道状态采集",
   "collect-notice": "站点公告采集",
+  "collect-screenshot": "站点截图",
   "catalog-refresh": "厂商定价刷新",
   "vendor-source-refresh": "厂商定价源抓取",
   "rankings-refresh": "模型榜单刷新",

@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiGetOptional } from "@/lib/api";
 import { fetchSiteStatus } from "@/lib/statusData";
 import { PageHeader } from "@/components/PageHeader";
 import { NoticeBody } from "@/components/NoticeBody";
@@ -23,6 +22,13 @@ import type { Metadata } from "next";
 import { getSiteInfo } from "@/lib/sites";
 import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
+
+/** 站点首页截图的元数据：图片本体走 /api/sites/{id}/screenshot，这里只拿拍摄时间做版本号。 */
+interface SiteScreenshot {
+  url: string;
+  captured_at: number;
+  bytes: number;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -150,6 +156,33 @@ function NoticeSection({ notices }: { notices: NoticeSnapshot[] }) {
 }
 
 /** 公告区头部：标题 + 采集时间 + 来源域名 */
+/** 站点首页截图：没有截过（404）时整块不渲染，截过的展示首屏并链到原站。 */
+async function ScreenshotSection({ siteId }: { siteId: string }) {
+  const meta = await apiGetOptional<{ screenshots: Record<string, SiteScreenshot> }>(
+    "/api/sites/screenshots"
+  ).catch(() => null);
+  const shot = meta?.screenshots?.[siteId];
+  if (!shot) return null;
+  return (
+    <section className="panel" style={{ display: "grid", gap: 10, padding: 16 }}>
+      <h3 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        站点首页实拍
+        <span style={{ color: "var(--text-3)", fontWeight: 400, fontSize: 12.5 }}>
+          {formatTime(shot.captured_at)} 拍摄
+        </span>
+      </h3>
+      <a href={shot.url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+        {/* 地址带拍摄时间：新截图拍出来地址就变，浏览器不会一直显示旧图 */}
+        <img
+          src={`/api/sites/${encodeURIComponent(siteId)}/screenshot?v=${shot.captured_at}`}
+          alt={`${getSiteInfo(siteId).name || siteId} 首页截图`}
+          style={{ width: "100%", height: "auto", borderRadius: 8, display: "block" }}
+        />
+      </a>
+    </section>
+  );
+}
+
 function NoticeMeta({
   capturedAt,
   sourceHost,
@@ -383,14 +416,7 @@ export default async function StatusDetailPage({
             </>
           )}
           <NoticeSection notices={notices} />
-
-          <Link
-            href="/overview"
-            className="landing-more"
-            style={{ display: "inline-block" }}
-          >
-            ← 返回中转站定价
-          </Link>
+          <ScreenshotSection siteId={siteId} />
         </div>
       )}
       </div>

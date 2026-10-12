@@ -42,7 +42,8 @@ _journal: list[dict[str, Any]] = []
 
 
 
-# 全量采集与三类拆分采集写同一份价格快照/状态时序，彼此互斥（读-改-写不能并发）；
+# 全量采集与三类拆分采集写同一份价格快照/状态时序，彼此互斥（读-改-写不能并发）。
+# 站点截图（collect-screenshot）不进组：只写自己的图片与元数据文档，与采集并行互不影响；
 # 单站测试采集（collect-test）不进组：只写本站数据行，允许与全局采集并行（共享文档
 # 的读-改-写竞态由 report 的合并锁兜住），同类测试之间仍靠同 kind 去重一次只跑一个
 COLLECT_KINDS = frozenset({"collect", "collect-price", "collect-status", "collect-notice"})

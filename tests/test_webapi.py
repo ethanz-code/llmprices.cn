@@ -1327,7 +1327,7 @@ def test_scheduler_run_due_disabled_all_and_invalid_config(tmp_path: Path):
 
     tasks.reset()
     store = Store(tmp_path / "monitor.db")
-    store.set_document("settings", {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0}})
+    store.set_document("settings", {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0, "screenshot": 0}})
     scheduler_mod._run_due(store)
     assert tasks.recent(100) == []
 
@@ -2216,6 +2216,8 @@ def test_admin_get_routes_denied_to_anonymous_by_default(workspace: Path, monkey
         "/api/meta", "/api/overview", "/api/latest", "/api/feed", "/api/history",
         "/api/status", "/api/status/latest", "/api/status/events", "/api/notice",
         "/api/rankings", "/api/catalog", "/api/catalog/all", "/api/geo", "/api/discovery",
+        # 站点截图是详情页公开内容：元数据列表与单张图片匿名可读
+        "/api/sites/screenshots", "/api/sites/{site_id}/screenshot",
     }
 
     def all_api_routes() -> list[APIRoute]:
