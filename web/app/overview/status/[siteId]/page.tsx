@@ -1,4 +1,4 @@
-import { apiGet, apiGetOptional } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import { fetchSiteStatus } from "@/lib/statusData";
 import { PageHeader } from "@/components/PageHeader";
 import { NoticeBody } from "@/components/NoticeBody";
@@ -22,15 +22,9 @@ import {
 import type { Tone } from "@/components/ToneTag";
 import type { Metadata } from "next";
 import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";
+import { loadSiteScreenshots, shotSrc } from "@/lib/screenshots";
 import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
-
-/** 站点首页截图的元数据：图片本体走 /api/sites/{id}/screenshot，这里只拿拍摄时间做版本号。 */
-interface SiteScreenshot {
-  url: string;
-  captured_at: number;
-  bytes: number;
-}
 
 export const dynamic = "force-dynamic";
 
@@ -160,10 +154,7 @@ function NoticeSection({ notices }: { notices: NoticeSnapshot[] }) {
 /** 公告区头部：标题 + 采集时间 + 来源域名 */
 /** 站点首页截图：没有截过（404）时整块不渲染，截过的展示首屏并链到原站。 */
 async function ScreenshotSection({ siteId }: { siteId: string }) {
-  const meta = await apiGetOptional<{ screenshots: Record<string, SiteScreenshot> }>(
-    "/api/sites/screenshots"
-  ).catch(() => null);
-  const shot = meta?.screenshots?.[siteId];
+  const shot = (await loadSiteScreenshots())[siteId];
   if (!shot) return null;
   return (
     <section className="panel" style={{ display: "grid", gap: 10, padding: 16 }}>
@@ -174,9 +165,8 @@ async function ScreenshotSection({ siteId }: { siteId: string }) {
         </span>
       </h3>
       <a href={shot.url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
-        {/* 地址带拍摄时间：新截图拍出来地址就变，浏览器不会一直显示旧图 */}
         <img
-          src={`/api/sites/${encodeURIComponent(siteId)}/screenshot?v=${shot.captured_at}`}
+          src={shotSrc(siteId, shot)}
           alt={`${getSiteInfo(siteId).name || siteId} 首页截图`}
           style={{ width: "100%", height: "auto", borderRadius: 8, display: "block" }}
         />

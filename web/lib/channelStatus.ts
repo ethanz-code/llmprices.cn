@@ -731,6 +731,30 @@ export interface SiteViews {
   uptimeBuckets: Record<string, (UptimeBucket | null)[]>;
 }
 
+/** 列表页精简渠道行：与 ChannelDotRow 同名字段同义，但不带 dots（点阵按需另取）。 */
+export interface ChannelStat {
+  name: string;
+  status: string;
+  ok: boolean;
+  provider?: string;
+  model?: string;
+  availability7d?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  cacheRate?: number;
+  successRate24h?: number;
+  recentRates?: number[];
+}
+
+/** 列表页渠道视图（后端 /api/status/views 产出）：解析在后端算好，前端只消费。
+ *  channels 无 dots、无 latency——列表页不画点阵与延迟趋势，点阵仍由 /api/channel-dots 按需拉。
+ *  与 SiteViews 同源同口径（同一份快照、同一套启发式），可用率/时段桶数字必然一致。 */
+export interface SiteStats {
+  channels: Record<string, ChannelStat[]>;
+  availability: Record<string, AvailabilityPoint[]>;
+  uptimeBuckets: Record<string, (UptimeBucket | null)[]>;
+}
+
 /** 详情页视图集合：渠道行、可用率序列、延迟序列共享同一次 channelDotsBySite 全量走查，
  *  避免页面把同一批记录解析三遍。
  *  两个口径：availability 是保峰抽稀后的序列（画图用，毛刺不丢）；uptimeBuckets 用抽稀前的

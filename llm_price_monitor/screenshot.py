@@ -32,6 +32,12 @@ RENDER_WAIT_SECONDS = 4
 # 视口按常见桌面首屏：截的是首屏而不是整页长图，体积可控、各站可比
 VIEWPORT = {"width": 1280, "height": 800}
 
+# 缩略图（总览表一屏几十张，原图平均 400KB+ 直接把页面拖到十几 MB）：
+# 按请求宽度生成 JPEG 存 thumbs/ 子目录，文件名带源图 mtime——源图换新自动失效，不用追踪状态
+THUMB_WIDTH_MIN = 120
+THUMB_WIDTH_MAX = 1200
+THUMB_QUALITY = 78
+
 _SAFE_SITE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -40,6 +46,55 @@ def screenshot_path(site_id: str) -> Path:
     if not _SAFE_SITE_ID.match(site_id):
         raise PriceMonitorError(f"站点 id 不能作为截图文件名：{site_id}")
     return SCREENSHOT_DIR / f"{site_id}.png"
+
+
+def ensure_thumbnail(site_id: str, width: int) -> Path | None:
+    """按需生成/取用截图缩略图（JPEG），返回缓存文件路径。
+
+    文件名 `<id>-<源图 mtime>-w<宽>.jpg`：重新截图后 mtime 变化，旧的自动不再命中，
+    生成时顺手清掉该站的其它缩略图（每站至多留一份）。Pillow 没装、源图缺失或生成
+    失败都返回 None，调用方回落原图，缩略图纯属优化、永远不阻塞展示。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        source = screenshot_path(site_id)
+    except PriceMonitorError:
+        return None
+    if not source.is_file():
+        return None
+    width = max(THUMB_WIDTH_MIN, min(int(width), THUMB_WIDTH_MAX))
+    dest = SCREENSHOT_DIR / "thumbs" / f"{site_id}-{int(source.stat().st_mtime)}-w{width}.jpg"
+    if not dest.is_file():
+        tmp = dest.with_name(dest.name + ".tmp")
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(source) as image:
+                rgb = image.convert("RGB")
+                height = max(1, round(rgb.height * width / rgb.width))
+                rgb.resize((width, height), Image.LANCZOS).save(tmp, format="JPEG", quality=THUMB_QUALITY, optimize=True)
+            os.replace(tmp, dest)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            return None
+        # 旧源图版本的缩略图（含失败残留）顺手清掉；只动本站在本目录下的文件
+        for stale in dest.parent.glob(f"{site_id}-*-w*.jpg"):
+            if stale != dest:
+                stale.unlink(missing_ok=True)
+    return dest
+
+
+def remove_thumbnails(site_id: str) -> None:
+    """清掉某站的全部缩略图缓存（删站/改名时随图片一起清，避免留孤儿文件）。"""
+    try:
+        if not _SAFE_SITE_ID.match(site_id):
+            return
+    except TypeError:
+        return
+    for stale in (SCREENSHOT_DIR / "thumbs").glob(f"{site_id}-*-w*.jpg"):
+        stale.unlink(missing_ok=True)
 
 
 def site_homepage(spec: SiteSpec) -> str | None:
@@ -124,7 +179,7 @@ def record_screenshot(store, site_id: str, *, url: str, captured_at: float, size
 
 
 def remove_screenshot(store, site_id: str) -> None:
-    """删站清理：摘掉元数据并删除图片文件；文件不存在不算失败。"""
+    """删站清理：摘掉元数据并删除图片与缩略图缓存；文件不存在不算失败。"""
     doc = dict(store.get_document(SCREENSHOT_DOC) or {})
     if site_id in doc:
         doc.pop(site_id)
@@ -133,6 +188,7 @@ def remove_screenshot(store, site_id: str) -> None:
         screenshot_path(site_id).unlink(missing_ok=True)
     except PriceMonitorError:
         return  # id 不合法时根本不会有对应文件
+    remove_thumbnails(site_id)
 
 
 def scan_screenshots(config, store, *, user_agent: str | None = None) -> dict[str, int]:

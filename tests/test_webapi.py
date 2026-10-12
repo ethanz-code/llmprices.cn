@@ -154,6 +154,24 @@ def test_overview_site_id_filters_records(workspace: Path):
     assert client.get("/api/overview", params={"site_id": "nope"}).json()["records"] == []
 
 
+def test_status_views_endpoint_parses_and_filters_onsale(workspace: Path):
+    """列表页渠道视图：后端一次算好可用率/时段桶/渠道成功率并下发（不再逐站传原始快照）。"""
+    from llm_price_monitor.store import Store
+
+    client = TestClient(create_app(_config(workspace)))
+    store = Store(workspace / "var" / "monitor.db")
+    store.append_status_records([
+        {"site_id": "demo", "captured_at": time.time(),
+         "data": {"channels": [{"name": "demo-model", "state": "ok"}, {"name": "vip", "state": "down"}]}},
+    ])
+    views = client.get("/api/status/views").json()
+    # 在售监测集来自当前最新价格行：demo 只在售 demo-model，vip 渠道被过滤掉
+    assert [row["name"] for row in views["channels"]["demo"]] == ["demo-model"]
+    assert "dots" not in views["channels"]["demo"][0]  # 列表页不下发点阵
+    assert views["availability"]["demo"][-1]["pct"] == 100
+    assert views["uptimeBuckets"]["demo"]
+
+
 def test_catalog_missing_returns_404(workspace: Path):
     (workspace / "var" / "catalog.json").unlink()
     # 调度已在 _config 里关闭，目录缺失时不会触发自动同步，保持"无数据"状态
@@ -2111,7 +2129,7 @@ def test_admin_get_routes_denied_to_anonymous_by_default(workspace: Path, monkey
     public_gets = {
         "/api/health", "/api/auth/state", "/api/assistant/status",
         "/api/meta", "/api/overview", "/api/latest", "/api/feed", "/api/history",
-        "/api/status", "/api/status/latest", "/api/status/events", "/api/notice",
+        "/api/status", "/api/status/latest", "/api/status/views", "/api/status/events", "/api/notice",
         "/api/rankings", "/api/catalog", "/api/catalog/all", "/api/geo", "/api/discovery",
         # 站点截图与首页覆盖表是公开页面的公共内容：匿名可读
         "/api/sites/screenshots", "/api/sites/{site_id}/screenshot", "/api/sites/homepages",

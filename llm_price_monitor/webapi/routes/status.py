@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
 from fastapi import APIRouter, Response
 
+from llm_price_monitor.catalog.discount import ABOVE_OFFICIAL_MAX_RATIO, build_discount
+from llm_price_monitor.report import summary_row
+from llm_price_monitor.status_views import build_monitored_sets, build_site_views
 from llm_price_monitor.store import Store
+from llm_price_monitor.webapi.deps import catalog_models, require_catalog_rate
 
 # /api/status 的响应缓存：同一查询（站点/条数/窗口）在一分钟内直接回上次序列化好的 JSON 字节。
 # 首页与总览每次加载都会逐站各拉一次、整轮 40MB+，缓存后重复加载不再重读 SQLite、也不再重新
@@ -15,6 +20,64 @@ from llm_price_monitor.store import Store
 _STATUS_CACHE: dict[tuple[Any, ...], tuple[float, bytes]] = {}
 _STATUS_CACHE_TTL = 60.0
 _STATUS_CACHE_MAX = 512
+
+# 列表页渠道视图：算一次要读 21 站原始快照（约 49MB）+ 解析，冷算 5–6 秒，不能放在请求路径上。
+# 改为算好落库、接口只读这份文档；过期（超过 TTL）时后台线程刷一次，请求永远拿现成的。
+_VIEWS_DOC = "site_views"
+_VIEWS_TTL = 300.0
+_VIEWS_PER_SITE = 400
+_VIEWS_WINDOW_SECONDS = 7 * 86_400
+_EMPTY_VIEWS: dict[str, Any] = {"channels": {}, "availability": {}, "uptimeBuckets": {}}
+_views_lock = threading.Lock()
+_views_refreshing = False
+
+
+def _monitored_sets(store: Store) -> dict[str, set[str]]:
+    """在售监测集：从与 /api/overview 同口径的最新价格行（已剔除站价高于官价的记录）构建，
+    保证列表页的渠道过滤口径与详情页一致——渠道行只留对得上在售模型/分组的行。"""
+    report = store.get_document("catalog")
+    models, _meta = catalog_models(report)
+    rate: float | None = None
+    if models:
+        try:
+            rate, _ = require_catalog_rate(report)
+        except Exception:  # 汇率缺失时退化为不过滤（返回全量渠道）
+            rate = None
+    latest = store.latest_all()
+    rows: list[dict[str, Any]] = []
+    for row in latest.values():
+        if not isinstance(row, dict):
+            continue
+        if models and rate is not None:
+            entry, _reason = build_discount(summary_row(row), models, rate)
+            discount = entry.as_dict() if entry is not None else None
+            if discount is not None and any(
+                isinstance(discount.get(axis), (int, float))
+                and discount[axis] > ABOVE_OFFICIAL_MAX_RATIO
+                for axis in ("input", "output")
+            ):
+                continue
+        rows.append(row)
+    return build_monitored_sets(rows)
+
+
+def _compute_site_views(store: Store) -> dict[str, Any]:
+    """算一份全站列表视图：读近 7 天每站最近 400 条快照，解析成渠道行/可用率/时段桶。"""
+    since = int((time.time() - _VIEWS_WINDOW_SECONDS) // 60 * 60)
+    records, _total = store.read_status(per_site=_VIEWS_PER_SITE, since=since)
+    return build_site_views(records, _monitored_sets(store))
+
+
+def _refresh_site_views(store: Store) -> None:
+    """后台线程用：算好并落库，再放掉刷新中标志。"""
+    global _views_refreshing
+    try:
+        store.set_document(_VIEWS_DOC, {"at": time.time(), "views": _compute_site_views(store)})
+    except Exception:  # 刷新失败保留旧文档，下次访问再试
+        pass
+    finally:
+        with _views_lock:
+            _views_refreshing = False
 
 
 def build_router(store: Store) -> APIRouter:
@@ -49,6 +112,31 @@ def build_router(store: Store) -> APIRouter:
     @router.get("/api/status/latest")
     def status_latest() -> dict[str, Any]:
         return store.latest_status_all()
+
+    @router.get("/api/status/views")
+    def status_views() -> dict[str, Any]:
+        """列表页渠道视图：读落库的算好结果，请求路径上不现算。
+
+        原先首页/总览要逐站拉最近 400 条原始快照（21 站合计约 49MB，内含站点上游整包 JSON）
+        再在 Node 里解析；这里把同样的解析搬到后端并落库缓存（口径见 llm_price_monitor/status_views.py），
+        原始 JSON 不出后端、解析也不在请求路径上。首次（库还没这份文档）同步算一次，之后只读；
+        超过 TTL 由后台线程刷新，请求永远拿现成结果。"""
+        global _views_refreshing
+        doc = store.get_document(_VIEWS_DOC)
+        views = doc.get("views") if isinstance(doc, dict) else None
+        if not isinstance(views, dict):
+            # 从未算过（首次部署/清库）：同步算一次填坑，慢这一次
+            store.set_document(_VIEWS_DOC, {"at": time.time(), "views": _compute_site_views(store)})
+            refreshed = store.get_document(_VIEWS_DOC)
+            return refreshed.get("views") if isinstance(refreshed, dict) else _EMPTY_VIEWS
+        if time.time() - float(doc.get("at") or 0) >= _VIEWS_TTL:
+            with _views_lock:
+                start = not _views_refreshing
+                if start:
+                    _views_refreshing = True
+            if start:
+                threading.Thread(target=_refresh_site_views, args=(store,), daemon=True).start()
+        return views
 
     @router.get("/api/status/events")
     def status_event_list(limit: int = 200, site_id: str | None = None, kind: str | None = None) -> dict[str, Any]:

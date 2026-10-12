@@ -18,7 +18,7 @@ import {
   chartToneVar,
   rateLevel,
   type RateLevel,
-  type SiteViews,
+  type SiteStats,
   type UptimeBucket,
 } from "@/lib/channelStatus";
 import { loadStatusViews } from "@/lib/statusData";
@@ -63,7 +63,7 @@ interface LandingData {
   feed: FeedData | null;
   history: HistoryListData | null;
   /** 渠道检测视图（与站点详情页同口径，lib/statusData.ts 统一取数） */
-  statusViews: SiteViews;
+  statusViews: SiteStats;
   /** 站点 IP 归属地：服务端取好传给首屏地球，读接口封锁后浏览器不再直接调 */
   geo: Record<string, SiteGeo>;
   /** AA 榜单：首页速览用，拉取失败只影响榜单小节 */
@@ -84,16 +84,15 @@ const LATEST_EVENTS_SHOWN = 5;
 async function loadLanding(): Promise<LandingData> {
   try {
     // 统一事件流（价格+公告已合并）；渠道检测拉取失败只影响星球与站点卡片，不阻塞整页
-    // 在售监测集与首页数据共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求
     const overviewPromise = apiGet<OverviewData>("/api/overview");
     const [overview, meta, feed, statusViews, geo, rankings, catalog, history, homepages] = await Promise.all([
       overviewPromise,
       apiGet<MetaData>("/api/meta"),
       apiGet<FeedData>("/api/feed?events_limit=8&notice_limit=8").catch(() => null),
-      // 与站点检测详情页同口径（每站最近 400 条、近 7 天）：逐站拉取后合并成视图。
-      // 曾经全局 max_records 抽样按总 id 取模，站内密度失衡会丢渠道、漂移最新可用率，
-      // 与详情页对不上；口径收拢在 lib/statusData.ts，数字与详情页同源。
-      loadStatusViews(undefined, overviewPromise).catch(() => buildSiteViews([])),
+      // 渠道视图与站点检测详情页同口径：一个请求拿全站算好的可用率/时段桶（后端 /api/status/views）。
+      // 曾经逐站拉 21 份原始快照共约 49MB 再在 Node 解析，瓶颈是体积不是请求数，现改由后端算好下发。
+      loadStatusViews().catch(() => buildSiteViews([])),
+
       // 站点定位较慢（DNS + 归属地查询），失败只影响地球落点，不阻塞整页
       apiGet<{ geo: Record<string, SiteGeo> }>("/api/geo").catch(() => ({ geo: {} })),
       apiGet<RankingsData>("/api/rankings").catch(() => null),

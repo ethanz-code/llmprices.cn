@@ -85,8 +85,9 @@ class SiteStoreMixin(StoreBase):
                                 (json.dumps(merged, ensure_ascii=False), doc_name),
                             )
         if renamed:
-            # 截图文件按站点 id 命名，改名后图片跟着走，否则详情页按新 id 找不到图
-            from llm_price_monitor.screenshot import screenshot_path
+            # 截图文件按站点 id 命名，改名后图片跟着走，否则详情页按新 id 找不到图；
+            # 缩略图缓存按 id 命名，删除即可——新 id 首次请求会自动重建
+            from llm_price_monitor.screenshot import remove_thumbnails, screenshot_path
 
             try:
                 old_path, new_path = screenshot_path(old_id), screenshot_path(new_id)
@@ -95,6 +96,7 @@ class SiteStoreMixin(StoreBase):
             if old_path.is_file():
                 new_path.parent.mkdir(parents=True, exist_ok=True)
                 old_path.replace(new_path)
+                remove_thumbnails(old_id)
         return renamed
 
     def replace_sites(self, configs: list[dict[str, Any]]) -> None:

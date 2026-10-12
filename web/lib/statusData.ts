@@ -1,12 +1,15 @@
-/** 渠道检测数据统一取数入口：凡是要展示渠道统计的页面（首页、总览、站点详情）
- *  都从这里取，口径只有一份——每站最近 400 条、近 7 天。
- *  曾经三个页面三种取法：首页全局 max_records 抽样、总览全局最近 600 条，
- *  抽样按总 id 取模不保站内密度，会丢渠道、漂移最新可用率
- *  （134-175-71 实测：首页比详情页少 grok-4.6 渠道、可用率 86% vs 75%）。
- *  现在逐站按详情页同参数拉取，数据同源，数字不可能再分叉。 */
+/** 渠道检测数据统一取数入口：凡是要展示渠道统计的页面（首页、总览、站点详情）都从这里取，
+ *  口径只有一份——每站最近 400 条、近 7 天。
+ *
+ *  列表页（首页/总览）走 /api/status/views：后端一次把各站的渠道行（不含点阵）、可用率序列与
+ *  时段桶算好返回。曾经是逐站拉最近 400 条原始快照（21 站合计约 49MB，内含站点上游整包 JSON）
+ *  再在 Node 里解析——瓶颈是这 49MB 的传输与解析，不是请求个数，所以把解析搬到后端、原始 JSON
+ *  一步不出后端。解析口径与 lib/channelStatus.ts 由 llm_price_monitor/status_views.py 对齐，
+ *  两边数字一致（后端 tests/test_status_views.py 与前端 channelStatus.test.ts 用例一一对应）。
+ *  详情页仍拉单站原始快照、前端解析（fetchSiteStatus），因为详情页要画点阵与延迟趋势。 */
 import { apiGet } from "./api";
-import { buildMonitoredSets, buildSiteViews, type SiteViews } from "./channelStatus";
-import type { OverviewData, StatusSnapshot } from "./types";
+import { type SiteStats } from "./channelStatus";
+import type { StatusSnapshot } from "./types";
 
 /** 与站点详情页同款：每站最近 400 条。 */
 export const STATUS_PER_SITE_LIMIT = 400;
@@ -33,45 +36,36 @@ export async function fetchSiteStatus(
   return data.records ?? [];
 }
 
-/** 全站视图：站点清单取 /api/status/latest（只含采过状态的站），逐站并发拉详情页口径，
- *  单站失败只缺该站、不拖垮整页；合并后跑一次 buildSiteViews，各站视图共享同一份输入。
- *  overview 传同页已在拉取的 /api/overview 在飞 Promise（并行不重复请求），由它构建各站
- *  「在售监测集」，渠道视图只保留对得上在售模型/分组的行（零命中回退全量）；不传则自己拉一份。 */
-export async function loadStatusViews(
-  headers?: HeadersInit,
-  overview?: Promise<OverviewData | null>,
-): Promise<SiteViews> {
-  // 进程内缓存 + stale-while-revalidate：这份数据每次要拉 21 站全量快照（合计 40MB+，逐条内含
-  // 站点上游原始 JSON），现算渠道点阵约 1.5 秒；而渠道按采集周期（分钟级）才更新，几分钟内没必要
-  // 重拉。有旧结果时永远直接给旧结果、后台刷新（刷新在飞时也不再重复开），于是任何一次访问都不等
-  // 现算，最坏只差一个周期的新鲜度；只有进程刚起、还没有任何结果时才会等一次。
-  // 缓存的是「一次计算结果」而非 HTTP 响应，失败即弃缓存，不会像 fetch 的 next.revalidate
-  // 那样把页面钉在旧数据上。
-  const key = headers ? "auth" : "anon";
+/** 列表页渠道视图：一个请求拿全站算好的可用率/时段桶/渠道成功率。
+ *
+ *  进程内缓存 + stale-while-revalidate：渠道按采集周期（分钟级）才更新，几分钟内没必要重拉。
+ *  有旧结果时永远直接给旧结果、后台刷新（刷新在飞时也不再重复开），于是任何一次访问都不等后端
+ *  现算，最坏只差一个周期的新鲜度；只有进程刚起、还没有任何结果时才等一次。
+ *  缓存的是「一次计算结果」而非 HTTP 响应，失败即弃缓存，不会把页面钉在旧数据上。
+ *  第二个参数仅为兼容旧调用签名（在售监测集改由后端内部构建），此处忽略。 */
+export async function loadStatusViews(headers?: HeadersInit, _overview?: unknown): Promise<SiteStats> {
   const now = Date.now();
-  const entry = viewsCache.get(key) ?? { at: 0, value: null, refreshing: false, pending: null };
-  viewsCache.set(key, entry);
-  if ((now - entry.at >= STATUS_VIEWS_TTL_MS || entry.value === null) && !entry.refreshing) {
-    entry.refreshing = true;
-    const pending = computeStatusViews(headers, overview);
-    entry.pending = pending;
+  if ((now - viewsCache.at >= STATUS_VIEWS_TTL_MS || viewsCache.value === null) && !viewsCache.refreshing) {
+    viewsCache.refreshing = true;
+    const pending = computeStatusViews(headers);
+    viewsCache.pending = pending;
     pending.then(
       (views) => {
-        entry.value = views;
-        entry.at = Date.now();
-        entry.refreshing = false;
-        entry.pending = null;
+        viewsCache.value = views;
+        viewsCache.at = Date.now();
+        viewsCache.refreshing = false;
+        viewsCache.pending = null;
       },
       () => {
         // 现算失败就弃掉这条缓存，下次访问重新算；也不让 reject 冒泡成 unhandled rejection
-        entry.refreshing = false;
-        entry.pending = null;
-        viewsCache.delete(key);
+        viewsCache.refreshing = false;
+        viewsCache.pending = null;
+        viewsCache.value = null;
       },
     );
   }
   // 有旧结果就给旧结果（不阻塞）；首次冷启动才等这一趟
-  return entry.value ?? entry.pending!;
+  return viewsCache.value ?? viewsCache.pending!;
 }
 
 /** 渠道视图缓存寿命：远小于采集周期，肉眼无感却省掉绝大多数重复拉取。 */
@@ -81,29 +75,15 @@ interface ViewsCacheEntry {
   /** 上次算好的时间戳；决定何时该后台刷新 */
   at: number;
   /** 已算好的结果；有值时请求直接拿它，永不阻塞 */
-  value: SiteViews | null;
+  value: SiteStats | null;
   /** 是否有一次刷新在飞，避免同一周期重复发起 */
   refreshing: boolean;
   /** 在飞的刷新；仅冷启动（还没有 value）时被等待 */
-  pending: Promise<SiteViews> | null;
+  pending: Promise<SiteStats> | null;
 }
 
-const viewsCache = new Map<string, ViewsCacheEntry>();
+const viewsCache: ViewsCacheEntry = { at: 0, value: null, refreshing: false, pending: null };
 
-async function computeStatusViews(
-  headers?: HeadersInit,
-  overview?: Promise<OverviewData | null>,
-): Promise<SiteViews> {
-  const latest = await apiGet<Record<string, unknown>>("/api/status/latest", headers).catch(
-    () => ({} as Record<string, unknown>),
-  );
-  const siteIds = Object.keys(latest);
-  const [batches, overviewData] = await Promise.all([
-    Promise.all(
-      siteIds.map((siteId) => fetchSiteStatus(siteId, headers).catch(() => [] as StatusSnapshot[])),
-    ),
-    (overview ?? apiGet<OverviewData>("/api/overview", headers)).catch(() => null),
-  ]);
-  const monitored = overviewData ? buildMonitoredSets(overviewData.records) : undefined;
-  return buildSiteViews(batches.flat(), monitored);
+async function computeStatusViews(headers?: HeadersInit): Promise<SiteStats> {
+  return apiGet<SiteStats>("/api/status/views", headers);
 }

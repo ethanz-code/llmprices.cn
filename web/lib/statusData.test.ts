@@ -11,26 +11,33 @@ async function freshModule() {
   return await import("@/lib/statusData");
 }
 
-/** 默认 mock：latest 一个站、逐站状态空、overview 空。 */
-function stubFetch(counter: { n: number }, onStatus?: (url: string) => Response | Promise<Response>) {
+/** 每次返回一份全新的空视图：SWR 用例靠对象身份判断「拿到的是新结果」。 */
+function viewsBody() {
+  return { channels: {}, availability: {}, uptimeBuckets: {} };
+}
+
+/** 默认 mock：/api/status/views 返回空视图；onViews 可定制耗时或失败。 */
+function stubFetch(counter: { n: number }, onViews?: (url: string) => Response | Promise<Response>) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
-      if (url.includes("/api/status/latest")) return json({ sudocode: {} });
-      if (url.includes("/api/status?")) {
+      if (url.includes("/api/status/views")) {
         counter.n += 1;
-        if (onStatus) return await onStatus(url);
-        return json({ records: [] });
+        if (onViews) return await onViews(url);
+        return json(viewsBody());
       }
       return json({ records: [] });
     }),
   );
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("loadStatusViews 缓存", () => {
-  test("TTL 内重复调用不再拉状态接口", async () => {
+  test("TTL 内重复调用不再拉视图接口", async () => {
     const counter = { n: 0 };
     stubFetch(counter);
     const mod = await freshModule();
@@ -73,7 +80,7 @@ describe("loadStatusViews 缓存", () => {
     const counter = { n: 0 };
     stubFetch(counter, async () => {
       if (slow) await new Promise((r) => setTimeout(r, 60));
-      return json({ records: [] });
+      return json(viewsBody());
     });
     const mod = await freshModule();
 
@@ -99,10 +106,10 @@ describe("loadStatusViews 缓存", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
-        if (url.includes("/api/status/latest")) return json({ sudocode: {} });
-        if (url.includes("/api/status?")) return json({ records: [] });
-        // overview 记录里 model 缺失会在 buildMonitoredSets 抛错 → 现算整体失败
-        if (url.includes("/api/overview")) return json(bad ? { records: [{}] } : { records: [] });
+        if (url.includes("/api/status/views")) {
+          if (bad) throw new Error("backend down");
+          return json(viewsBody());
+        }
         return json({ records: [] });
       }),
     );

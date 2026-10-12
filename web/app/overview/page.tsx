@@ -1,9 +1,10 @@
 import { cookies } from "next/headers";
 import { apiGet } from "@/lib/api";
 import { buildRankingIndex, type RankingHit } from "@/lib/rankings";
-import { computeSiteScores, type SiteScore } from "@/lib/siteRanking";
+import { buildSiteRanking, type SiteRanking } from "@/lib/siteRanking";
 import { loadStatusViews } from "@/lib/statusData";
 import { loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
+import { loadSiteScreenshots, type SiteShots } from "@/lib/screenshots";
 import { catalogModelOrderIndex, type ModelOrderEntry } from "@/lib/modelOrder";
 import type { CatalogData, OverviewData, RankingsData } from "@/lib/types";
 import { alerts } from "@/lib/copy";
@@ -31,9 +32,9 @@ export default async function OverviewPage() {
   const session = (await cookies()).get(SESSION_COOKIE)?.value;
   const headers = session ? { Cookie: `${SESSION_COOKIE}=${session}` } : undefined;
   let data: OverviewData | null = null;
-  // 站点综合分：服务端算好（价格 + 渠道稳定 + 配置完整 + 公告新鲜），只把分数下发给表，
+  // 站点综合分：服务端算好（各模型内的价格 + 站点级渠道稳定/配置完整/公告新鲜），只把评分下发给表，
   // 不把渠道原始数据塞进列表（点阵仍是逐行懒加载）
-  let siteScores: Record<string, SiteScore> = {};
+  let siteRanking: SiteRanking | undefined;
   // AA 榜单匹配索引：给当前选中模型挂排名徽标；拉取失败只影响徽标
   let rankingsIndex: Record<string, RankingHit> = {};
   // 目录排序索引（模型归一键 → 厂商序+发布日期）：模型下拉按「厂商分块+发布倒序」排的依据；
@@ -41,23 +42,27 @@ export default async function OverviewPage() {
   let modelOrder: Record<string, ModelOrderEntry> = {};
   // 站点首页覆盖表：站名外链用；拉取失败退回内置映射/来源域名兜底（loadSiteHomepages 自带兜底）
   let siteHomepages: SiteHomepages = {};
+  // 站点截图元数据：实拍列缩略图用；拉不到该列显示为空，不阻塞列表
+  let siteScreenshots: SiteShots = {};
   let error: string | null = null;
   try {
     // 在售监测集与站点综合分共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求；
     // 渠道视图（每站可用率/成功率）SWR 缓存，只服务排序，失败只让「渠道稳定」一项取中性分
     const overviewPromise = apiGet<OverviewData>("/api/overview", headers);
-    const [overview, rankings, catalog, homepages, statusViews] = await Promise.all([
+    const [overview, rankings, catalog, homepages, screenshots, statusViews] = await Promise.all([
       overviewPromise,
       apiGet<RankingsData>("/api/rankings").catch(() => null),
       apiGet<CatalogData>("/api/catalog").catch(() => null),
       loadSiteHomepages(),
+      loadSiteScreenshots(),
       loadStatusViews(headers, overviewPromise).catch(() => null),
     ]);
     data = overview;
     rankingsIndex = buildRankingIndex(rankings);
     modelOrder = catalogModelOrderIndex(catalog?.models ?? {});
     siteHomepages = homepages;
-    siteScores = computeSiteScores({
+    siteScreenshots = screenshots;
+    siteRanking = buildSiteRanking({
       records: overview.records,
       rate: overview.catalog.usd_cny_rate ?? null,
       views: statusViews,
@@ -90,7 +95,8 @@ export default async function OverviewPage() {
           rankingsIndex={rankingsIndex}
           modelOrder={modelOrder}
           siteHomepages={siteHomepages}
-          siteScores={siteScores}
+          siteRanking={siteRanking}
+          siteScreenshots={siteScreenshots}
         />
       )}
     </div>

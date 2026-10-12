@@ -179,9 +179,13 @@ def build_router(store: Store) -> APIRouter:
         return {"homepages": {site.id: site.homepage for site in config.sites if site.homepage}}
 
     @router.get("/api/sites/{site_id}/screenshot")
-    def site_screenshot(site_id: str) -> FileResponse:
-        """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。"""
-        from llm_price_monitor.screenshot import SCREENSHOT_DOC, screenshot_path
+    def site_screenshot(site_id: str, w: int | None = None) -> FileResponse:
+        """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。
+
+        带 w 参数时返回按宽度缩过的 JPEG 缩略图（总览表一屏几十张用），缩略图生成
+        失败或 Pillow 缺失自动回落原图；不带 w 一律原图 PNG。
+        """
+        from llm_price_monitor.screenshot import SCREENSHOT_DOC, ensure_thumbnail, screenshot_path
 
         meta = (store.get_document(SCREENSHOT_DOC) or {}).get(site_id)
         if not isinstance(meta, dict):
@@ -193,7 +197,12 @@ def build_router(store: Store) -> APIRouter:
         if not path.is_file():
             raise HTTPException(status_code=404, detail="这个站点还没有截图")
         # 浏览器按地址缓存，地址里的版本参数变了才重新取；这里再标不可协商缓存兜底
-        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+        headers = {"Cache-Control": "public, max-age=86400"}
+        if w is not None:
+            thumb = ensure_thumbnail(site_id, w)
+            if thumb is not None:
+                return FileResponse(thumb, media_type="image/jpeg", headers=headers)
+        return FileResponse(path, media_type="image/png", headers=headers)
 
     @router.delete("/api/sites/{site_id}")
     def delete_site(site_id: str, purge: bool = False) -> dict[str, Any]:

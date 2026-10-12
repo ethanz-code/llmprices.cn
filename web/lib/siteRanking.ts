@@ -1,26 +1,30 @@
 /**
- * 站点综合分：模型数据页（/overview）的站点行排序依据。
+ * 站点综合分：模型数据页（/overview）每个站点行的排序依据。
  *
- * 综合分 = 价格 45% + 渠道稳定 25% + 配置完整 15% + 公告新鲜 15%（各分项 0–1，权重写死在此）。
- * 目标是「价格越低、配置越全、公告越新、渠道越稳的站点越靠前」。
+ * 综合分 = 价格 50% + 渠道稳定 20% + 配置完整 15% + 公告新鲜 15%（各分项 0–1，权重写死在此）。
+ * 目标是「价格越低越靠前，同时看配置/公告/渠道的配比」。
  *
- * 价格一项按**缓存加权实付成本**算：用花费计算器同款 AI Agent 口径（输入里约 96% 从缓存读取、
+ * 关键口径：**价格在当前这张表（当前模型）里比**——同一模型下各站的实付成本横向归一，
+ * 谁最便宜谁价格分最高；不拿站点跨模型的中位数，否则会出现「本模型里最便宜的站却排在后面」。
+ * 其余三项是站点级的：渠道稳定（近 7 天可用率/成功率）、配置完整（六项清单）、公告新鲜（距今分档）。
+ *
+ * 价格一项按**缓存加权实付成本**算：花费计算器同款 AI Agent 口径（输入里约 96% 从缓存读取、
  * 输出占 0.4%），缓存读写价直接决定成本——没给缓存读取价的站点按「无缓存优惠」计（读价回落输入价），
- * 不因缺数据而被算便宜。同一模型内按 log 尺度归一（不同模型不混比），站点取各模型得分的中位数。
+ * 不因缺数据被算便宜。
  *
- * 纯函数 + 显式输入，便于单测；渠道稳定从 SiteViews（lib/statusData 的口径）取。
+ * 纯函数 + 显式输入，便于单测；渠道稳定从 SiteStats（lib/statusData 的口径）取。
  */
 import { DEFAULT_HIT_RATE, DEFAULT_OUTPUT_SHARE, calcCost } from "./calculator";
 import { effectiveCnyCachePrice, effectiveCnyPrice } from "./format";
 import { canonicalModel } from "./modelOrder";
 import { hasUsablePrice } from "./priceRows";
-import type { SiteViews } from "./channelStatus";
+import type { SiteStats } from "./channelStatus";
 import type { OverviewRecord, SiteFlags } from "./types";
 
-/** 四项权重（写死；改口径改这里）。 */
+/** 四项权重（写死；改口径改这里）。价格占一半，其余三项共一半。 */
 export const SITE_RANK_WEIGHTS = {
-  price: 45,
-  stability: 25,
+  price: 50,
+  stability: 20,
   completeness: 15,
   notice: 15,
 } as const;
@@ -45,7 +49,7 @@ const NEUTRAL = 0.5;
 export interface SiteScore {
   /** 综合分 0–100 */
   score: number;
-  /** 价格项 0–1（1 = 同模型里最便宜） */
+  /** 价格项 0–1（1 = 当前模型里最便宜） */
   price: number;
   /** 渠道稳定项 0–1 */
   stability: number;
@@ -55,12 +59,15 @@ export interface SiteScore {
   notice: number;
 }
 
+/** 站点级的三项（价格随模型变，不进这里）。 */
+export type SiteSideScore = Pick<SiteScore, "stability" | "completeness" | "notice">;
+
 export interface SiteRankInput {
   records: OverviewRecord[];
   /** 展示汇率（USD→CNY）；与总览表同一口径，缺省回落原币 */
   rate: number | null;
   /** 渠道检测视图（每站可用率/渠道成功率）；缺省该项取中性分 */
-  views?: SiteViews | null;
+  views?: SiteStats | null;
   /** 各站配置标志（后端 /api/overview 下发）；缺省该项取中性分 */
   siteFlags?: Record<string, SiteFlags> | null;
   /** 各站最新公告时间（秒级时间戳）；缺省 = 无公告 */
@@ -69,15 +76,15 @@ export interface SiteRankInput {
   now?: number;
 }
 
-function clamp01(value: number): number {
-  return value < 0 ? 0 : value > 1 ? 1 : value;
+export interface SiteRanking {
+  /** 站点级三项（价格除外），0–1 */
+  site: Record<string, SiteSideScore>;
+  /** canonicalModel → 站点 → 该模型内归一后的价格分（0–1，1 = 该模型里最便宜） */
+  priceByModel: Record<string, Record<string, number>>;
 }
 
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+function clamp01(value: number): number {
+  return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
 /** 单条记录按 AI Agent 用量口径折算的实付成本（CNY / 100 万 token 混合用量）；
@@ -101,8 +108,8 @@ export function effectiveCostCny(row: OverviewRecord, rate: number | null): numb
   return total > 0 ? total : null;
 }
 
-/** 各站价格项 0–1：同模型内按 log 尺度归一后取中位数；只有一个站点在售的模型不参与（没有比较）。 */
-function priceScores(records: OverviewRecord[], rate: number | null): Map<string, number> {
+/** 逐模型算价格分：同一模型下各站取最便宜那一档成本，再按 log 尺度归一。 */
+function priceByModel(records: OverviewRecord[], rate: number | null): Record<string, Record<string, number>> {
   // 模型 → 站点 → 该模型下最便宜的成本（同站多分组取最低，等价于用户会挑的那档）
   const byModel = new Map<string, Map<string, number>>();
   for (const row of records) {
@@ -115,31 +122,24 @@ function priceScores(records: OverviewRecord[], rate: number | null): Map<string
     const prev = sites.get(row.site_id);
     if (prev == null || cost < prev) sites.set(row.site_id, cost);
   }
-  const perSite = new Map<string, number[]>();
-  for (const sites of byModel.values()) {
-    if (sites.size < 2) continue; // 单站模型没有横向比较，不给分
+  const result: Record<string, Record<string, number>> = {};
+  for (const [model, sites] of byModel) {
     const costs = [...sites.values()];
     const lo = Math.min(...costs);
     const hi = Math.max(...costs);
+    const scores: Record<string, number> = {};
     for (const [site, cost] of sites) {
-      // log 尺度：价格跨几个数量级时才不至于被一个离群值压平
-      const ratio = hi > lo ? clamp01((Math.log(cost) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) : 0;
-      const list = perSite.get(site) ?? [];
-      list.push(1 - ratio); // 最便宜 = 1
-      perSite.set(site, list);
+      // log 尺度：价格跨几个数量级时才不至于被一个离群值压平；全站同价（或只有一家在售）都算 1
+      scores[site] = hi > lo ? 1 - clamp01((Math.log(cost) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) : 1;
     }
-  }
-  const result = new Map<string, number>();
-  for (const [site, scores] of perSite) {
-    const value = median(scores);
-    if (value != null) result.set(site, value);
+    result[model] = scores;
   }
   return result;
 }
 
-/** 各站渠道稳定项 0–1：近 7 天在售渠道平均可用率（时段桶按次数加权）与渠道成功率取均值；
+/** 站点渠道稳定项 0–1：近 7 天在售渠道平均可用率（时段桶按次数加权）与渠道成功率取均值；
  *  两项都拿不到时返回 null（调用方给中性分）。 */
-function stabilityOf(views: SiteViews | null | undefined, siteId: string): number | null {
+function stabilityOf(views: SiteStats | null | undefined, siteId: string): number | null {
   const buckets = views?.uptimeBuckets?.[siteId] ?? [];
   let weighted = 0;
   let count = 0;
@@ -177,38 +177,43 @@ function noticeFreshness(at: number | null | undefined, now: number): number {
   return (NOTICE_STALE_DAYS - days) / (NOTICE_STALE_DAYS - NOTICE_FRESH_DAYS);
 }
 
-/** 汇总各站综合分；站点集合 = 价格记录涉及的站 ∪ 有配置标志的站。 */
-export function computeSiteScores(input: SiteRankInput): Record<string, SiteScore> {
+/** 汇总：站点级三项 + 逐模型价格分。站点集合 = 价格记录涉及的站 ∪ 有配置标志的站。 */
+export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   const now = input.now ?? Date.now() / 1000;
   const siteIds = new Set<string>();
   for (const row of input.records) siteIds.add(row.site_id);
   for (const id of Object.keys(input.siteFlags ?? {})) siteIds.add(id);
 
-  const prices = priceScores(input.records, input.rate);
+  const site: Record<string, SiteSideScore> = {};
+  for (const siteId of siteIds) {
+    site[siteId] = {
+      stability: stabilityOf(input.views, siteId) ?? NEUTRAL,
+      completeness: completenessOf(input.siteFlags?.[siteId]) ?? NEUTRAL,
+      notice: noticeFreshness(input.noticeAt?.[siteId], now),
+    };
+  }
+  return { site, priceByModel: priceByModel(input.records, input.rate) };
+}
+
+/** 单行综合分（0–100）：价格取「当前模型内」的归一值，其余三项取站点级。 */
+export function rowScore(ranking: SiteRanking, siteId: string, model: string): SiteScore {
+  const side = ranking.site[siteId] ?? { stability: NEUTRAL, completeness: NEUTRAL, notice: 0 };
+  const price = ranking.priceByModel[canonicalModel(model)]?.[siteId] ?? 0;
   const weightSum =
     SITE_RANK_WEIGHTS.price +
     SITE_RANK_WEIGHTS.stability +
     SITE_RANK_WEIGHTS.completeness +
     SITE_RANK_WEIGHTS.notice;
-
-  const result: Record<string, SiteScore> = {};
-  for (const siteId of siteIds) {
-    const price = prices.get(siteId) ?? 0;
-    const stability = stabilityOf(input.views, siteId) ?? NEUTRAL;
-    const completeness = completenessOf(input.siteFlags?.[siteId]) ?? NEUTRAL;
-    const notice = noticeFreshness(input.noticeAt?.[siteId], now);
-    const score =
-      (SITE_RANK_WEIGHTS.price * price +
-        SITE_RANK_WEIGHTS.stability * stability +
-        SITE_RANK_WEIGHTS.completeness * completeness +
-        SITE_RANK_WEIGHTS.notice * notice) /
-      weightSum;
-    result[siteId] = { score: score * 100, price, stability, completeness, notice };
-  }
-  return result;
+  const score =
+    (SITE_RANK_WEIGHTS.price * price +
+      SITE_RANK_WEIGHTS.stability * side.stability +
+      SITE_RANK_WEIGHTS.completeness * side.completeness +
+      SITE_RANK_WEIGHTS.notice * side.notice) /
+    weightSum;
+  return { score: score * 100, price, ...side };
 }
 
-/** 站点分排序键：分数高者在前；无分视为最低。 */
-export function siteScoreRank(scores: Record<string, SiteScore> | undefined, siteId: string): number {
-  return scores?.[siteId]?.score ?? -1;
+/** 行排序键：综合分越高越靠前；站点不在评分表里视为最低。 */
+export function rowRankScore(ranking: SiteRanking | undefined, siteId: string, model: string): number {
+  return ranking ? rowScore(ranking, siteId, model).score : -1;
 }
