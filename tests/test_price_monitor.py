@@ -2039,6 +2039,29 @@ def test_site_request_headers_are_loaded_and_merged(tmp_path: Path):
     assert headers["user-agent"] == "UA-test"
 
 
+def test_site_request_headers_can_override_user_agent(tmp_path: Path):
+    """会话绑定站（指纹=IP+UA）需要站级固定 UA：request_headers 写在后覆盖默认 UA。"""
+    config = load_config(_write_config(tmp_path, {
+        "settings": {},
+        "sites": [{
+            "id": "demo",
+            "adapter": "standard",
+            "model_list_url": "https://demo.test/pricing",
+            "request_headers": {"User-Agent": "UA-bound"},
+            "models": ["demo-model"],
+        }],
+    }))
+
+    headers = _headers(config.sites[0], "UA-default")
+    assert headers["user-agent"] == "UA-bound"
+    # 未配置 request_headers 的站不受影响
+    other = load_config(_write_config(tmp_path, {
+        "settings": {},
+        "sites": [{"id": "plain", "adapter": "standard", "model_list_url": "https://plain.test/pricing", "models": []}],
+    }))
+    assert _headers(other.sites[0], "UA-default")["user-agent"] == "UA-default"
+
+
 def test_user_agent_is_fixed_by_default(tmp_path: Path):
     config = load_config(_write_config(tmp_path, {"settings": {}, "sites": [{"id": "demo", "adapter": "standard", "model_list_url": "https://demo.test/pricing", "models": []}]}))
     assert choose_user_agent(config) == DEFAULT_BROWSER_USER_AGENT

@@ -52,8 +52,19 @@ def headers(spec: SiteSpec, user_agent: str) -> dict[str, str]:
 
     凭证与 Cookie 都不在这里：凭证由 auth_inject_headers 按采集目标注入，
     Cookie 属于普通静态头，直接写进 request_headers。
+    request_headers 里的 User-Agent 大小写不敏感地覆盖默认 UA：会话绑定类
+    站点（指纹=IP+UA）需要站级固定 UA 与登录端一致。
     """
-    return {**spec.request_headers, "user-agent": user_agent}
+    merged = {**spec.request_headers, "user-agent": user_agent}
+    bound_ua = next(
+        (value for key, value in spec.request_headers.items() if key.casefold() == "user-agent"),
+        None,
+    )
+    if bound_ua is not None:
+        for key in [key for key in merged if key.casefold() == "user-agent"]:
+            del merged[key]
+        merged["user-agent"] = bound_ua
+    return merged
 
 
 def auth_inject_headers(spec: SiteSpec, target: str) -> dict[str, str]:
