@@ -43,10 +43,16 @@ def screenshot_path(site_id: str) -> Path:
 
 
 def site_homepage(spec: SiteSpec) -> str | None:
-    """截图目标地址：从 network.url 推导站点首页（源站根地址）。
+    """截图目标地址：站点配置了 homepage 就用它，否则从 network.url 推导源站根地址。
 
+    采集入口在 API 子域、本地根路径不是可看页面的站（如 4aicode）靠 homepage 显式指定；
     network.url 缺失或不是 http(s) 地址时返回 None——这类站没有可展示的页面，跳过。
     """
+    configured = str(spec.homepage or "").strip()
+    if configured:
+        parsed_homepage = urlsplit(configured)
+        if parsed_homepage.scheme in {"http", "https"} and parsed_homepage.netloc:
+            return configured
     network_url = str(spec.network.get("url") or "").strip()
     if not network_url:
         return None

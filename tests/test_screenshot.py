@@ -49,6 +49,35 @@ def test_site_homepage_rejects_non_http_url():
     assert site_homepage(spec) is None
 
 
+def test_site_homepage_prefers_configured_field():
+    """配置了站点首页就用它（4aicode 这类入口在 API 子域的站），没配才按采集地址推导。"""
+    configured = _spec_with_homepage("a", "https://api.a.test/api/billing/rates", "https://a.test/")
+    assert site_homepage(configured) == "https://a.test/"
+    # 只有 homepage、完全没有采集地址也能出图（占位站除外）
+    (only_homepage,) = sites_from_raw(
+        [{"id": "b", "homepage": "https://b.test/"}], models=(ModelTarget("gpt-5.6-luna"),)
+    )
+    assert site_homepage(only_homepage) == "https://b.test/"
+
+
+def _spec_with_homepage(site_id: str, url: str, homepage: str):
+    (spec,) = sites_from_raw(
+        [{"id": site_id, "homepage": homepage, "network": {"url": url}}],
+        models=(ModelTarget("gpt-5.6-luna"),),
+    )
+    return spec
+
+
+def test_site_homepage_field_validation():
+    """homepage 必须是非空 http(s) URL；空白值、相对地址、非字符串都拒。"""
+    for bad in ("notaurl", "", "  ", "/relative", 123):
+        with pytest.raises(ValueError, match="homepage"):
+            sites_from_raw([{"id": "a", "homepage": bad}], models=())
+    # 前后空白自动去掉
+    (spec,) = sites_from_raw([{"id": "a", "homepage": " https://a.test/ "}], models=())
+    assert spec.homepage == "https://a.test/"
+
+
 def test_screenshot_path_rejects_unsafe_site_id(tmp_path, monkeypatch):
     monkeypatch.setattr("llm_price_monitor.screenshot.SCREENSHOT_DIR", tmp_path)
     assert screenshot_path("demo-1") == tmp_path / "demo-1.png"
@@ -185,6 +214,34 @@ def test_purge_and_rename_move_screenshot(workspace: Path, monkeypatch):
     assert "renamed" not in (store.get_document(SCREENSHOT_DOC) or {})
     assert not shots.screenshot_path("renamed").exists()
     assert store.get_document(SCREENSHOT_DOC)["other"]["bytes"] == 1
+
+
+def test_site_homepage_roundtrip_through_api(workspace: Path):
+    """新增/编辑站点带 homepage：保存后可读回、截图地址用它；非法值 400。"""
+    client = TestClient(_app(workspace))
+    assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200
+    created = client.post(
+        "/api/sites",
+        json={"config": {"id": "h", "homepage": "https://h.test/", "network": {"url": "https://api.h.test/v1"}}},
+    )
+    assert created.status_code == 200, created.text
+    site = next(item for item in client.get("/api/sites").json()["sites"] if item["id"] == "h")
+    assert site["homepage"] == "https://h.test/"
+
+    for bad_value in ("nope", "", "  "):
+        bad = client.put(
+            "/api/sites/h",
+            json={"config": {"id": "h", "homepage": bad_value, "network": {"url": "https://api.h.test/v1"}}},
+        )
+        assert bad.status_code == 400 and "homepage" in bad.text
+    # 清空 homepage = 不带该键再保存（与 status.url/notice.url 同惯例：键在就必须非空）
+    cleared = client.put(
+        "/api/sites/h",
+        json={"config": {"id": "h", "network": {"url": "https://api.h.test/v1"}}},
+    )
+    assert cleared.status_code == 200, cleared.text
+    site = next(item for item in client.get("/api/sites").json()["sites"] if item["id"] == "h")
+    assert "homepage" not in site
 
 
 def test_remove_screenshot_tolerates_missing(tmp_path, monkeypatch):

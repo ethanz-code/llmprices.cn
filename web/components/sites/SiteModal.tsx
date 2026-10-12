@@ -17,6 +17,7 @@ import type { SiteConfig } from "@/lib/types";
 /** 表单状态快照：保存与实时同步都基于它，保证两条路径语义一致。 */
 type SiteFormState = {
   id: string;
+  homepage: string;
   url: string;
   statusUrl: string;
   statusGroupsText: string;
@@ -91,6 +92,9 @@ function applyForm(base: SiteConfig, form: SiteFormState): SiteConfig {
     id: form.id.trim(),
     network: networkFromForm(base, form),
   };
+  const homepage = form.homepage.trim();
+  if (homepage) next.homepage = homepage;
+  else delete next.homepage;
   const statusUrl = form.statusUrl.trim();
   // 分组白名单是站点级配置：价格采集与渠道状态共用，没有状态接口地址也要保留
   const groups = form.statusGroupsText
@@ -257,6 +261,7 @@ function shortenUrlText(text: string, max = 46): string {
 /** 表单已覆盖的顶层字段：之外的进「仅在 JSON 里维护」清单，让"配了但表单没输入框"的配置在界面上看得见 */
 const FORM_COVERED_KEYS = new Set([
   "id",
+  "homepage",
   "enabled",
   "network",
   "status",
@@ -294,6 +299,7 @@ function SiteModal({
 }) {
   const originalId = initial.id ?? "";
   const [id, setId] = useState(originalId);
+  const [homepage, setHomepage] = useState(typeof initial.homepage === "string" ? initial.homepage : "");
   const [url, setUrl] = useState(typeof initial.network?.url === "string" ? initial.network.url : "");
   const [ratioUrl, setRatioUrl] = useState(() => ratioFromConfig(initial.network).url);
   const [ratioHeadersText, setRatioHeadersText] = useState(() => ratioFromConfig(initial.network).headersText);
@@ -475,6 +481,7 @@ function SiteModal({
   // 把高级 JSON 的核心字段回填到表单（手动编辑 JSON 或补全骨架后调用，保持两边一致）
   function configToForm(config: SiteConfig) {
     setId(typeof config.id === "string" ? config.id : "");
+    setHomepage(typeof config.homepage === "string" ? config.homepage : "");
     setUrl(typeof config.network?.url === "string" ? config.network.url : "");
     const ratio = ratioFromConfig(config.network);
     setRatioUrl(ratio.url);
@@ -537,7 +544,7 @@ function SiteModal({
   }
 
   function formState(): SiteFormState {
-    return { id, url, statusUrl, statusGroupsText, noticeUrl, endpointHeadersText };
+    return { id, homepage, url, statusUrl, statusGroupsText, noticeUrl, endpointHeadersText };
   }
 
   // 真实调用一次续签接口（由认证子弹窗触发）：验证地址、凭证、响应结构是否都能对上；
@@ -872,6 +879,25 @@ function SiteModal({
               }}
               placeholder="留空则按采集地址自动生成，如 example-newapi"
               style={{ width: "min(280px, 100%)" }}
+            />
+          </SettingRow>
+          <SettingRow
+            label="站点首页"
+            hint="选填：截站点截图时打开这个页面；留空按采集地址自动推。采集地址是接口、本身没有能看的页面时，在这里填站点首页"
+          >
+            <Input
+              value={homepage}
+              onChange={(value) => {
+                setHomepage(value);
+                syncAdvanced((base) => {
+                  const next = { ...base };
+                  if (value.trim()) next.homepage = value.trim();
+                  else delete next.homepage;
+                  return next;
+                });
+              }}
+              placeholder="如 https://example.com"
+              style={{ width: "min(360px, 100%)" }}
             />
           </SettingRow>
           {/* 认证方式收在「认证与续签」弹窗里，和它控制的输入区在一起；入口卡片标注已配置状态 */}

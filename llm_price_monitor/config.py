@@ -193,6 +193,9 @@ class SiteSpec:
     auth_token: str | None = None
     request_headers: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
+    # 站点首页地址（选填）：截站点截图时打开的页面；留空按采集地址推导。
+    # 采集入口在 API 子域、根路径不是可看页面时（如 4aicode）填这里
+    homepage: str | None = None
     network: dict[str, Any] = field(default_factory=dict)
     networks: tuple[dict[str, Any], ...] = ()  # 附加采集地址：与 network 同构，逐个采集后合并价格
     status: dict[str, Any] = field(default_factory=dict)  # 可选渠道状态数据地址，GET 拉取后存自由结构 JSON
@@ -486,6 +489,14 @@ def sites_from_raw(values: list[Any], *, models: tuple[ModelTarget, ...] = ()) -
         if removed_fields:
             names = ", ".join(sorted(removed_fields))
             raise ValueError(f"站点 {site_id} 不再支持 {names}；请统一使用 network 配置请求和字段映射")
+        if "homepage" in value and value["homepage"] is not None:
+            homepage = value["homepage"]
+            if not isinstance(homepage, str) or not homepage.strip():
+                raise ValueError(f"站点 {site_id} 的 homepage 必须是非空 URL")
+            parsed_homepage = urlsplit(homepage.strip())
+            if parsed_homepage.scheme not in {"http", "https"} or not parsed_homepage.netloc:
+                raise ValueError(f"站点 {site_id} 的 homepage 必须是完整的 http(s) URL")
+            value["homepage"] = homepage.strip()
         network = value.get("network", {})
         if not isinstance(network, dict):
             raise ValueError(f"站点 {site_id} 的 network 必须是对象")

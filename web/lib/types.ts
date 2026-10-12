@@ -298,6 +298,9 @@ export interface SiteConfig {
    *  值里可用 ${access_token} / ${refresh_token}，续签换新后自动展开成新值；
    *  头名填 cookie 就是塞进 Cookie（如值 new_api_refresh=${refresh_token}）。没配的处不注入。 */
   auth_inject?: Record<string, { header?: string; value?: string } | null> | null;
+  /** 站点首页地址（选填）：截站点截图时打开的页面；留空按采集地址推导。
+   *  采集入口在 API 子域、根路径不是可看页面时（如 4aicode）填这里 */
+  homepage?: string | null;
   /** 后端保存时始终落库（slim_site_config 保留该字段），可放心用于行内启用判断 */
   enabled: boolean;
   [key: string]: unknown;
