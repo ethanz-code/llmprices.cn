@@ -25,6 +25,9 @@ import type { OverviewData, OverviewRecord, SiteStatus } from "@/lib/types";
 const rowKeyOf = (row: OverviewRecord) =>
   `${row.site_id}:${row.model}:${row.unit}:${row.metadata?.group ?? ""}`;
 
+/** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
+const ACTIVE_MODEL_KEY = "overview-active-model";
+
 interface ModelGroup {
   /** 归一后的分组键：大小写/连字符等写法差异不产生重复的表 */
   key: string;
@@ -60,8 +63,19 @@ export function OverviewTable({
   // 站点价统一按 RMB 展示与排序：USD 记录乘厂商价快照汇率，CNY 记录原样；无汇率回落原币
   const rate = data.catalog.usd_cny_rate ?? null;
 
-  // 按模型拆表：一个模型一张表；默认选中排序后的第一个，用户切换后跟随其选择
+  // 按模型拆表：一个模型一张表；默认选中排序后的第一个，用户切换后写入本地，刷新还停在这个模型
   const [activeModel, setActiveModel] = useState<string | null>(null);
+  const [modelReady, setModelReady] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ACTIVE_MODEL_KEY);
+      if (saved) setActiveModel(saved);
+    } catch {
+      // 隐私模式读不到就维持默认，不影响看价格
+    }
+    setModelReady(true);
+  }, []);
 
   const models = useMemo<ModelGroup[]>(() => {
     const byModel = new Map<string, { rows: OverviewRecord[]; names: Map<string, number> }>();
@@ -95,6 +109,22 @@ export function OverviewTable({
   }, [records, modelOrder]);
 
   const active = models.find((group) => group.key === activeModel) ?? models[0];
+
+  // 记住选择：所选模型仍在列表里才写回本地；已下架（记忆里是旧模型名）就清掉坏键并回到默认，
+  // 免得每次进来先跳到一个不存在的模型再回落
+  useEffect(() => {
+    if (!modelReady || !activeModel) return;
+    try {
+      if (models.some((group) => group.key === activeModel)) {
+        localStorage.setItem(ACTIVE_MODEL_KEY, activeModel);
+      } else if (models.length > 0) {
+        localStorage.removeItem(ACTIVE_MODEL_KEY);
+        setActiveModel(null);
+      }
+    } catch {
+      // 隐私模式读写失败只影响下次刷新，当前选择仍然有效
+    }
+  }, [activeModel, modelReady, models]);
 
   // 渠道点阵按行取数：只认与本行分组名对得上的渠道行，不做全量回退；
   // 没有分组或匹配不上（渠道形态接口，行名不是分组名）时不显示点阵
