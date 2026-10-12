@@ -229,27 +229,55 @@ function findLatency(obj: Record<string, unknown>): number | undefined {
     const value = obj[key];
     if (typeof value === "number" && Number.isFinite(value)) return value;
   }
+  // 嵌套指标容器：sub2api v2 监控的首字耗时 metrics.ttft.avg_ms，回落整段耗时 duration.avg_ms
+  const metrics = obj.metrics;
+  if (metrics && typeof metrics === "object") {
+    const m = metrics as Record<string, unknown>;
+    for (const container of ["ttft", "duration"]) {
+      const box = m[container];
+      if (box && typeof box === "object") {
+        const avg = (box as Record<string, unknown>).avg_ms;
+        if (typeof avg === "number" && Number.isFinite(avg)) return avg;
+      }
+    }
+  }
   return undefined;
 }
 
 /** 指标型站点的同义字段取值：成功率（%）、出字速度（TPS）与最近几轮成功率序列。 */
 const SUCCESS_RATE_KEYS = ["success_rate", "successRate"];
+const ERROR_RATE_KEYS = ["error_rate", "errorRate"];
 const TPS_KEYS = ["avg_tps", "tps"];
 const RECENT_RATES_KEYS = ["recent_success_rates", "recentSuccessRates"];
+/** 站点状态里无名的汇总桶（sub2api v2 监控把未单列模型并进 __other__），不是渠道行。 */
+const SENTINEL_NAMES = new Set(["__other__"]);
 
 function findMetric(obj: Record<string, unknown>, keys: string[]): number | undefined {
   for (const key of keys) {
     const value = obj[key];
     if (typeof value === "number" && Number.isFinite(value)) return value;
   }
+  // 嵌套指标容器（sub2api v2 监控：item.metrics.success_rate 与名字不同级）
+  const metrics = obj.metrics;
+  if (metrics && typeof metrics === "object") {
+    for (const key of keys) {
+      const value = (metrics as Record<string, unknown>)[key];
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+    }
+  }
   return undefined;
+}
+
+/** 成功率归一为百分数：接口给 0-1 小数（v2 监控）时 ×100，已是百分数原样返回。 */
+function normalizeRate(rate: number): number {
+  return rate > 0 && rate <= 1 ? rate * 100 : rate;
 }
 
 function recentRounds(obj: Record<string, unknown>): number[] {
   for (const key of RECENT_RATES_KEYS) {
     const value = obj[key];
     if (Array.isArray(value)) {
-      return value.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+      return value.filter((v): v is number => typeof v === "number" && Number.isFinite(v)).map(normalizeRate);
     }
   }
   return [];
@@ -313,20 +341,26 @@ function collectChannels(node: unknown, fallback: string | null, depth: number, 
     // 必须自带名字键才认，避免把站点返回里无名的汇总对象误当成渠道。
     const rounds = recentRounds(obj);
     const summaryRate = findMetric(obj, SUCCESS_RATE_KEYS);
-    const rate = rounds.length > 0 ? rounds[rounds.length - 1] : summaryRate;
+    const rawRate = rounds.length > 0 ? rounds[rounds.length - 1] : summaryRate;
+    const rate = rawRate != null ? normalizeRate(rawRate) : undefined;
+    const errorRate = findMetric(obj, ERROR_RATE_KEYS);
+    // 无样本行跳过：成功率与错误率双零说明窗口内没流量（sub2api v2 对无请求模型也给 success_rate:0），
+    // 当成 0% 异常会把可用率整体拉垮；真有失败的行错误率必为正
+    const hasSamples = (rate != null && rate > 0) || (errorRate != null && normalizeRate(errorRate) > 0);
     const nameKey = NAME_KEYS.find((key) => typeof obj[key] === "string" || typeof obj[key] === "number");
-    if (rate != null && nameKey != null) {
+    const name = nameKey != null ? String(obj[nameKey]) : undefined;
+    if (rate != null && name != null && hasSamples && !SENTINEL_NAMES.has(name)) {
       const ok = successRateLevel(rate) === "ok";
       const status = `${rate.toFixed(2)}%`;
       own = {
-        name: String(obj[nameKey]),
+        name,
         status,
         ok,
         provider: typeof obj.provider === "string" ? obj.provider : undefined,
         model: typeof obj.primary_model === "string" ? obj.primary_model : typeof obj.model === "string" ? obj.model : undefined,
         availability7d: availabilityPct(obj.availability_7d, obj.availability),
         dots: [{ status, ok, latency: findLatency(obj), rate, tps: findMetric(obj, TPS_KEYS) }],
-        successRate24h: summaryRate,
+        successRate24h: summaryRate != null ? normalizeRate(summaryRate) : undefined,
         recentRates: rounds.length > 0 ? rounds : undefined,
       };
       if (!isNonChatChannel(own.name)) out.push(own);

@@ -54,6 +54,50 @@ describe("channelDotsBySite 非对话渠道过滤", () => {
   });
 });
 
+describe("channelDotsBySite 指标型条目（无状态词，用成功率表达）", () => {
+  it("sub2api v2 监控形态：成功率嵌在 metrics 里的 0-1 小数归一为百分数", () => {
+    const rows = channelDotsBySite([
+      {
+        site_id: "demo",
+        captured_at: 1760000000,
+        data: { items: [
+          { platform: "openai", model: "gpt-5.6-sol", metrics: { success_rate: 1 } },
+          { platform: "openai", model: "gpt-5.6-terra", metrics: { success_rate: 0.7527 } },
+          { platform: "openai", model: "__other__", metrics: { success_rate: 0.5 } },
+        ] },
+      },
+    ])["demo"];
+    // __other__ 是汇总桶不是渠道；0.7527 → 75.27%（异常行排前）；1 → 100%
+    expect(rows.map((row) => [row.name, row.status])).toEqual([
+      ["gpt-5.6-terra", "75.27%"],
+      ["gpt-5.6-sol", "100.00%"],
+    ]);
+    expect(rows[0].ok).toBe(false);
+    expect(rows[1].ok).toBe(true);
+  });
+
+  it("无样本行跳过：成功率与错误率双零是没流量，不当 0% 异常", () => {
+    const rows = channelDotsBySite([
+      { site_id: "demo", captured_at: 1760000000, data: { items: [
+        { platform: "openai", model: "gpt-5.6-sol", metrics: { success_rate: 0.87, error_rate: 0.13, ttft: { avg_ms: 16800 } } },
+        { platform: "openai", model: "claude-opus-4-6", metrics: { success_rate: 0, error_rate: 0 } },
+        { platform: "openai", model: "gpt-5.2", metrics: {} },
+      ] } },
+    ])["demo"];
+    expect(rows.map((row) => [row.name, row.status])).toEqual([["gpt-5.6-sol", "87.00%"]]);
+    // 24h 汇总同样归一为百分数；首字耗时取 metrics.ttft.avg_ms
+    expect(rows[0].successRate24h).toBeCloseTo(87);
+    expect(rows[0].dots[0].latency).toBe(16800);
+  });
+
+  it("顶层百分数形态（perf-metrics 系）照旧按百分数判定，不受归一影响", () => {
+    const rows = channelDotsBySite([
+      { site_id: "demo", captured_at: 1760000000, data: { items: [{ name: "claude", success_rate: 97 }] } },
+    ])["demo"];
+    expect(rows.map((row) => [row.name, row.status, row.ok])).toEqual([["claude", "97.00%", true]]);
+  });
+});
+
 describe("buildMonitoredSets 在售监测集", () => {
   it("模型名 ∪ 计价分组名都收，归一去空格忽略大小写", () => {
     const sets = buildMonitoredSets([
