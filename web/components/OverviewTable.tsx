@@ -11,7 +11,6 @@ import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
 import { TermTip } from "./TermTip";
 import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
-import { shotSrc, type SiteShot, type SiteShots } from "@/lib/screenshots";
 import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMinute, formatTime, noticeExcerpt, recordStatusKey, rowReason, statusMeta } from "@/lib/format";
 import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
 import { rowRankScore, rowScore, type SiteRanking, type SiteScore } from "@/lib/siteRanking";
@@ -20,7 +19,6 @@ import { rankingHit, type RankingHit } from "@/lib/rankings";
 import { DiscountBars } from "./DiscountBars";
 import { LazyChannelDots } from "./LazyChannelDots";
 import { PriceCell, CachePriceCell } from "./PriceCell";
-import { ScreenshotLightbox } from "./ScreenshotLightbox";
 import type { OverviewData, OverviewRecord, SiteStatus } from "@/lib/types";
 
 /** 行唯一键：同站点同模型不再折叠，不同分组/单位各占一行。 */
@@ -30,12 +28,13 @@ const rowKeyOf = (row: OverviewRecord) =>
 /** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
 const ACTIVE_MODEL_KEY = "overview-active-model";
 
-/** 行综合分悬停明细：总分 + 四项分项（0–100）。 */
+/** 行综合分悬停明细：总分 + 四项分项（0–100）+ 数据滞后扣分。 */
 function siteScoreTitle(score: SiteScore): string {
   const pct = (value: number) => Math.round(value * 100);
   return [
     `行综合分 ${score.score.toFixed(1)} / 100`,
     `价格 ${pct(score.price)} · 渠道稳定 ${pct(score.stability)} · 配置完整 ${pct(score.completeness)} · 公告新鲜 ${pct(score.notice)}`,
+    ...(score.stale > 0 ? [`数据滞后扣 ${score.stale.toFixed(1)} 分（价格是沿用旧快照的）`] : []),
     "价格在本模型内比（越低分越高），分项越接近 100 越好。",
   ].join("\n");
 }
@@ -58,7 +57,6 @@ export function OverviewTable({
   modelOrder = {},
   siteHomepages,
   siteRanking,
-  siteScreenshots = {},
 }: {
   data: OverviewData;
   /** AA 榜单匹配索引：给当前选中模型挂排名徽标；榜单未生成时缺省不显示 */
@@ -71,15 +69,11 @@ export function OverviewTable({
   siteHomepages?: SiteHomepages;
   /** 站点评分（服务端算好，见 lib/siteRanking）：行排序主键，缺省退回按价格排 */
   siteRanking?: SiteRanking;
-  /** 站点截图元数据（服务端取好）：实拍列缩略图用，缺省该列显示为空 */
-  siteScreenshots?: SiteShots;
 }) {
   const records = data.records;
   const router = useRouter();
   // 站点价统一按 RMB 展示与排序：USD 记录乘厂商价快照汇率，CNY 记录原样；无汇率回落原币
   const rate = data.catalog.usd_cny_rate ?? null;
-  // 实拍大图弹窗：点缩略图打开，点空白/关闭按钮收起
-  const [shotPreview, setShotPreview] = useState<{ siteId: string; name: string; shot: SiteShot } | null>(null);
 
   // 按模型拆表：一个模型一张表；默认选中排序后的第一个，用户切换后写入本地，刷新还停在这个模型
   const [activeModel, setActiveModel] = useState<string | null>(null);
@@ -144,23 +138,17 @@ export function OverviewTable({
     }
   }, [activeModel, modelReady, models]);
 
-  // 默认行序：行综合分（价格按本模型内归一 + 站点级渠道稳定/配置完整/公告新鲜）高者在前，
-  // 同站或同分再按可靠性加权综合价（数据滞后扣分，满档虚增 20%）与折扣、抓取时间破平。
+  // 默认行序：行综合分（价格按本模型内归一 + 站点级渠道稳定/配置完整/公告新鲜 − 数据滞后扣分；
+  // 见 lib/siteRanking）高者在前，同站或同分再按综合价、折扣、抓取时间破平。
   // 点表头排序循环回"无排序"即回到此序。
   const parentRows = useMemo(
     () =>
       smartOrderRows(
         active?.rows ?? [],
-        (row) => {
-          // 数据滞后扣分：价格是沿用上次快照的（last_price_at 落后 captured_at），多半是 token 过期
-          // 没取到新数据；滞后超过 1 天开始扣，每多滞后一天多扣 1 分，最多 3 分
-          const staleSeconds = row.captured_at - (row.last_price_at ?? row.captured_at);
-          const penalty = Math.min(3, Math.max(0, staleSeconds / 86400 - 1));
-          // 满分 3 分归一到 0–1，乘 20% 上限后满档让综合价虚增 20%
-          return penalty / 3;
-        },
+        // 数据滞后已并入行综合分（siteRanking.stalenessPenalty），这里不再重复扣，按纯综合价破平
+        () => 0,
         rate,
-        (row) => rowRankScore(siteRanking, row.site_id, row.model),
+        (row) => rowRankScore(siteRanking, row),
       ),
     [active, rate, siteRanking],
   );
@@ -206,8 +194,10 @@ export function OverviewTable({
         const tip = [reason, row.last_price_at != null ? `上次拿到数据：${formatTime(row.last_price_at)}` : null]
           .filter(Boolean)
           .join("\n") || undefined;
-        // 行综合分每行都显示：价格按本模型算，同站同模型的各分组行分相同也照显，便于任意排序后逐行自读
-        const score = siteRanking ? rowScore(siteRanking, row.site_id, row.model) : null;
+        // 行综合分只在每站首行显示：整表一次只展示一个模型，同站各分组行的分必然相同，
+        // 逐行重复是噪音（与实拍列、公告列同口径）
+        const score =
+          siteRanking && firstRowKeys.has(rowKeyOf(row)) ? rowScore(siteRanking, row) : null;
         return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
             <RiskLink href={site.homepage || row.source_url} variant="site">
@@ -227,48 +217,6 @@ export function OverviewTable({
         );
       },
       sorter: (a, b) => a.site_id.localeCompare(b.site_id),
-    },
-    {
-      title: "首页实拍",
-      key: "screenshot",
-      width: 88,
-      mobileHide: true,
-      render: (_v: unknown, row) => {
-        const shot = siteScreenshots[row.site_id];
-        // 每行都贴缩略图：同站的图逐行重复是有意的，任意排序后每行自包含；
-        // 站还没截过图时显示占位
-        if (!shot) return <span style={{ color: "var(--text-3)" }}>—</span>;
-        const name = getSiteInfo(row.site_id).name || row.site_id;
-        return (
-          <button
-            type="button"
-            title="点击看大图"
-            aria-label={`查看 ${name} 首页实拍大图`}
-            onClick={(event) => {
-              event.stopPropagation(); // 行本身可点进详情页，点缩略图只开大图
-              setShotPreview({ siteId: row.site_id, name, shot });
-            }}
-            style={{
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              padding: 0,
-              background: "none",
-              cursor: "zoom-in",
-              display: "block",
-              lineHeight: 0,
-              overflow: "hidden",
-            }}
-          >
-            <img
-              src={shotSrc(row.site_id, shot, 320)}
-              alt={`${name} 首页截图缩略图`}
-              loading="lazy"
-              decoding="async"
-              style={{ width: 64, height: 40, objectFit: "cover", objectPosition: "top left", display: "block" }}
-            />
-          </button>
-        );
-      },
     },
     {
       title: (
@@ -474,12 +422,6 @@ export function OverviewTable({
           }
         />
       </div>
-      <ScreenshotLightbox
-        siteId={shotPreview?.siteId ?? null}
-        siteName={shotPreview?.name}
-        shot={shotPreview?.shot ?? null}
-        onClose={() => setShotPreview(null)}
-      />
     </>
   );
 }

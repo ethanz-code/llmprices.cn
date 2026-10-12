@@ -6,7 +6,6 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
   "fastapi>=0.115",
   "httpx>=0.28,<1",
-  "pillow>=10",  # 站点截图缩略图（总览表一屏几十张原图十几 MB，必须缩）
   "playwright>=1.40",
   "uvicorn>=0.34",
 ]

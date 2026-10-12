@@ -84,6 +84,7 @@
 - **数据表格 `.dtable`**：表头 = `--panel-2` 色带（贴面板顶时随圆角裁齐）；行分隔用 `--border` 低语发丝；单元格 `padding: 15px 12px`，首尾列 16px；行 hover 变底色；横向滚动只发生在 `.dtable-scroll` 内。
 - **按钮 `.btn`**：高 34px，胶囊圆角 9999px；`primary` = accent 填充 + `--accent-contrast` 文字；`ghost` = 中性填充底（`color-mix(--text 6%)`，与输入控件同一套语言）；`text` 纯文字。
 - **Seg 分段控件**：小胶囊组，激活项亮底 + `--shadow-pop`。
+- **顶部导航 tabs（`NavTabs`）**：`.nav-pill` 玻璃胶囊轨道 + 滑动指示器 `.nav-pill-indicator`；选中项走**反色胶囊**（指示器 `var(--text)`、文字 `var(--panel)`）——亮色近黑底白字、暗色近白底深字，一套值两个主题都成立。暗色若沿用 `var(--panel)` 会和轨道同色，选中项几乎看不出来（2026-10-12 修）。
 - **Tip 名词提示**：深色气泡 `--tooltip-bg`，portal 到 body 防裁切。
 - **Modal / Toaster / Skel**：统一从 `ui.tsx` 引用，弹窗圆角 12px、无边框靠投影浮起。
 - **开关/复选框**：无描边；未勾选/关态用中性填充色承担「空框」身份，激活亮品牌色，旋钮白底微投影。

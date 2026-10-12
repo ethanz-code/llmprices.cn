@@ -1,7 +1,8 @@
 /**
  * 站点综合分：模型数据页（/overview）每个站点行的排序依据。
  *
- * 综合分 = 价格 50% + 渠道稳定 20% + 配置完整 15% + 公告新鲜 15%（各分项 0–1，权重写死在此）。
+ * 综合分 = 价格 50% + 渠道稳定 20% + 配置完整 15% + 公告新鲜 15%（各分项 0–1，权重写死在此），
+ * 再减去「数据滞后扣分」（价格沿用旧快照时最多扣 10 分，见 stalenessPenalty）。
  * 目标是「价格越低越靠前，同时看配置/公告/渠道的配比」。
  *
  * 关键口径：**价格在当前这张表（当前模型）里比**——同一模型下各站的实付成本横向归一，
@@ -43,6 +44,13 @@ export const SITE_RANK_CHECKLIST: (keyof SiteFlags)[] = [
 const NOTICE_FRESH_DAYS = 7;
 const NOTICE_STALE_DAYS = 60;
 
+/** 数据滞后扣分上限：价格沿用旧快照（一般说明 token 过期、没取到新数据）的站点最多往下压这么多分。
+ *  从综合分里直接扣，不占权重比例——滞后是「数据可信度」问题，不该挤掉价格/稳定这些正向分项。 */
+export const STALE_PENALTY_MAX = 10;
+/** 滞后 1 天以内不扣（采集节奏本身有误差），滞后满 4 天扣满。 */
+const STALE_GRACE_DAYS = 1;
+const STALE_FULL_DAYS = 3;
+
 /** 缺数据的默认分（中性，既不奖励也不重罚）。 */
 const NEUTRAL = 0.5;
 
@@ -57,6 +65,8 @@ export interface SiteScore {
   completeness: number;
   /** 公告新鲜项 0–1 */
   notice: number;
+  /** 数据滞后扣分（已从 score 里扣掉），0–10；价格沿用旧快照时才有值 */
+  stale: number;
 }
 
 /** 站点级的三项（价格随模型变，不进这里）。 */
@@ -105,10 +115,12 @@ export function effectiveCostCny(row: OverviewRecord, rate: number | null): numb
     hitRate: DEFAULT_HIT_RATE,
     outputShare: DEFAULT_OUTPUT_SHARE,
   });
-  return total > 0 ? total : null;
+  // 真免费档（0/0 confirmed）就是 0，算最便宜；只有两档价都缺才 null（上面已挡）
+  return total;
 }
 
-/** 逐模型算价格分：同一模型下各站取最便宜那一档成本，再按 log 尺度归一。 */
+/** 逐模型算价格分：同一模型下各站取最便宜那一档成本，再按 log 尺度归一。
+ *  0 成本（真免费档）按「最低正价」同档处理——免费就是最便宜，不给它记成最贵。 */
 function priceByModel(records: OverviewRecord[], rate: number | null): Record<string, Record<string, number>> {
   // 模型 → 站点 → 该模型下最便宜的成本（同站多分组取最低，等价于用户会挑的那档）
   const byModel = new Map<string, Map<string, number>>();
@@ -125,12 +137,18 @@ function priceByModel(records: OverviewRecord[], rate: number | null): Record<st
   const result: Record<string, Record<string, number>> = {};
   for (const [model, sites] of byModel) {
     const costs = [...sites.values()];
-    const lo = Math.min(...costs);
+    const positive = costs.filter((cost) => cost > 0);
+    // 免费档（0 成本）按「最低正价的 1/10」处理：既让它压过一切付费档，又不把付费档全压成一片。
+    // 没有正价（全免费）时取 1/10 兜底，下面走「同价全给 1」分支，不会算出 NaN。
+    const freeFloor = (positive.length > 0 ? Math.min(...positive) : 1) / 10;
+    const hasFree = positive.length < costs.length;
+    const lo = hasFree ? freeFloor : Math.min(...costs);
     const hi = Math.max(...costs);
+    const logOf = (cost: number) => Math.log(Math.max(cost, freeFloor));
     const scores: Record<string, number> = {};
     for (const [site, cost] of sites) {
-      // log 尺度：价格跨几个数量级时才不至于被一个离群值压平；全站同价（或只有一家在售）都算 1
-      scores[site] = hi > lo ? 1 - clamp01((Math.log(cost) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) : 1;
+      // log 尺度：价格跨几个数量级时才不至于被一个离群值压平；全站同价算 1
+      scores[site] = hi > lo ? 1 - clamp01((logOf(cost) - logOf(lo)) / (logOf(hi) - logOf(lo))) : 1;
     }
     result[model] = scores;
   }
@@ -177,6 +195,14 @@ function noticeFreshness(at: number | null | undefined, now: number): number {
   return (NOTICE_STALE_DAYS - days) / (NOTICE_STALE_DAYS - NOTICE_FRESH_DAYS);
 }
 
+/** 数据滞后扣分（0–10）：价格是沿用上次快照的（last_price_at 落后 captured_at），
+ *  多半是 token 过期没取到新数据；滞后超 1 天开始扣，满 4 天扣满。 */
+function stalenessPenalty(row: OverviewRecord): number {
+  const staleSeconds = row.captured_at - (row.last_price_at ?? row.captured_at);
+  const over = Math.max(0, staleSeconds / 86_400 - STALE_GRACE_DAYS);
+  return STALE_PENALTY_MAX * Math.min(1, over / STALE_FULL_DAYS);
+}
+
 /** 汇总：站点级三项 + 逐模型价格分。站点集合 = 价格记录涉及的站 ∪ 有配置标志的站。 */
 export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   const now = input.now ?? Date.now() / 1000;
@@ -195,25 +221,28 @@ export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   return { site, priceByModel: priceByModel(input.records, input.rate) };
 }
 
-/** 单行综合分（0–100）：价格取「当前模型内」的归一值，其余三项取站点级。 */
-export function rowScore(ranking: SiteRanking, siteId: string, model: string): SiteScore {
-  const side = ranking.site[siteId] ?? { stability: NEUTRAL, completeness: NEUTRAL, notice: 0 };
-  const price = ranking.priceByModel[canonicalModel(model)]?.[siteId] ?? 0;
+/** 单行综合分（0–100）：价格取「当前模型内」的归一值，另外三项取站点级，数据滞后另扣。
+ *  传整行而不是 (站点, 模型)：滞后扣分要看这一行自己的 last_price_at。 */
+export function rowScore(ranking: SiteRanking, row: OverviewRecord): SiteScore {
+  const side = ranking.site[row.site_id] ?? { stability: NEUTRAL, completeness: NEUTRAL, notice: 0 };
+  const price = ranking.priceByModel[canonicalModel(row.model)]?.[row.site_id] ?? 0;
   const weightSum =
     SITE_RANK_WEIGHTS.price +
     SITE_RANK_WEIGHTS.stability +
     SITE_RANK_WEIGHTS.completeness +
     SITE_RANK_WEIGHTS.notice;
-  const score =
+  const weighted =
     (SITE_RANK_WEIGHTS.price * price +
       SITE_RANK_WEIGHTS.stability * side.stability +
       SITE_RANK_WEIGHTS.completeness * side.completeness +
       SITE_RANK_WEIGHTS.notice * side.notice) /
     weightSum;
-  return { score: score * 100, price, ...side };
+  const stale = stalenessPenalty(row);
+  const score = Math.max(0, weighted * 100 - stale);
+  return { score, price, ...side, stale };
 }
 
 /** 行排序键：综合分越高越靠前；站点不在评分表里视为最低。 */
-export function rowRankScore(ranking: SiteRanking | undefined, siteId: string, model: string): number {
-  return ranking ? rowScore(ranking, siteId, model).score : -1;
+export function rowRankScore(ranking: SiteRanking | undefined, row: OverviewRecord): number {
+  return ranking ? rowScore(ranking, row).score : -1;
 }

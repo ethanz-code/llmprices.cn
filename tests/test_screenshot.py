@@ -184,48 +184,6 @@ def test_screenshot_api_public_under_read_lockdown(workspace: Path, monkeypatch)
     assert client.get("/api/sites").status_code == 401
 
 
-def test_screenshot_thumbnail_endpoint(workspace: Path, monkeypatch):
-    """?w= 返回缩过的 JPEG（尺寸/类型/体积都对）；缓存按源图 mtime 失效；坏图回落原图。"""
-    import io
-    import os as os_mod
-
-    import llm_price_monitor.screenshot as shots
-    from PIL import Image
-
-    monkeypatch.setattr(shots, "SCREENSHOT_DIR", workspace / "var" / "screenshots")
-    app = _app(workspace)
-    store = app.state.store
-    client = TestClient(app)
-    record_screenshot(store, "demo", url="https://demo.test/", captured_at=1.0, size=0)
-    path = shots.screenshot_path("demo")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (1280, 800), (10, 20, 30)).save(path)  # 造一张真 PNG
-
-    full = client.get("/api/sites/demo/screenshot")
-    assert full.headers["content-type"] == "image/png"
-    thumb = client.get("/api/sites/demo/screenshot", params={"w": "320"})
-    assert thumb.status_code == 200 and thumb.headers["content-type"] == "image/jpeg"
-    with Image.open(io.BytesIO(thumb.content)) as img:
-        assert img.size == (320, 200)
-    assert len(thumb.content) < len(full.content)
-    thumbs = list((workspace / "var" / "screenshots" / "thumbs").glob("demo-*-w320.jpg"))
-    assert len(thumbs) == 1
-    # 超上限宽度被夹回允许范围
-    wide = client.get("/api/sites/demo/screenshot", params={"w": "99999"})
-    with Image.open(io.BytesIO(wide.content)) as img:
-        assert img.size[0] == shots.THUMB_WIDTH_MAX
-    # 重新截图（mtime 变化）→ 旧缩略图不再命中并顺手清掉，只留新的一份
-    os_mod.utime(path, (path.stat().st_atime + 5, path.stat().st_mtime + 5))
-    again = client.get("/api/sites/demo/screenshot", params={"w": "320"})
-    assert again.status_code == 200 and again.headers["content-type"] == "image/jpeg"
-    thumbs = list((workspace / "var" / "screenshots" / "thumbs").glob("demo-*-w320.jpg"))
-    assert len(thumbs) == 1
-    # 坏图（不是合法图片）→ 缩略图生成失败回落原图，不 500
-    path.write_bytes(b"not-an-image")
-    fallback = client.get("/api/sites/demo/screenshot", params={"w": "320"})
-    assert fallback.status_code == 200 and fallback.headers["content-type"] == "image/png"
-
-
 def test_purge_and_rename_move_screenshot(workspace: Path, monkeypatch):
     """普通删除保留截图；站点改名后图片和元数据跟着走；purge 删除两者都清。"""
     import llm_price_monitor.screenshot as shots

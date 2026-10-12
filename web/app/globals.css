@@ -2016,7 +2016,9 @@ html:not([data-theme="dark"]) .nav-pop {
   bottom: 4px;
   left: 0;
   border-radius: 9999px;
-  background: var(--panel);
+  /* 选中胶囊走「反色」：亮色近黑底白字、暗色近白底深字。
+     暗色若用 --panel 会和胶囊轨道同色，选中项几乎看不出来。 */
+  background: var(--text);
   animation: nav-indicator-in 0.25s var(--ease);
   transition:
     transform 0.28s var(--ease),
@@ -2047,17 +2049,8 @@ html:not([data-theme="dark"]) .nav-pop {
 }
 
 .nav-pill-item.active {
-  color: var(--text);
-  font-weight: 550;
-}
-
-/* 亮色下白指示器浮在白胶囊上几乎看不见：激活项改近黑底、白字 */
-html:not([data-theme="dark"]) .nav-pill-indicator {
-  background: var(--text);
-}
-
-html:not([data-theme="dark"]) .nav-pill-item.active {
   color: var(--panel);
+  font-weight: 550;
 }
 
 /* 汉堡菜单仅移动端：提升特异性，避免被 AntD .ant-btn 的 display 覆盖 */
