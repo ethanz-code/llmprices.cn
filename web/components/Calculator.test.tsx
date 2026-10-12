@@ -59,6 +59,16 @@ describe("optionFromCatalog 取价接线", () => {
     expect(opt.prices.cacheRead).toBeNull();
     expect(opt.prices.cacheWrite).toBeNull();
   });
+
+  it("缓存写入价为 0（站点标免费）照原样带出，不擅自抹成空", () => {
+    // 真实样例：国内条目 glm-5.3-flashx 的 cache_cny.write 就是 0
+    const opt = optionFromCatalog("glm5.3flashx", entry({
+      region: "cn",
+      list_cny: { input: 2, output: 7 },
+      cache_cny: { read: 0.57, write: 0 },
+    }));
+    expect(opt.prices).toEqual({ input: 2, output: 7, cacheRead: 0.57, cacheWrite: 0 });
+  });
 });
 
 describe("optionFromRecord 取价接线", () => {
