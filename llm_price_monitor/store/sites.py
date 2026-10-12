@@ -1,11 +1,8 @@
-"""store/sites.py：站点配置、站点提交、用户反馈与 AI 助手配额计数。"""
+"""store/sites.py：站点配置与 AI 助手配额计数。"""
 from __future__ import annotations
 
 import json
-import time
 from typing import Any
-
-from llm_price_monitor import store as _store_pkg
 
 from .base import StoreBase, _dumps
 from .schema import latest_site_prefix
@@ -111,43 +108,6 @@ class SiteStoreMixin(StoreBase):
                     (site_id, seq, _dumps(config)),
                 )
 
-    # ---------- 站点提交 ----------
-
-    def add_site_submission(
-        self, *, name: str, url: str, models: str | None, contact: str | None, ip: str
-    ) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO site_submissions (name, url, models, contact, ip, status, created_at)"
-                " VALUES (?, ?, ?, ?, ?, 'new', ?)",
-                (name, url, models, contact, ip, time.time()),
-            )
-
-    def list_site_submissions(
-        self, *, limit: int = 100, offset: int = 0, status: str | None = None
-    ) -> tuple[list[dict[str, Any]], int]:
-        limit = max(1, min(limit, _store_pkg._MAX_ROW_LIMIT))
-        clauses: list[str] = []
-        params: list[Any] = []
-        if status:
-            clauses.append("status = ?")
-            params.append(status)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._conn() as conn:
-            total = int(conn.execute(f"SELECT COUNT(*) FROM site_submissions {where}", params).fetchone()[0])
-            rows = conn.execute(
-                f"SELECT * FROM site_submissions {where} ORDER BY id DESC LIMIT ? OFFSET ?",
-                (*params, limit, offset),
-            ).fetchall()
-        return [dict(row) for row in rows], total
-
-    def set_site_submission_status(self, submission_id: int, status: str) -> bool:
-        with self._conn() as conn:
-            cursor = conn.execute(
-                "UPDATE site_submissions SET status = ? WHERE id = ?", (status, submission_id)
-            )
-        return cursor.rowcount > 0
-
     # ---------- AI 助手配额（SQLite 计数：重启不丢、并发不互相覆盖） ----------
 
     def quota_used(self, ip: str, day: str) -> int:
@@ -166,10 +126,3 @@ class SiteStoreMixin(StoreBase):
                 (ip, day),
             )
             conn.execute("DELETE FROM assistant_usage WHERE day < ?", (day,))
-
-    def append_feedback(self, content: str, contact: str | None) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO feedback (content, contact, created_at) VALUES (?, ?, ?)",
-                (content, contact, time.time()),
-            )

@@ -115,13 +115,12 @@ Next.js 16（App Router）+ React 19 服务端渲染，支持浅色 / 深色 / �
 | --- | --- | --- |
 | `GET /api/overview` `latest` `history` `feed` `status` `notice` `catalog` `discount` `rankings` `geo` | 公开 | 数据读取：最新单价、事件流、渠道状态、公告、官方目录、折扣、榜单、IP 归属地 |
 | `GET /api/assistant/status` · `POST /api/assistant/ask` | 公开（限次） | AI 助手答问，支持流式 |
-| `POST /api/site-submissions` | 公开（限次） | 访客提交站点检测申请 |
 | `POST /api/setup` · `POST /api/auth/login` / `logout` | 公开 | 首次设置、会话登录 |
 | `GET /api/tasks` | 公开 | 后台任务列表与进度 |
 | `POST /api/collect` | 管理员 | 触发采集，结果附带官方价折扣 |
 | `POST /api/catalog/refresh` · `POST /api/rankings/refresh` | 管理员 | 同步官方价目录 / 抓取榜单 |
 | `GET/POST/PUT/DELETE /api/sites` · `/api/vendor-sources` | 管理员 | 站点与厂商定价源管理 |
-| `GET/PUT /api/settings` | 管理员 | 系统设置（AI、通知、采集出口） |
+| `GET/PUT /api/settings` | 管理员 | 系统设置（AI、采集出口） |
 
 ## 项目结构与部署
 

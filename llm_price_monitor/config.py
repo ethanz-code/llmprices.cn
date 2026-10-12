@@ -214,8 +214,6 @@ class AIResultCache(Protocol):
 @dataclass(frozen=True)
 class MonitorSettings:
     timeout: float = 20.0
-    wxpusher_app_token: str | None = None
-    wxpusher_uid: str | None = None
     user_agent: str = DEFAULT_BROWSER_USER_AGENT
     # 数据保留天数：超期由对应采集任务/接口顺带清理；价格与站点事件永不清理
     retention_price_days: int = 90

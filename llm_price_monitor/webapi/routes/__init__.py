@@ -19,6 +19,5 @@ from . import (  # noqa: F401
     settings,
     sites,
     status,
-    submissions,
     vendor_sources,
 )

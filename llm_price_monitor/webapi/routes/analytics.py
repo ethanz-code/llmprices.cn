@@ -1,4 +1,4 @@
-"""访客行为端点：页面访问埋点与统计（管理员）、访客建议。"""
+"""访客行为端点：页面访问埋点与统计（管理员）。"""
 from __future__ import annotations
 
 import logging
@@ -9,7 +9,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from llm_price_monitor import wxpusher
 from llm_price_monitor.config import config_from_store
 from llm_price_monitor import visitor_geo
 from llm_price_monitor.store import Store
@@ -22,11 +21,6 @@ _log = logging.getLogger("llm_price_monitor.webapi.routes.analytics")
 TRACK_MAX_PER_MINUTE = 60
 
 
-class FeedbackBody(BaseModel):
-    content: str
-    contact: str | None = None
-
-
 class TrackBody(BaseModel):
     path: str
 
@@ -35,50 +29,11 @@ def build_router(store: Store) -> APIRouter:
     router = APIRouter()
 
     # 进程内限速/去重状态：随应用生命周期存续，重启即重置
-    feedback_hits: dict[str, list[float]] = {}
     track_hits: dict[str, list[float]] = {}
     visit_purge_state = {"last": 0.0}
-    feedback_lock = threading.Lock()
     track_lock = threading.Lock()
     # 同 IP + 路径 30 秒内只记一次，避免刷新与重复预取虚高 PV
     visit_hits: dict[tuple[str, str], float] = {}
-
-    @router.post("/api/feedback")
-    def submit_feedback(body: FeedbackBody, request: Request) -> dict[str, bool]:
-        """访客提建议：入库保存；配置了 WxPusher 时尽力推送通知，推送失败不影响入库。"""
-        content = body.content.strip()
-        if not content:
-            raise HTTPException(status_code=400, detail="建议内容不能为空")
-        if len(content) > 1000:
-            raise HTTPException(status_code=400, detail="建议内容最长 1000 字")
-        contact = (body.contact or "").strip() or None
-        if contact and len(contact) > 100:
-            raise HTTPException(status_code=400, detail="联系方式最长 100 字")
-        now = time.time()
-        ip = client_ip(request)
-        with feedback_lock:  # 同步路由跑线程池，读-判-写必须整体原子
-            if len(feedback_hits) > 1024:  # 时间窗只进不出，攒大了压缩一次：窗口内已无记录的 IP 直接清掉
-                alive = {key: [t for t in hits if now - t < 60] for key, hits in feedback_hits.items()}
-                feedback_hits.clear()
-                feedback_hits.update({key: hits for key, hits in alive.items() if hits})
-            recent = [t for t in feedback_hits.get(ip, []) if now - t < 60]
-            if len(recent) >= 3:
-                raise HTTPException(status_code=429, detail="提交过于频繁，请稍后再试")
-            recent.append(now)
-            feedback_hits[ip] = recent
-        store.append_feedback(content, contact)
-        settings = config_from_store(store).settings
-        if settings.wxpusher_app_token:
-            try:
-                wxpusher.send_wxpusher(
-                    app_token=settings.wxpusher_app_token,
-                    content=f"【llmprices.cn】收到新的建议\n联系方式：{contact or '未留'}\n\n{content}",
-                    summary=content[:100],
-                    uid=settings.wxpusher_uid,
-                )
-            except Exception as exc:
-                _log.warning("访客建议的 WxPusher 推送失败：%s", exc)  # 尽力而为：推送失败不阻塞入库
-        return {"ok": True}
 
     @router.post("/api/analytics/track")
     def track_visit(body: TrackBody, request: Request) -> dict[str, bool]:

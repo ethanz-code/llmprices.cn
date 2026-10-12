@@ -1,6 +1,6 @@
 "use client";
 
-/** 系统设置：按「采集调度 / 数据保留 / AI 提取 / 微信通知 WxPusher / 种子导入」分组，AI 与通知可独立测试有效性。 */
+/** 系统设置：按「采集调度 / 数据保留 / AI 提取 / 种子导入」分组，AI 与外链可独立测试有效性。 */
 
 import { useEffect, useRef, useState } from "react";
 import { toast, Btn, Input, Pick, Sel, Modal, SettingRow, LoadingRows } from "./ui";
@@ -96,7 +96,7 @@ function SecretInput({
   );
 }
 
-type TestTarget = "ai" | "wxpusher" | "proxy";
+type TestTarget = "ai" | "proxy";
 
 type TestOutcome = { ok: boolean; text: string };
 
@@ -142,7 +142,7 @@ function resultText(target: TestTarget, data: TestResponse): string {
   if (target === "proxy") {
     return `✓ 连通 · ${ms}${data.exit_ip ? ` · 出口 IP ${data.exit_ip}` : ""}`;
   }
-  return `✓ 测试消息已发送 · ${ms}`;
+  return `✓ 连通 · ${ms}`;
 }
 
 function SettingsSection({
@@ -179,8 +179,6 @@ function SettingsSection({
 
 export function AdminSettings() {
   const [data, setData] = useState<SettingsData | null>(null);
-  const [wxToken, setWxToken] = useState("");
-  const [wxUid, setWxUid] = useState("");
   const [aiBaseUrl, setAiBaseUrl] = useState("");
   const [aiFormat, setAiFormat] = useState("chat_completions");
   const [aiModels, setAiModels] = useState("");
@@ -213,8 +211,6 @@ export function AdminSettings() {
     try {
       const loaded = await apiSend<SettingsData>("/api/settings", "GET");
         setData(loaded);
-        setWxToken(typeof loaded.settings.wxpusher_app_token === "string" ? loaded.settings.wxpusher_app_token : "");
-        setWxUid(typeof loaded.settings.wxpusher_uid === "string" ? loaded.settings.wxpusher_uid : "");
         const ai = loaded.ai;
         setAiBaseUrl(typeof ai.base_url === "string" ? ai.base_url : "");
         setAiFormat(typeof ai.api_format === "string" && ai.api_format ? ai.api_format : "chat_completions");
@@ -316,8 +312,6 @@ export function AdminSettings() {
       proxy_controller_secret: proxyControllerSecret.trim() || null,
       proxy_switch_group: switchGroupText || null,
       proxy_switch_node_filter: proxySwitchNodeFilter.trim() || null,
-      wxpusher_app_token: wxToken.trim() || null,
-      wxpusher_uid: wxUid.trim() || null,
       schedule: scheduleOut,
       ...retentionOut,
       assistant_daily_limit: assistantLimitOut,
@@ -363,8 +357,6 @@ export function AdminSettings() {
       const result = await apiSend<TestResponse>("/api/settings/test", "POST", {
         target,
         settings: {
-          wxpusher_app_token: wxToken.trim() || null,
-          wxpusher_uid: wxUid.trim() || null,
           fallback_proxy: fallbackProxy.trim() || null,
         },
         ai: {
@@ -796,23 +788,6 @@ export function AdminSettings() {
                 placeholder={`默认 ${DEFAULT_ASSISTANT_DAILY_LIMIT}`}
                 style={{ width: 120, maxWidth: "100%" }}
               />
-            </SettingRow>
-          </SettingsSection>
-          <SettingsSection
-            title="通知推送（WxPusher）"
-            description="收到新建议、或有访客提交站点时通知你；站点价格、渠道状态和公告的变化不推送，到面板看即可。Token 留空就只保存不推送"
-            action={
-              <Btn size="sm" loading={testing === "wxpusher"} onClick={() => runTest("wxpusher")}>
-                发测试消息
-              </Btn>
-            }
-            result={results.wxpusher}
-          >
-            <SettingRow label="WxPusher App Token" hint="在 wxpusher.zjiecode.com 管理后台创建应用后获取">
-              <SecretInput value={wxToken} onChange={setWxToken} placeholder="AT_…" />
-            </SettingRow>
-            <SettingRow label="WxPusher UID" hint="关注自己创建的应用后，在管理后台「用户管理」或客户端里能看到自己的 UID；留空就发给全部关注者">
-              <Input value={wxUid} onChange={setWxUid} placeholder="UID_…" style={{ width: "min(360px, 100%)" }} />
             </SettingRow>
           </SettingsSection>
           <SettingsSection

@@ -1,4 +1,4 @@
-"""系统设置端点：读取、保存与外链实测（AI / WxPusher），以及模型池批量体检。"""
+"""系统设置端点：读取、保存与外链实测（AI / 代理），以及模型池批量体检。"""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from llm_price_monitor import proxy_switch, wxpusher
+from llm_price_monitor import proxy_switch
 from llm_price_monitor.ai import model_unusable_status, ping_model, provider_error_detail
 from llm_price_monitor.config import ai_from_raw, schedule_from_raw, settings_from_raw
 from llm_price_monitor.store import Store
@@ -83,7 +83,7 @@ class SeedBody(BaseModel):
 
 
 class SettingsTestBody(BaseModel):
-    target: Literal["ai", "wxpusher", "proxy"]
+    target: Literal["ai", "proxy"]
     settings: dict[str, Any] | None = None
     ai: dict[str, Any] | None = None
 
@@ -225,16 +225,7 @@ def build_router(store: Store) -> APIRouter:
                     raise ValueError("请先填写备用代理地址")
                 result = probe_proxy(proxy_url)
                 return {"ok": True, "elapsed_ms": result["elapsed_ms"], "exit_ip": result.get("exit_ip")}
-            token = str(merged_settings.get("wxpusher_app_token") or "").strip()
-            if not token:
-                raise ValueError("请先填写 WxPusher App Token")
-            wxpusher.send_wxpusher(
-                app_token=token,
-                content="【llmprices.cn】这是一条测试推送，收到即表示通知配置有效。",
-                summary="测试推送",
-                uid=str(merged_settings.get("wxpusher_uid") or "").strip() or None,
-            )
-            return {"ok": True, "elapsed_ms": elapsed_ms()}
+            raise ValueError(f"未知的测试目标：{body.target}")
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="目标服务返回了非 JSON 响应，请检查地址是否正确") from exc
         except (ValueError, RuntimeError) as exc:

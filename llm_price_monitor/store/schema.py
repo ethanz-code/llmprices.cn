@@ -66,12 +66,6 @@ CREATE TABLE IF NOT EXISTS documents (
     content TEXT NOT NULL,
     updated_at REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS feedback (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT NOT NULL,
-    contact TEXT,
-    created_at REAL NOT NULL
-);
 CREATE TABLE IF NOT EXISTS status_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id TEXT NOT NULL,
@@ -120,16 +114,6 @@ CREATE TABLE IF NOT EXISTS ip_geo (
     city TEXT,
     ok INTEGER NOT NULL DEFAULT 1,
     resolved_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS site_submissions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    url TEXT NOT NULL,
-    models TEXT,
-    contact TEXT,
-    ip TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'new',
-    created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS assistant_usage (
     ip TEXT NOT NULL,

@@ -9,7 +9,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from llm_price_monitor import wxpusher
 from llm_price_monitor.catalog import fx
 from llm_price_monitor.webapi.app import create_app
 
@@ -501,23 +500,20 @@ def test_settings_roundtrip_and_validation(workspace: Path):
     bad = client.put("/api/settings", json={"ai": {"timeout": "abc"}})
     assert bad.status_code == 400
 
-    # mihomo 控制接口密钥、WxPusher 推送凭证：读回与保存响应都是明文，传 null 清除
+    # mihomo 控制接口密钥：读回与保存响应都是明文，传 null 清除
     put = client.put(
         "/api/settings",
-        json={"settings": {"proxy_controller_secret": "real-mihomo-secret", "wxpusher_app_token": "AT_xx9876"}},
+        json={"settings": {"proxy_controller_secret": "real-mihomo-secret"}},
     )
     assert put.status_code == 200
     assert put.json()["settings"]["proxy_controller_secret"] == "real-mihomo-secret"
-    assert put.json()["settings"]["wxpusher_app_token"] == "AT_xx9876"
     got = client.get("/api/settings").json()["settings"]
     assert got["proxy_controller_secret"] == "real-mihomo-secret"
-    assert got["wxpusher_app_token"] == "AT_xx9876"
     assert client.put(
-        "/api/settings", json={"settings": {"proxy_controller_secret": None, "wxpusher_app_token": None}}
+        "/api/settings", json={"settings": {"proxy_controller_secret": None}}
     ).status_code == 200
     cleared = store.get_document("settings")
     assert not cleared.get("proxy_controller_secret")
-    assert not cleared.get("wxpusher_app_token")
     # 设置接口是管理员接口：匿名一律 401
     assert TestClient(create_app(_config(workspace))).get("/api/settings").status_code == 401
 
@@ -653,99 +649,14 @@ def test_tasks_listed_after_collect(workspace: Path, monkeypatch):
     assert task_id in [task["id"] for task in listed]
 
 
-def test_feedback_submit_validates_and_rate_limits(workspace: Path) -> None:
-    client = _admin_client(workspace)
-    for _ in range(3):
-        assert client.post("/api/feedback", json={"content": "希望支持导出", "contact": "a@b.c"}).status_code == 200
-    assert client.post("/api/feedback", json={"content": "第 4 条"}).status_code == 429
-    assert client.post("/api/feedback", json={"content": "   "}).status_code == 400
-    with sqlite3.connect(workspace / "var" / "monitor.db") as conn:
-        rows = conn.execute("SELECT content, contact FROM feedback ORDER BY id").fetchall()
-    assert rows == [("希望支持导出", "a@b.c")] * 3
-
-
-def test_feedback_pushes_wxpusher_when_configured(workspace: Path, monkeypatch) -> None:
-    client = _admin_client(workspace)
-    sent: dict = {}
-
-    def fake_send(*, app_token: str, content: str, summary: str, uid: str | None, timeout: float = 10.0) -> None:
-        sent.update(app_token=app_token, content=content, uid=uid)
-
-    monkeypatch.setattr(wxpusher, "send_wxpusher", fake_send)
-    assert client.put(
-        "/api/settings", json={"settings": {"wxpusher_app_token": "AT_x", "wxpusher_uid": "UID_y"}}
-    ).status_code == 200
-    assert client.post("/api/feedback", json={"content": "建议加个深色模式"}).status_code == 200
-    assert sent["app_token"] == "AT_x" and sent["uid"] == "UID_y"
-    assert "建议加个深色模式" in sent["content"]
-
-
-def test_feedback_push_failure_does_not_block_save(workspace: Path, monkeypatch) -> None:
-    client = _admin_client(workspace)
-    monkeypatch.setattr(wxpusher, "send_wxpusher", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("网络故障")))
-    assert client.put("/api/settings", json={"settings": {"wxpusher_app_token": "AT_x"}}).status_code == 200
-    assert client.post("/api/feedback", json={"content": "推送失败也要入库"}).status_code == 200
-    with sqlite3.connect(workspace / "var" / "monitor.db") as conn:
-        rows = conn.execute("SELECT content FROM feedback").fetchall()
-    assert rows == [("推送失败也要入库",)]
-
-
-
-def test_site_submission_saves_pushes_and_admin_manages(workspace: Path, monkeypatch) -> None:
-    sent: dict = {}
-
-    def fake_send(*, app_token: str, content: str, summary: str, uid: str | None, timeout: float = 10.0) -> None:
-        sent.update(app_token=app_token, content=content, uid=uid)
-
-    monkeypatch.setattr(wxpusher, "send_wxpusher", fake_send)
-    anon = TestClient(create_app(_config(workspace)))
-    # 未登录也能提交（公开写接口），但看不到列表
-    assert anon.post(
-        "/api/site-submissions",
-        json={"name": "Example 中转", "url": "https://example.com", "models": "gpt-5.6", "contact": "a@b.c"},
-    ).status_code == 200
-    assert anon.get("/api/admin/site-submissions").status_code == 401
-    # 校验：地址必须 http(s) 开头
-    assert anon.post("/api/site-submissions", json={"name": "x", "url": "ftp://bad"}).status_code == 400
-
-    assert not sent  # 未配置 WxPusher 时不应推送
-    sent.clear()
-    client = _admin_client(workspace)
-    client.put("/api/settings", json={"settings": {"wxpusher_app_token": "AT_x", "wxpusher_uid": "UID_y"}})
-    assert client.post(
-        "/api/site-submissions", json={"name": "第二家", "url": "https://two.example.com"}
-    ).status_code == 200
-    assert "第二家" in sent["content"] and sent["uid"] == "UID_y"
-
-    listed = client.get("/api/admin/site-submissions").json()
-    assert listed["total"] == 2
-    first_id = listed["submissions"][-1]["id"]  # 倒序，最早一条在末尾
-    assert listed["submissions"][-1]["status"] == "new"
-    assert client.post(f"/api/admin/site-submissions/{first_id}/status", json={"status": "done"}).status_code == 200
-    assert client.get("/api/admin/site-submissions", params={"status": "done"}).json()["total"] == 1
-    assert client.post("/api/admin/site-submissions/999/status", json={"status": "done"}).status_code == 404
-    with sqlite3.connect(workspace / "var" / "monitor.db") as conn:
-        rows = conn.execute("SELECT name, status FROM site_submissions ORDER BY id").fetchall()
-    assert rows == [("Example 中转", "done"), ("第二家", "new")]
-
-
-def test_site_submission_rate_limits_per_ip(workspace: Path) -> None:
-    client = TestClient(create_app(_config(workspace)))
-    for _ in range(3):
-        assert client.post("/api/site-submissions", json={"name": "x", "url": "https://x.test"}).status_code == 200
-    assert client.post("/api/site-submissions", json={"name": "x", "url": "https://x.test"}).status_code == 429
-
-
 def test_settings_test_probes_external_services_with_form_values(workspace: Path, monkeypatch) -> None:
     import llm_price_monitor.webapi.routes.settings as settings_routes
 
     client = _admin_client(workspace)
 
-    # 未配置 AI / WxPusher 时给出可读的 400
+    # 未配置 AI 时给出可读的 400
     missing_ai = client.post("/api/settings/test", json={"target": "ai"})
     assert missing_ai.status_code == 400 and "Base URL" in missing_ai.json()["detail"]
-    missing_wx = client.post("/api/settings/test", json={"target": "wxpusher"})
-    assert missing_wx.status_code == 400 and "Token" in missing_wx.json()["detail"]
 
     # 先保存一套配置；测试仍以表单当前值为准（先测后存）
     assert client.put("/api/settings", json={
@@ -760,12 +671,7 @@ def test_settings_test_probes_external_services_with_form_values(workspace: Path
         seen["ai_model"] = model
         return "ok"
 
-    def fake_send(*, app_token, content, summary, uid, timeout=10.0):
-        seen["wx_token"] = app_token
-        seen["wx_uid"] = uid
-
     monkeypatch.setattr(settings_routes, "ping_model", fake_ping)
-    monkeypatch.setattr(wxpusher, "send_wxpusher", fake_send)
 
     # AI：表单值覆盖已存值，模型取列表第一个
     ai_probe = client.post("/api/settings/test", json={
@@ -775,14 +681,6 @@ def test_settings_test_probes_external_services_with_form_values(workspace: Path
     assert ai_probe["ok"] is True and ai_probe["model"] == "form-model-a" and ai_probe["reply"] == "ok"
     assert ai_probe["elapsed_ms"] >= 0
     assert seen["ai_base_url"] == "https://form.test/v1"
-
-    # WxPusher：表单值直达推送
-    wx_probe = client.post("/api/settings/test", json={
-        "target": "wxpusher",
-        "settings": {"wxpusher_app_token": "AT_form", "wxpusher_uid": "UID_form"},
-    }).json()
-    assert wx_probe["ok"] is True
-    assert seen["wx_token"] == "AT_form" and seen["wx_uid"] == "UID_form"
 
     # 未知 target 走 pydantic 校验拒绝
     assert client.post("/api/settings/test", json={"target": "nope"}).status_code == 422
@@ -1433,7 +1331,6 @@ def test_settings_defaults_written_to_db(workspace: Path):
     assert settings["timeout"] == 30  # 已有值不被覆盖
     assert settings["assistant_daily_limit"] == 10
     assert settings["retention_ai_log_days"] == 7
-    assert settings["wxpusher_app_token"] is None
 
 
 def test_first_startup_seeds_full_settings_defaults(workspace: Path):

@@ -1,16 +1,13 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { IconGithub, IconMail } from "./icons";
 import { LogoMark } from "./LogoMark";
-import { FeedbackModal } from "./FeedbackModal";
-import { CONTACT_EMAIL, footer, site } from "@/lib/copy";
+import { CONTACT_EMAIL, CONTACT_WECOM_URL, footer, site } from "@/lib/copy";
 import { useAuthPage } from "@/lib/useAuthPage";
 
-/** 全站页脚：品牌 + 一句话说明合并数据免责；企业微信二维码直接平铺右列，联系方式图标与低调管理入口在底行。 */
+/** 全站页脚：品牌 + 一句话说明合并数据免责；企业微信二维码（联系人名片码）平铺右列，客服是紧邻的文字链接。 */
 export function SiteFooter() {
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
   if (useAuthPage()) return null;
   return (
     <footer className="site-footer">
@@ -38,11 +35,14 @@ export function SiteFooter() {
           </div>
         </div>
         <div className="site-footer-qr">
-          {/* 白底内衬是二维码的 quiet zone，被页脚底色包住也能扫 */}
-          <img src={footer.wecomQrSrc} alt="企业微信二维码" width={84} height={84} loading="lazy" />
+          {/* 白底内衬是二维码的 quiet zone，被页脚底色包住也能扫。这是企业联系人名片码，客服走下面的文字链接 */}
+          <img src={footer.wecomQrSrc} alt="企业微信联系二维码" width={84} height={84} loading="lazy" />
           <div className="site-footer-qr-text">
             <span className="qr-title">扫码加我们企业微信</span>
             <span className="qr-sub">咨询、建议、合作都欢迎</span>
+            <a className="qr-link" href={CONTACT_WECOM_URL} target="_blank" rel="noreferrer">
+              提建议、报站点，点这里找{footer.wecomContact} →
+            </a>
           </div>
         </div>
       </div>
@@ -52,10 +52,9 @@ export function SiteFooter() {
           <Link href="/calculator">{footer.links.calculator}</Link>
           <Link href="/history">{footer.links.history}</Link>
           <Link href="/articles">{footer.links.articles}</Link>
-          <button type="button" onClick={() => setFeedbackOpen(true)}>{footer.links.feedback}</button>
+          <a href={CONTACT_WECOM_URL} target="_blank" rel="noreferrer">{footer.links.feedback}</a>
         </span>
       </div>
-      <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </footer>
   );
 }
