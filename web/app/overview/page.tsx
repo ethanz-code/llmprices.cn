@@ -25,6 +25,22 @@ export const metadata = pageMetadata(
 // 因此本页取数带会话 cookie 且保持 no-store——管理员与匿名访客的取数结果不能共享
 const SESSION_COOKIE = "ppm_session";
 
+/** 点阵需要的最近检测点数：与 ChannelDotMatrix 的 3 行 × 15 列一致，再往前的点客户端用不到。 */
+const DOTS_PER_CHANNEL = 45;
+
+/** 只保留每个渠道最近 DOTS_PER_CHANNEL 个点：点阵与排序扣分都只看最近若干个，
+ *  裁掉老点能把随页面下发的点阵数据从 ~9.5MB 压到 ~1MB。 */
+function capDots(channels: Record<string, ChannelDotRow[]>): Record<string, ChannelDotRow[]> {
+  return Object.fromEntries(
+    Object.entries(channels).map(([site, rows]) => [
+      site,
+      rows.map((row) =>
+        row.dots.length > DOTS_PER_CHANNEL ? { ...row, dots: row.dots.slice(-DOTS_PER_CHANNEL) } : row,
+      ),
+    ]),
+  );
+}
+
 export default async function OverviewPage() {
   const session = (await cookies()).get(SESSION_COOKIE)?.value;
   const headers = session ? { Cookie: `${SESSION_COOKIE}=${session}` } : undefined;
@@ -51,7 +67,9 @@ export default async function OverviewPage() {
       loadSiteHomepages(),
     ]);
     data = overview;
-    statusDots = statusViews.channels;
+    // 点阵只画每个渠道最近 45 个点（3 行 × 15 列），更早的点客户端用不到：先裁掉再随页下发，
+    // 否则整份点阵（各站各渠道最多 720 点）会撑到 ~9.5MB，页面 HTML 随之到 6.5MB。
+    statusDots = capDots(statusViews.channels);
     rankingsIndex = buildRankingIndex(rankings);
     modelOrder = catalogModelOrderIndex(catalog?.models ?? {});
     siteHomepages = homepages;

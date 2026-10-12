@@ -39,6 +39,59 @@ export async function loadStatusViews(
   headers?: HeadersInit,
   overview?: Promise<OverviewData | null>,
 ): Promise<SiteViews> {
+  // 进程内缓存 + stale-while-revalidate：这份数据每次要拉 21 站全量快照（合计 40MB+，逐条内含
+  // 站点上游原始 JSON），现算渠道点阵约 1.5 秒；而渠道按采集周期（分钟级）才更新，一分钟内没必要
+  // 重拉。有旧结果时永远直接给旧结果、后台刷新（刷新在飞时也不再重复开），于是任何一次访问都不等
+  // 现算，最坏只差一个周期的新鲜度；只有进程刚起、还没有任何结果时才会等一次。
+  // 缓存的是「一次计算结果」而非 HTTP 响应，失败即弃缓存，不会像 fetch 的 next.revalidate
+  // 那样把页面钉在旧数据上。
+  const key = headers ? "auth" : "anon";
+  const now = Date.now();
+  const entry = viewsCache.get(key) ?? { at: 0, value: null, refreshing: false, pending: null };
+  viewsCache.set(key, entry);
+  if ((now - entry.at >= STATUS_VIEWS_TTL_MS || entry.value === null) && !entry.refreshing) {
+    entry.refreshing = true;
+    const pending = computeStatusViews(headers, overview);
+    entry.pending = pending;
+    pending.then(
+      (views) => {
+        entry.value = views;
+        entry.at = Date.now();
+        entry.refreshing = false;
+        entry.pending = null;
+      },
+      () => {
+        // 现算失败就弃掉这条缓存，下次访问重新算；也不让 reject 冒泡成 unhandled rejection
+        entry.refreshing = false;
+        entry.pending = null;
+        viewsCache.delete(key);
+      },
+    );
+  }
+  // 有旧结果就给旧结果（不阻塞）；首次冷启动才等这一趟
+  return entry.value ?? entry.pending!;
+}
+
+/** 渠道视图缓存寿命：远小于采集周期，肉眼无感却省掉绝大多数重复拉取。 */
+const STATUS_VIEWS_TTL_MS = 60_000;
+
+interface ViewsCacheEntry {
+  /** 上次算好的时间戳；决定何时该后台刷新 */
+  at: number;
+  /** 已算好的结果；有值时请求直接拿它，永不阻塞 */
+  value: SiteViews | null;
+  /** 是否有一次刷新在飞，避免同一周期重复发起 */
+  refreshing: boolean;
+  /** 在飞的刷新；仅冷启动（还没有 value）时被等待 */
+  pending: Promise<SiteViews> | null;
+}
+
+const viewsCache = new Map<string, ViewsCacheEntry>();
+
+async function computeStatusViews(
+  headers?: HeadersInit,
+  overview?: Promise<OverviewData | null>,
+): Promise<SiteViews> {
   const latest = await apiGet<Record<string, unknown>>("/api/status/latest", headers).catch(
     () => ({} as Record<string, unknown>),
   );
