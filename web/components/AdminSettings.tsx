@@ -528,7 +528,7 @@ export function AdminSettings() {
           >
             <SettingRow
               label="备用代理地址"
-              hint="填 http(s) 代理地址，例如 http://172.17.0.1:7890（Docker 部署时填宿主机上代理客户端的地址，本机开发填 http://127.0.0.1:7890）；要认证就写成 http://user:pass@host:port。保存后从下一轮采集生效"
+              hint="填 http(s) 代理地址：本机开发填 http://127.0.0.1:7899（Verge 的采集专线口，出口与浏览器自用完全分开）；Docker 部署填宿主机上代理客户端的地址，例如 http://172.17.0.1:7890；要认证就写成 http://user:pass@host:port。保存后从下一轮采集生效"
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <Input

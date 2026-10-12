@@ -8,7 +8,7 @@
 | --- | --- |
 | 401 / 403 / WAF / Cookie / Cloudflare / 认证 / 登录态 / 续签 / refresh_token 失效 | 本页 §1 + Serena 记忆 `dom_url_auth_constraint` |
 | 访客统计 / visit_logs / IP 全一样 / XFF / client_ip | 本页 §1 |
-| 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 | 本页 §1 |
+| 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
 | 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 | 本页 §3 |
@@ -56,6 +56,7 @@
 
 | 自动换节点的三种静默失效：mihomo 默认**不开** external-controller（配置里不写就永远连不上）、控制口绑 127.0.0.1 时 api 容器连不进来、组名随手填（Clash Verge 存多份订阅，只有当前那份的组存在，其余 GET/PUT 静默 404 只剩一条 warn） | 容器模板显式 `external-controller: 0.0.0.0:9090` + `secret`（端口不发布，容器网络外摸不到）；组名必须填当前内核里真实存在的组（先 `GET /proxies` 核对）；Clash Verge 的 external controller 改的是**全局选择**——想让采集与自用上网互不干扰，就加一个只监听 `127.0.0.1` 的 listener 绑采集专用组（组用 `include-all + filter` 按关键词自动筛）；mihomo 的 url-test 组接受手动选择并记成 `fixed`，节点活着就一直生效、不会被测速覆盖 | pricing.md；docker-compose.md「采集兜底代理」 |
 | Clash Verge 的「全局扩展组/规则/代理」其实**按订阅档案各自绑定**（`profiles.yaml` 里每个档案 `option.groups/rules/proxies` 指向自己的文件），改了不在当前档案链里的文件等于白改——listener 生效、组缺失就是两边文件没走同一条链；跨档案生效只有全局 Merge/Script，且 Merge 深合并对数组是**整组替换**（往里塞组会清掉订阅全部组） | 跨档案要加的组放全局 `Script.js`（main 里判断同名后 push，每份订阅都生效、切订阅不丢）；listener 引用不存在的组不会弄挂内核，只是那条口不工作——排「专线不通」先 `GET /proxies` 核对组在不在 | Serena 记忆 `proxy-switch-endpoint-facts` |
+| 自动换节点两处静默失效叠加（2026-10-12 排查 cun.ai 时实锤）：settings 里组名是旧值「宝可梦」（当前内核无此组 → 切换 PUT/GET 全 404），且代理腿收到 403 **风控拦截页**时根本不在切换触发条件里（此前只有连接失败才换）——功能「配了」却从未生效过，全程只有任务日志一条 warn | ① 组名以当前内核 `GET /proxies` 实存为准（现已校回「采集出口」、切换范围留空；该组只被 7899 专线口引用，浏览流量与其他组的选点互不影响）；② 代理腿 403/451 且是风控页（`cf-mitigated` 头或 HTML content-type）才换节点，API 层 403 JSON（认证/权限错误）原样交回不换；③ 验证专线隔离用 `/connections` 看 chains（实测 7899→采集出口、7897→良心云，两口完全独立） | http_retry.py `_via_proxy`/`_is_waf_block`；proxy_switch.py |
 
 ## 2. AI 抽取与助手
 

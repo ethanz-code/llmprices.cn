@@ -34,6 +34,17 @@ _PROXY_ENV_KEYS = ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP
 
 # 直连返回这些状态码视为「出口 IP 被目标站拒收」，同样切备用代理重试
 _FALLBACK_STATUS_CODES = frozenset({403, 451})
+
+
+def _is_waf_block(response: httpx.Response) -> bool:
+    """响应是不是出口被风控拦下：Cloudflare 拦截会带 cf-mitigated 标记头，其他风控多为
+    HTML 拦截页。API 自己返回的 403（JSON 错误体）是认证/权限问题，换节点救不了。"""
+    if response.status_code not in _FALLBACK_STATUS_CODES:
+        return False
+    if response.headers.get("cf-mitigated"):
+        return True
+    return "html" in str(response.headers.get("content-type") or "").lower()
+
 # 直连腿的建连超时：建连是 TCP+TLS 握手，国内直连站亚秒级完成，8 秒起不来就是
 # 黑洞式被墙（SYN 有去无回，等满 45s 超时也等不来结果），快速失败才能快速切代理；
 # 只压 connect，读超时保持请求原值，慢服务器不受影响
@@ -145,7 +156,8 @@ class FallbackTransport(httpx.BaseTransport):
         return response
 
     def _via_proxy(self, request: httpx.Request, host: str) -> httpx.Response:
-        """走代理；出口连不上或被 403/451 拉黑时换到对该站可达的节点再试一次。"""
+        """走代理；出口连不上、或被风控拦截页（cf-mitigated / HTML 403）拦下时，
+        换到对该站实测可达的节点再试一次。"""
         try:
             response = self._proxied.handle_request(request)
         except httpx.TransportError as proxy_exc:
@@ -154,12 +166,12 @@ class FallbackTransport(httpx.BaseTransport):
                 raise proxy_exc
             tasklog.emit(f"[{host}] 节点已切换，重试一次代理请求")
             return self._proxied.handle_request(request)
-        if response.status_code not in _FALLBACK_STATUS_CODES:
+        if not _is_waf_block(response):
             return response
         switched = proxy_switch.auto_switch_for(host, str(request.url))
         if switched is None:
             return response
-        tasklog.emit(f"[{host}] 代理出口返回 HTTP {response.status_code}，已切换节点 → {switched}，重试一次")
+        tasklog.emit(f"[{host}] 代理出口被风控拦截（HTTP {response.status_code}），已切换节点 → {switched}，重试一次")
         response.close()
         return self._proxied.handle_request(request)
 

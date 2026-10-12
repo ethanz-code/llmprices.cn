@@ -210,7 +210,7 @@ def test_fallback_retries_proxy_once_after_auto_switch(monkeypatch):
 
 
 def test_fallback_switches_node_when_proxy_returns_block_page(monkeypatch):
-    """代理出口拿到 403 拉黑页也换节点重试：cun.ai 这类 Cloudflare 拒收不是连接失败。"""
+    """代理出口拿到风控拦截页（HTML 403）也换节点重试：cun.ai 这类 Cloudflare 拒收不是连接失败。"""
     switched: list[str] = []
     monkeypatch.setattr(
         "llm_price_monitor.proxy_switch.auto_switch_for",
@@ -223,7 +223,13 @@ def test_fallback_switches_node_when_proxy_returns_block_page(monkeypatch):
 
     def proxied(request):
         calls["proxy"].append(1)
-        return httpx.Response(403 if len(calls["proxy"]) == 1 else 200)
+        if len(calls["proxy"]) == 1:
+            return httpx.Response(
+                403,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                text="Attention Required! | Cloudflare",
+            )
+        return httpx.Response(200)
 
     monkeypatch.setattr("llm_price_monitor.http_retry.time.sleep", lambda _s: None)
     client = httpx.Client(
@@ -236,6 +242,39 @@ def test_fallback_switches_node_when_proxy_returns_block_page(monkeypatch):
     assert client.get("https://demo.test/api/pricing").status_code == 200
     assert switched == ["demo.test"]
     assert len(calls["proxy"]) == 2
+
+
+def test_fallback_keeps_api_403_without_node_switch(monkeypatch):
+    """API 层的 403 JSON（认证/权限错误）不是出口被拦：不换节点，原样交回。"""
+    switched: list[str] = []
+    monkeypatch.setattr(
+        "llm_price_monitor.proxy_switch.auto_switch_for",
+        lambda host, url: switched.append(host) or "新节点",
+    )
+    calls = {"proxy": []}
+
+    def direct(request):
+        raise httpx.ConnectError("reset", request=request)
+
+    def proxied(request):
+        calls["proxy"].append(1)
+        return httpx.Response(
+            403,
+            headers={"content-type": "application/json"},
+            json={"error": "invalid token"},
+        )
+
+    monkeypatch.setattr("llm_price_monitor.http_retry.time.sleep", lambda _s: None)
+    client = httpx.Client(
+        timeout=5,
+        transport=FallbackTransport(
+            direct=RetryingTransport(httpx.MockTransport(direct)),
+            proxied=RetryingTransport(httpx.MockTransport(proxied)),
+        ),
+    )
+    assert client.get("https://demo.test/api/pricing").status_code == 403
+    assert switched == []
+    assert len(calls["proxy"]) == 1
 
 
 def test_fallback_raises_when_auto_switch_unavailable(monkeypatch):
