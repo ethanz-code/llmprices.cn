@@ -4056,14 +4056,15 @@ def _jwt(iat: float, exp: float) -> str:
 
 
 def test_refresh_due_thresholds():
-    """主动续签阈值：24h token 提前 4 小时到期该续，新鲜 token 不续，非 JWT 无法判断不续。"""
+    """主动续签阈值：闲置满 6 小时（保链，防休眠吞掉到期前窗口）或剩余不足寿命 1/6，取先到者；非 JWT 不续。"""
     from llm_price_monitor import token_refresh
 
     now = 1_800_000_000.0
     day = 86400.0
-    assert token_refresh.refresh_due(_jwt(now - day * 0.85, now + day * 0.15), now=now)  # 剩 3.6h < 24h/6
-    assert not token_refresh.refresh_due(_jwt(now - day * 0.2, now + day * 0.8), now=now)  # 剩 19.2h 不该续
-    assert not token_refresh.refresh_due(_jwt(now - day * 0.8, now + day * 0.2), now=now)  # 剩 4.8h 刚好没进 4h 提前量
+    assert token_refresh.refresh_due(_jwt(now - day * 0.85, now + day * 0.15), now=now)  # 闲置 20.4h ≥ 6h
+    assert not token_refresh.refresh_due(_jwt(now - day * 0.2, now + day * 0.8), now=now)  # 闲置 4.8h、剩 19.2h，都不到线
+    assert token_refresh.refresh_due(_jwt(now - 21660, now + day - 21660), now=now)  # 闲置 6.02h ≥ 6h 上限：换新保链
+    assert not token_refresh.refresh_due(_jwt(now - 21240, now + day - 21240), now=now)  # 闲置 5.9h 未到上限，离到期也远
     assert token_refresh.refresh_due(_jwt(now - 840, now + 60), now=now)  # 15 分钟 token 剩 1 分钟
     assert not token_refresh.refresh_due(_jwt(now - 300, now + 600), now=now)  # 剩 10 分钟 > 7.5 分钟阈值
     assert token_refresh.refresh_due(_jwt(now - day, now), now=now)  # 已过期：主动续一次兜底
@@ -5509,3 +5510,123 @@ def test_ai_extract_batch_size_scales_with_max_tokens():
     )
     assert sorted(seen_batches) == sorted([targets[0:12], targets[12:17]])
     assert sorted(record.model for record in records) == targets
+
+
+# ---------------------------------------------------------------------------
+# 续签链熔断：refresh_token 被站方作废（REFRESH_TOKEN_INVALID 类）后不再锤接口
+# ---------------------------------------------------------------------------
+
+def _dead_store(tmp_path: Path, site_id: str = "rt", refresh_token: str = "rt_old") -> Store:
+    store = Store(tmp_path / "monitor.db")
+    store.upsert_site(site_id, {
+        "id": site_id,
+        "auth_token": "at_old",
+        "token_refresh": {
+            "url": "https://rt.test/auth/refresh",
+            "refresh_token": refresh_token,
+        },
+    })
+    return store
+
+
+def _revoked_transport() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"code": 401, "message": "invalid refresh token", "reason": "REFRESH_TOKEN_INVALID"})
+    return httpx.MockTransport(handler)
+
+
+def test_refresh_revoked_marks_dead_since_in_config(tmp_path: Path, monkeypatch):
+    """站方明确回 REFRESH_TOKEN_INVALID：配置落 dead_since 熔断标记，错误文案带上语义。"""
+    from llm_price_monitor import token_refresh
+
+    store = _dead_store(tmp_path)
+    (spec,) = sites_from_raw([{
+        "id": "rt",
+        "models": ["m"],
+        "network": {"url": "https://rt.test/api/pricing"},
+        "token_refresh": {"url": "https://rt.test/auth/refresh", "refresh_token": "rt_old"},
+    }])
+    client = httpx.Client(transport=_revoked_transport())
+
+    collected, errors = token_refresh.refresh_and_recollect(
+        spec, [], collect=lambda _s: ([], []), client=client, timeout=5, user_agent="ua", store=store,
+    )
+    assert errors and "已被站方作废" in errors[0]
+    config = store.get_site_config("rt")
+    assert config["token_refresh"]["dead_since"] > 0
+    assert "作废" in config["token_refresh"]["dead_reason"]
+
+
+def test_refresh_chain_dead_skips_network_call(tmp_path: Path):
+    """熔断后 ensure_fresh_token 直接跳过：不再发任何续签请求（锤接口=反复撞墙）。"""
+    from llm_price_monitor import token_refresh
+
+    store = _dead_store(tmp_path)
+    config = store.get_site_config("rt")
+    config["token_refresh"]["dead_since"] = time.time()
+    store.upsert_site("rt", config)
+    (spec,) = sites_from_raw([{
+        "id": "rt",
+        "models": ["m"],
+        "network": {"url": "https://rt.test/api/pricing"},
+        "token_refresh": {**config["token_refresh"]},
+    }])
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"data": {"access_token": "at_new", "refresh_token": "rt_new"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    out = token_refresh.ensure_fresh_token(spec, client=client, timeout=5, user_agent="ua", store=store)
+    assert out is spec  # 原样返回，没有续签
+    assert calls == []  # 一个请求都没发
+
+
+def test_refresh_revoked_uses_fresh_library_token_on_race(tmp_path: Path, monkeypatch):
+    """并发护栏：报作废时若库里的 rt_ 已被别的腿换新，直接采用库内新 token 重试，不再发请求。"""
+    from llm_price_monitor import token_refresh
+
+    store = _dead_store(tmp_path, refresh_token="rt_old_in_library")
+    (spec,) = sites_from_raw([{
+        "id": "rt",
+        "models": ["m"],
+        "network": {"url": "https://rt.test/api/pricing"},
+        "token_refresh": {"url": "https://rt.test/auth/refresh", "refresh_token": "rt_stale_in_spec"},
+    }])
+    # spec 是旧快照（rt_stale），库里的 rt_ 刚被价格腿换新 → 判"作废"时应走并发护栏
+    record = PriceRecord("m", 1, 2, "USD/1M tokens", "https://rt.test/pricing", 0, {})
+    retried_with: list[str] = []
+
+    def collect(s: SiteSpec) -> tuple[list[PriceRecord], list[str]]:
+        retried_with.append(str(s.token_refresh.get("refresh_token")))
+        return [record], []
+
+    client = httpx.Client(transport=_revoked_transport())
+    collected, errors = token_refresh.refresh_and_recollect(
+        spec, [], collect=collect, client=client, timeout=5, user_agent="ua", store=store,
+    )
+    assert collected == [record] and errors == []
+    assert retried_with == ["rt_old_in_library"]  # 用的是库内新 rt_
+    config = store.get_site_config("rt")
+    assert "dead_since" not in config["token_refresh"]  # 链活着，不熔断
+
+
+def test_refresh_revoked_error_message_is_actionable(tmp_path: Path):
+    """错误文案说人话：带站方 reason 与"需重新登录接管"，不是干巴巴的 HTTP 401。"""
+    from llm_price_monitor import token_refresh
+
+    (spec,) = sites_from_raw([{
+        "id": "rt",
+        "models": ["m"],
+        "network": {"url": "https://rt.test/api/pricing"},
+        "token_refresh": {"url": "https://rt.test/auth/refresh", "refresh_token": "rt_old"},
+    }])
+    client = httpx.Client(transport=_revoked_transport())
+    with pytest.raises(token_refresh.RefreshTokenRevokedError) as exc_info:
+        token_refresh.refresh_site_token(spec, client, timeout=5, user_agent="ua")
+    message = str(exc_info.value)
+    assert "已被站方作废" in message
+    assert "REFRESH_TOKEN_INVALID" in message
+    assert "重新登录" in message

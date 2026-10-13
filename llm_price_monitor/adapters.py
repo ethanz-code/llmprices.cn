@@ -474,6 +474,24 @@ def _display_fork_rates(
         EndpointRequest(url=origin), spec, user_agent, timeout, target="price"
     )
     rates: list[float] = []
+    # 站方按访客出口 IP 分流市场：CN 出口拿到的充值率/套餐率是人民币口径（数值=海外的
+    # 1/usd_exchange_rate），海外出口才是定价页实际采用的无量纲性价比。采集器直连（国内
+    # 服务器）必然命中 CN 市场，直接进公式会把整站折扣算低 usd_exchange_rate 倍
+    # （heyroute 实锤：CN 套餐率 5.357 vs 海外 37.5，页面 7 组徽标全部只与 37.5 吻合）。
+    # 归一系数取站方 /api/status 自报的 usd_exchange_rate（响应里现成带），非硬编码。
+    market_scale = 1.0
+    try:
+        status_payload = client.get(f"{origin}/api/status", **kwargs).json()
+        status_data = status_payload.get("data") if isinstance(status_payload, dict) else None
+        if isinstance(status_data, dict):
+            country = str(status_data.get("country_code") or "").strip().upper()
+            market_scale = (
+                _positive_number(status_data.get("usd_exchange_rate")) or 1.0
+                if country == "CN"
+                else 1.0
+            )
+    except Exception:
+        market_scale = 1.0
     try:
         payload = client.get(f"{origin}/api/user/topup/info", **kwargs).json()
     except Exception:
@@ -484,7 +502,7 @@ def _display_fork_rates(
         wallet = _positive_number(info.get("wallet_recharge_rate"))
         # overseas 市场按 1 计（本地货币 = 美元）；其余市场前端另有汇率函数，此处保守取 1
         if wallet and wallet > 1:
-            rates.append(wallet)
+            rates.append(wallet * market_scale)
     try:
         payload = client.get(f"{origin}/api/subscription/plans", **kwargs).json()
     except Exception:
@@ -503,7 +521,7 @@ def _display_fork_rates(
         days = _plan_days(plan) if str(plan.get("quota_reset_period")) == "daily" else 1.0
         best = max(best, total * days / quota_per_unit / price)
     if best > 1:
-        rates.append(best)
+        rates.append(best * market_scale)
     return rates
 
 

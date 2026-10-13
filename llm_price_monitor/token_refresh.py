@@ -20,12 +20,15 @@ cookie 型站点（如 new-api）写成 "new_api_refresh=${refresh_token}" 即�
 触发时机：价格采集按"需认证占位记录"判定，渠道状态与公告按接口返回 401/403 判定，
 三者都用新 access_token 重试一次；access_token 落到站点级 auth_token，
 价格/状态/公告的请求头因此统一带上 Authorization。
-此外 token 是 JWT 且配了续签的站点会在到期前主动续签（ensure_fresh_token，三条采集腿
-每站开抓前调用）：轮换型 refresh_token 放着不用会被站方作废或被并发腿抢用，
-等 401 再续对 24h 短效 token 意味着一天死一次；提前换新让续签链一直活着。
+此外 token 是 JWT 且配了续签的站点会主动续签（ensure_fresh_token，三条采集腿每站开抓前调用）：
+轮换型 refresh_token 放着不用会被站方作废或被并发腿抢用，等 401 再续对 24h 短效 token
+意味着一天死一次。触发条件是"闲置满 REFRESH_IDLE_CAP_SECONDS"或"剩余寿命不足总寿命 1/6"，
+取先到者；闲置上限防的是机器休眠整段吞掉到期前窗口、醒来时 refresh_token 已超龄
+（2026-10-13 totokens/2btocken 实锤：睡 10 小时，醒来再续已闲置约 22 小时被站方判死）。
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import replace
 from typing import Any, Callable, TypeVar
@@ -38,21 +41,30 @@ from llm_price_monitor.tracker import PriceRecord
 
 T = TypeVar("T")
 
+# 主动续签的闲置上限：轮换型 rt_ 闲置约一天即被站方作废（实测闲置 20 小时可续、约 22 小时已拒）。
+# "到期前 1/6"的提前量一旦整段落在机器休眠期就会被跳过（2026-10-13 totokens/2btocken 实锤），
+# 所以只要 token 用满 6 小时就先换新：即使机器连睡 10 余小时，醒来第一轮扫描补续时
+# 闲置也只有 16 小时上下，仍远小于 rt_ 约 22 小时的寿命。24h token 约每 6 小时换一次。
+REFRESH_IDLE_CAP_SECONDS = 6 * 3600.0
+
 
 def refresh_due(auth_token: str | None, *, now: float | None = None) -> bool:
-    """access_token 是否该主动续签：剩余寿命不足总寿命 1/6（提前量夹在 60 秒与 6 小时之间）。
+    """access_token 是否该主动续签：闲置满 6 小时（保链）或剩余寿命不足总寿命 1/6，取先到者。
 
-    24h token 提前 4 小时续（约一天一换，续签链始终温着）；15 分钟 token 提前 2.5 分钟，
-    赶不上扫描节奏时由 401 后的被动续签兜底。非 JWT（无法判断过期时间）不主动续。
+    24h token 由闲置上限主导（约每 6 小时换一次），提前量兜底；15 分钟 token 由 1/6 条主导
+    （提前 2.5 分钟），节奏不变；赶不上的由 401 后的被动续签兜底。非 JWT（无法判断过期时间）不主动续。
     """
     token = str(auth_token or "")
     exp = jwt_claim(token, "exp")
     if exp <= 0:
         return False
-    at = exp - (now if now is not None else time.time())
+    current = now if now is not None else time.time()
+    at = exp - current
     if at <= 0:
         return True  # 已过期：主动续一次没坏处，省得等下一轮 401
     iat = jwt_claim(token, "iat")
+    if iat and current - iat >= REFRESH_IDLE_CAP_SECONDS:
+        return True  # 闲置到上限：先换新，别等它睡过到期前窗口后超龄
     lifetime = max(exp - iat, 0.0) if iat else 0.0
     margin = min(max(lifetime / 6, 60.0), lifetime / 2, 21600.0) if lifetime else 7200.0
     return at < margin
@@ -66,6 +78,70 @@ def _stored_tokens(store: Any, site_id: str) -> tuple[str, str] | None:
     access = str(config.get("auth_token") or "")
     refresh = str((config.get("token_refresh") or {}).get("refresh_token") or "")
     return (access, refresh) if access and refresh else None
+
+
+# 站方响应里"凭据已作废、换再多也不会好"的判别词（大小写不敏感）。命中即触发熔断：
+# 这类失效不是时序问题，继续每轮打续签接口只会反复撞墙（且部分站方会把反复使用已作废
+# 凭据判为滥用，连带吊销整个会话家族），必须等人工重新登录接管。
+REFRESH_DEAD_MARKERS = ("refresh_token_invalid", "invalid refresh token", "token revoked")
+# 熔断标记落库用的键：token_refresh.dead_since 有值 = 链已判死，采集侧跳过续签。
+# 重新接管（更新 refresh_token / 重建 token_refresh）时管理台保存会换掉该对象，标记自然清除。
+REFRESH_DEAD_FIELD = "dead_since"
+
+
+class RefreshTokenRevokedError(PriceMonitorError):
+    """refresh_token 已被站方作废（REFRESH_TOKEN_INVALID 类）：续签无法自愈，必须人工重新接管。"""
+
+
+def _revoked_detail(response: httpx.Response) -> str:
+    """从作废响应里摘站方的 reason/message，给用户看的是人话不是状态码。"""
+    try:
+        payload = response.json()
+    except ValueError:
+        return "站方未给出原因"
+    if not isinstance(payload, dict):
+        return "站方未给出原因"
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    detail = payload.get("reason") or payload.get("message") or data.get("reason") or data.get("message")
+    return str(detail) if detail else "站方未给出原因"
+
+
+def refresh_chain_dead(token_refresh: dict[str, Any] | None) -> bool:
+    """续签链是否已被熔断：dead_since 有值即死，等重新接管。"""
+    return bool(token_refresh and token_refresh.get(REFRESH_DEAD_FIELD))
+
+
+def _mark_refresh_dead(store: Any, site_id: str, reason: str) -> None:
+    """把"续签链已死"写进站点配置：后续所有采集腿看到标记直接跳过续签，不再锤站方接口。"""
+    if store is None:
+        return
+    config = store.get_site_config(site_id)
+    if not isinstance(config, dict):
+        return
+    current = config.get("token_refresh")
+    if not isinstance(current, dict) or current.get(REFRESH_DEAD_FIELD):
+        return
+    updated = {
+        **config,
+        "token_refresh": {
+            **current,
+            REFRESH_DEAD_FIELD: time.time(),
+            "dead_reason": reason,
+        },
+    }
+    store.upsert_site(site_id, updated)
+
+
+def _is_refresh_dead_response(response: httpx.Response) -> bool:
+    """站方是否明确说了"refresh_token 已作废"：优先看 body 里的 reason/message，401 状态兜底看语义。"""
+    if response.status_code not in {401, 403}:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    blob = json.dumps(payload, ensure_ascii=False).casefold()
+    return any(marker in blob for marker in REFRESH_DEAD_MARKERS)
 
 
 def ensure_fresh_token(
@@ -84,11 +160,23 @@ def ensure_fresh_token(
     """
     if not spec.token_refresh or not str(spec.token_refresh.get("refresh_token") or "").strip():
         return spec
+    if refresh_chain_dead(spec.token_refresh):
+        return spec
     if not refresh_due(spec.auth_token):
         return spec
     _emit(f"[{spec.id}] access_token 快到期，主动续签…")
     try:
         access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
+    except RefreshTokenRevokedError as exc:
+        # 凭据被站方作废（REFRESH_TOKEN_INVALID 类）：熔断落库，别让每轮×每腿继续锤站方接口。
+        # 库里若已有别的腿换上的新 rt_（spec 是旧快照），说明链其实活着，静默采用即可。
+        newer = _stored_tokens(store, spec.id) if store is not None else None
+        if newer and newer[1] and newer[1] != str(spec.token_refresh.get("refresh_token") or ""):
+            _emit(f"[{spec.id}] 主动续签撞上并发，采用库里的新 token")
+            return refreshed_spec(spec, *newer)
+        _mark_refresh_dead(store, spec.id, str(exc))
+        _emit(f"[{spec.id}] 续签链已熔断：{exc}", "error")
+        return spec
     except (PriceMonitorError, httpx.HTTPError, ValueError):
         newer = _stored_tokens(store, spec.id) if store is not None else None
         if newer and newer[0] and newer[0] != str(spec.auth_token or ""):
@@ -153,6 +241,11 @@ def refresh_site_token(spec: SiteSpec, client: httpx.Client, timeout: float, use
             kwargs["headers"] = {**extra_headers, "content-type": "application/json"}
     response = client.request(method, url, **kwargs)
     if response.status_code in {401, 403}:
+        if _is_refresh_dead_response(response):
+            raise RefreshTokenRevokedError(
+                f"续签接口返回 HTTP {response.status_code}：refresh_token 已被站方作废"
+                f"（{_revoked_detail(response)}），续签无法自愈，需重新登录接管"
+            )
         raise PriceMonitorError(f"续签接口返回 HTTP {response.status_code}，refresh_token 可能已失效")
     response.raise_for_status()
     payload = response.json() if "json" in response.headers.get("content-type", "") else {}
@@ -259,6 +352,17 @@ def refresh_and_retry_once(
     """
     try:
         access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
+    except RefreshTokenRevokedError as exc:
+        # 被动作废：熔断落库 + 并发护栏（别的腿可能刚续签成功、库里的 rt_ 已换新）。
+        newer = _stored_tokens(store, spec.id) if store is not None else None
+        if newer and newer[1] and newer[1] != str(spec.token_refresh.get("refresh_token") or ""):
+            try:
+                result = attempt(refreshed_spec(spec, *newer))
+                return result, None
+            except (PriceMonitorError, httpx.HTTPError, ValueError) as retry_exc:
+                return None, f"采用库内新 token 重试失败：{retry_exc}"
+        _mark_refresh_dead(store, spec.id, str(exc))
+        return None, f"token 续签失败：{exc}"
     except (PriceMonitorError, httpx.HTTPError, ValueError) as exc:
         return None, f"token 续签失败：{exc}"
     if store is not None:
@@ -290,6 +394,19 @@ def refresh_and_recollect(
     """
     try:
         access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
+    except RefreshTokenRevokedError as exc:
+        # 被动作废：熔断落库 + 并发护栏，与 refresh_and_retry_once 同一套路。
+        newer = _stored_tokens(store, spec.id) if store is not None else None
+        if newer and newer[1] and newer[1] != str(spec.token_refresh.get("refresh_token") or ""):
+            try:
+                retried, retry_errors = collect(refreshed_spec(spec, *newer))
+            except (PriceMonitorError, httpx.HTTPError, ValueError) as retry_exc:
+                return collected, [f"采用库内新 token 重试失败：{retry_exc}"]
+            if not retried:
+                return collected, [*retry_errors, "采用库内新 token 重试未取到任何价格"]
+            return retried, retry_errors
+        _mark_refresh_dead(store, spec.id, str(exc))
+        return collected, [f"token 续签失败：{exc}"]
     except (PriceMonitorError, httpx.HTTPError, ValueError) as exc:
         return collected, [f"token 续签失败：{exc}"]
     if store is not None:
