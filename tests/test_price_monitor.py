@@ -709,6 +709,85 @@ def test_browser_adapter_requires_ai_for_non_newapi_json():
     assert requests
 
 
+def test_grouped_ratio_pricing_expands_groups_and_reads_usd_base():
+    """定价页聚合结构（group_info+model_info）：逐分组合成，基准按 status 的 USD 展示口径。"""
+    pricing = {
+        "data": {
+            "group_info": {"default": {"GroupRatio": 1}, "Azure": {"GroupRatio": 0.6}, "闲置": {"GroupRatio": None}},
+            "model_info": [{
+                "model_name": "gpt-4.1",
+                "enable_groups": ["Azure", "default"],
+                "price_info": {
+                    "Azure": {"default": {"model_ratio": 0.5, "model_completion_ratio": 4, "model_cache_ratio": 0.25}},
+                    "default": {"default": {"model_ratio": 0.5, "model_completion_ratio": 4, "model_cache_ratio": 0.25}},
+                },
+            }],
+        }
+    }
+    status = {"data": {"quota_per_unit": 500000, "currency_symbol": "USD", "usd_exchange_rate": 7.3}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/status":
+            return httpx.Response(200, json=status)
+        return httpx.Response(200, json=pricing)
+
+    spec = SiteSpec(
+        id="grouped",
+        models=(ModelTarget("gpt-4.1"),),
+        network={"url": "https://grouped.test/api/pricing"},
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT)
+    # usd_exchange_rate 是显示换算不作基准：USD 站基准 = 1e6/quota_per_unit = 2
+    assert [(r.metadata["group"], r.input_price, r.output_price) for r in records] == [
+        ("Azure", 0.6, 2.4),
+        ("default", 1.0, 4.0),
+    ]
+    assert records[0].unit == "USD/1M tokens"
+    assert records[0].metadata["cache_read_price"] == pytest.approx(0.15)
+
+
+def test_group_price_map_prefers_explicit_prices_over_ratio():
+    """逐分组显式价优先于倍率：该形态同时满足 newapi 判定，必须在倍率分支之前拦下。
+
+    infistar 实锤：step-5-preview 的 group_prices 给 CNY 5.8125，而 model_ratio 折算只有
+    1.04（偏低 5.6 倍），走倍率分支会采到错价。
+    """
+    pricing = {
+        "data": [{
+            "model_name": "step-5-preview",
+            "model_ratio": 0.52,
+            "completion_ratio": 2.86,
+            "group_prices": {
+                "supply-a": {"input": 5.8125, "output": 15.69375, "cache_read": 0.290625, "currency": "CNY"},
+                "supply-b": {"input": 4.5, "output": 12.0, "currency": "CNY"},
+                "未标价": {"input": None, "output": None},
+            },
+            "group_billing_expr": {"supply-a": 'tier("base", p * 5.8125 + c * 15.69375)'},
+        }]
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/status":
+            return httpx.Response(200, json={"data": {"quota_per_unit": 500000, "price": 1}})
+        return httpx.Response(200, json=pricing)
+
+    spec = SiteSpec(
+        id="groupmap",
+        models=(ModelTarget("step-5-preview"),),
+        network={"url": "https://groupmap.test/api/pricing"},
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT)
+    assert [(r.metadata["group"], r.input_price, r.output_price) for r in records] == [
+        ("supply-b", 4.5, 12.0),
+        ("supply-a", 5.8125, 15.69375),
+    ]
+    assert records[0].metadata["pricing_kind"] == "group_price_map"
+    assert records[0].unit == "CNY/1M tokens"
+    assert records[1].metadata["cache_read_price"] == pytest.approx(0.290625)
+
+
 def test_browser_adapter_passes_params_and_headers():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["locale"] == "zh-CN"

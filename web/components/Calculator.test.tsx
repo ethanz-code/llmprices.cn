@@ -1,12 +1,11 @@
 /** 花费计算器的两处接线与渲染冒烟：
  *  1) 取价函数——候选模型的四档单价到底取自目录/站点记录的哪个字段；
- *  2) 服务端渲染——四档单价、四档用量、估算场景与两个比率是否都在位（不引 jsdom，用 renderToStaticMarkup）。 */
+ *  2) 服务端渲染——四档单价、三个用量输入、四个 KPI 是否都在位（不引 jsdom，用 renderToStaticMarkup）。 */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Calculator, optionFromCatalog, optionFromRecord } from "@/components/Calculator";
 import { EMPTY_STATE } from "@/lib/calculator";
-import { calculator } from "@/lib/copy";
 import type { CatalogData, CatalogEntry, OverviewData, OverviewRecord } from "@/lib/types";
 
 /** 目录条目：只填取价关心的字段，其余用不到 */
@@ -121,64 +120,39 @@ const overview = {
 } as unknown as OverviewData;
 
 describe("Calculator 渲染冒烟", () => {
-  it("四档单价、四档用量、三个估算场景与默认比率都在位", () => {
+  it("四档单价、三个用量输入、默认口径 96/2 都在位", () => {
     const html = renderToStaticMarkup(
       <Calculator catalog={catalog} overview={overview} initial={EMPTY_STATE} />,
     );
     for (const label of ["输入", "输出", "缓存读取", "缓存写入", "总用量", "缓存命中率", "输出占比"]) {
       expect(html).toContain(label);
     }
-    // 场景预设三个按钮都在，默认停在「普通对话」并给出该场景的说明
-    for (const scene of ["普通对话", "编码 Agent", "长文分析"]) {
-      expect(html).toContain(scene);
-    }
-    expect(html).toContain(calculator.presetHints.chat);
-    // 默认比率落在输入框 value 上：输出占比 20%、命中率 0（不再假设重缓存）
-    expect(html).toContain('value="20"');
-    expect(html).toContain('value="0"');
+    // 默认口径直接落在两个输入框上：命中率 96%、输出占比 2%
+    expect(html).toContain('value="96"');
+    expect(html).toContain('value="2"');
     // 目录候选的挂牌价（$3 / $15）说明取价函数跑通
     expect(html).toContain("$3 / $15");
   });
 
-  it("深链带着编码 Agent 的比率进来时，高亮落到该场景并显示它的说明", () => {
-    const html = renderToStaticMarkup(
-      <Calculator
-        catalog={catalog}
-        overview={overview}
-        initial={{ ...EMPTY_STATE, estimate: { total: 100_000_000, hitRate: 96, outputShare: 0.4 } }}
-      />,
-    );
-    expect(html).toContain(calculator.presetHints.agent);
-    expect(html).not.toContain(calculator.presetCustom);
-    expect(html).toContain('value="96"');
-    expect(html).toContain('value="0.4"');
-  });
-
-  it("比率被手改过时不再高亮场景，说明换成「按你填的走」", () => {
-    const html = renderToStaticMarkup(
-      <Calculator
-        catalog={catalog}
-        overview={overview}
-        initial={{ ...EMPTY_STATE, estimate: { total: 100_000_000, hitRate: 42, outputShare: 7 } }}
-      />,
-    );
-    expect(html).toContain(calculator.presetCustom);
-  });
-
-  it("带浮点噪声的单价在输入框里已收敛成短小数", () => {
+  it("带浮点噪声的单价渲染成短小数", () => {
     const html = renderToStaticMarkup(
       <Calculator
         catalog={catalog}
         overview={overview}
         initial={{
           ...EMPTY_STATE,
-          prices: { input: 0.5249999999999999, output: 14.399999999999999, cacheRead: null, cacheWrite: null },
+          prices: {
+            input: 0.5249999999999999,
+            output: 14.399999999999999,
+            cacheRead: 0.38457142857142856,
+            cacheWrite: null,
+          },
         }}
       />,
     );
     expect(html).toContain('value="0.525"');
     expect(html).toContain('value="14.4"');
-    expect(html).not.toContain("0.5249999");
+    expect(html).toContain('value="0.384571"');
   });
 
   it("两个数据源都缺失时不抛错，落空态", () => {

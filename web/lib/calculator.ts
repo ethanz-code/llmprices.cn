@@ -1,86 +1,20 @@
 /** 花费计算：单价（每 100 万 token）× 用量 → 各档小计与总价。
  *  与 React 无关的纯函数：便于单测，也供 URL 编解码复用。文案不在此文件，统一放 copy.ts。
- *  用量口径：按账单/用量面板的四个计费档直接填 token 数（输入、输出、缓存读取、缓存写入），
- *  不再让用户猜「输出占比 × 缓存命中率」两个联动比率；没有账单时用 estimateTokens 按场景预设
- *  （普通对话 / 编码 Agent / 长文分析）估算填充，估的是量级、不是账单原值。 */
-
-/** 四个计费档（与站点价目卡一致） */
+ *  用量口径：一个总用量 + 两个拆分假设（输出占比、缓存命中率），拆分规则见 calcCost。 */
 export type PriceKey = "input" | "output" | "cacheRead" | "cacheWrite";
 
 export type CalcPrices = Record<PriceKey, number | null>;
 
-/** 四档 token 数（账单口径）；null = 没填，按 0 计 */
-export type UsageTokens = Record<PriceKey, number | null>;
-
-export const PRICE_KEYS: PriceKey[] = ["input", "output", "cacheRead", "cacheWrite"];
-
-/** 单价口径：目录与站点价统一按每 100 万 token 标价。 */
-const TOKENS_PER_UNIT = 1_000_000;
-
-/** 估算场景：没有账单时按哪种用法把「一个总用量」折算成四档 token。
- *  两个比率都是**量级假设**，不是厂商口径；选中场景后照样能在下面手改。
- *  把场景做成预设而不是写死一对默认值的理由：输出占比与命中率高度依赖用法，
- *  一个用错场景的默认值会让估算跟真实账单差出好几倍（默认按重缓存的 Agent 口径时，
- *  没开缓存的普通用户看到的花费只有实际的几分之一）。 */
-export type EstimatePresetKey = "chat" | "agent" | "longdoc";
-
-export interface EstimatePreset {
-  key: EstimatePresetKey;
-  /** 输出占总用量的百分比 0–100 */
-  outputShare: number;
-  /** 输入里从缓存读取的比例 0–100；0 = 这次用量完全没走缓存 */
-  hitRate: number;
-}
-
-/** 三个场景覆盖绝大多数用法，按「接入缓存的程度」从低到高排。 */
-export const ESTIMATE_PRESETS: readonly EstimatePreset[] = [
-  /** 普通对话 / 问答：一问一答，输入比输出多几倍，一般站点也不做前缀缓存 */
-  { key: "chat", outputShare: 20, hitRate: 0 },
-  /** 编码 Agent：Claude Code 这类自带前缀缓存的工具，同一份代码与规则反复带进上下文——
-   *  输入远多于输出、而输入里九成以上直接命中缓存。数值取自一份公开实测样本
-   *  （单人 35 天 / 7.4 万轮：输出约 0.44%、命中率 96–97%），非厂商官方口径。 */
-  { key: "agent", outputShare: 0.4, hitRate: 96 },
-  /** 长文分析 / 文档处理：整篇文档喂进去、只要一段结论，输出占比很低，一般也不走缓存 */
-  { key: "longdoc", outputShare: 5, hitRate: 0 },
-];
-
-/** 默认场景「普通对话」：不带任何缓存假设，也不假设输出可以忽略。
- *  宁可估高一点，也不让用户按一个偏低的数去充值。 */
-export const DEFAULT_PRESET: EstimatePresetKey = "chat";
-
-function presetOf(key: EstimatePresetKey): EstimatePreset {
-  return ESTIMATE_PRESETS.find((item) => item.key === key) ?? ESTIMATE_PRESETS[0];
-}
-
-/** 两个比率的缺省值：都跟随默认场景（普通对话：输出 20%、命中率 0）。 */
-export const DEFAULT_OUTPUT_SHARE = presetOf(DEFAULT_PRESET).outputShare;
-export const DEFAULT_HIT_RATE = presetOf(DEFAULT_PRESET).hitRate;
-
-/** 按当前两个比率反查命中的场景：值被手改过就返回 null（界面据此取消高亮）。 */
-export function matchPreset(outputShare: number, hitRate: number): EstimatePreset | null {
-  return (
-    ESTIMATE_PRESETS.find(
-      (item) => item.outputShare === outputShare && item.hitRate === hitRate,
-    ) ?? null
-  );
-}
-
-/** 总用量快捷档位（与 copy.ts 的 tokenPresets 标签按序对应），默认 1 亿。 */
-export const TOKEN_PRESET_VALUES = [10_000_000, 100_000_000, 1_000_000_000] as const;
-export const DEFAULT_TOTAL_TOKENS: number = TOKEN_PRESET_VALUES[1];
-
 interface CostLine {
   key: PriceKey;
-  /** 计入的单价（每 100 万 token，与 CalcPrices 同币种）；该档没价且无法回落时为 null，整档不计入总价 */
+  /** 单价（每 100 万 token，与 CalcPrices 同币种）；该档没填价时为 null，整档不计入总价 */
   unitPrice: number | null;
-  /** 该档填写的 token 数；没填价也照常展示，明细表照实呈现 */
+  /** 该档分到的 token 数；没填价也照常拆出来，明细表照实展示 */
   tokens: number;
-  /** 小计；没价可计时为 null */
+  /** 小计；没填价时为 null */
   subtotal: number | null;
-  /** 占已计费总价的比例 0–1；没计价或总价为 0 时为 null */
+  /** 占已计费总价的比例 0–1；没填价或总价为 0 时为 null */
   share: number | null;
-  /** 本档没填单价、回落按输入价计（只有缓存读取/写入两档会回落） */
-  fallback: boolean;
 }
 
 export interface CalcResult {
@@ -88,36 +22,31 @@ export interface CalcResult {
   total: number;
 }
 
-/** 估算填充参数：一个总量 + 两个拆分假设，套用后折算成四档 token 数。
- *  两个假设来自场景预设（ESTIMATE_PRESETS），也可手改。 */
-export interface CalcEstimate {
-  /** 总 token 用量；只认快捷档位 */
+export const PRICE_KEYS: PriceKey[] = ["input", "output", "cacheRead", "cacheWrite"];
+
+/** 单价口径：目录与站点价统一按每 100 万 token 标价。 */
+const TOKENS_PER_UNIT = 1_000_000;
+
+/** 缓存命中率默认 96%：反复带同一段前缀的调用（多轮对话、agent）实测命中率就在 96–97%
+ *  量级，按它估才不至于把带缓存的账单算贵。完全没走缓存的用法把两格改成 0。 */
+export const DEFAULT_HIT_RATE = 96;
+
+/** 总用量快捷档位（与 copy.ts 的 tokenPresets 标签按序对应），默认 1 亿。 */
+export const TOKEN_PRESET_VALUES = [10_000_000, 100_000_000, 1_000_000_000] as const;
+export const DEFAULT_TOTAL_TOKENS: number = TOKEN_PRESET_VALUES[1];
+
+/** 输出占总用量默认 2%：带缓存的会话式调用里，回答比反复回带的前缀短得多（一份公开的
+ *  Claude Code 实测样本约 0.44%），取 2% 略高于极端样本、不把输出算没。纯问答不带缓存的
+ *  用法（输出常占 10–40%）把命中率改 0、这个数往上调到 20 上下更贴近账单。 */
+export const DEFAULT_OUTPUT_SHARE = 2;
+
+/** 用量口径：一个总量（快捷档位）+ 两个拆分假设（缓存命中率、输出占比），不按计费档分别填。 */
+export interface CalcUsage {
   total: number | null;
-  /** 缓存命中率 0–100；缺省回落默认场景的值（0） */
   hitRate: number | null;
-  /** 输出占总用量百分比 0–100；缺省回落默认场景的值（20） */
+  /** 输出占总用量百分比 0–100；缺省回落默认值（2） */
   outputShare: number | null;
 }
-
-export const EMPTY_PRICES: CalcPrices = {
-  input: null,
-  output: null,
-  cacheRead: null,
-  cacheWrite: null,
-};
-
-export const EMPTY_TOKENS: UsageTokens = {
-  input: null,
-  output: null,
-  cacheRead: null,
-  cacheWrite: null,
-};
-
-export const EMPTY_ESTIMATE: CalcEstimate = {
-  total: DEFAULT_TOTAL_TOKENS,
-  hitRate: DEFAULT_HIT_RATE,
-  outputShare: DEFAULT_OUTPUT_SHARE,
-};
 
 function finiteOrNull(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -142,54 +71,41 @@ export function parseOutputShare(text: string): number {
   return Math.min(100, Math.max(0, num));
 }
 
-/** 估算 → 四档 token：输出占 outputShare，其余是输入池。
- *  输入池怎么记分两种情况：
- *    · 命中率 > 0（这批用量确实在用缓存）：命中段记「缓存读取」，未命中段是这次首次
- *      见到的内容、会写进缓存，记「缓存写入」（站点没给写入价时由 calcCost 回落按输入价）。
- *    · 命中率 = 0（没有缓存这回事）：整池都记「普通输入」——不能记到缓存写入档，
- *      否则会把一批根本没走缓存的 token 按写入价（多数站点比输入价贵）计，凭空估高。
- *  四档取整后加总严格等于总用量，明细表逐行加起来不会跟总量对不上。 */
-export function estimateTokens(estimate: CalcEstimate): UsageTokens {
-  const hit = parseHitRate(estimate.hitRate != null ? String(estimate.hitRate) : "") / 100;
-  const outputShare =
-    parseOutputShare(estimate.outputShare != null ? String(estimate.outputShare) : "") / 100;
-  const totalTokens = Math.round(positiveTokens(estimate.total));
-  const output = Math.round(totalTokens * outputShare);
-  const inputPool = totalTokens - output;
-  const cacheRead = Math.round(inputPool * hit);
-  const miss = inputPool - cacheRead;
-  return {
-    input: hit > 0 ? 0 : miss,
-    output,
-    cacheRead,
-    cacheWrite: hit > 0 ? miss : 0,
+/** 总花费 = 缓存读取×读取价 + 缓存写入×写入价 + 未命中输入×输入价 + 输出×输出价。
+ *  用量按两个假设拆分：输出占 outputShare，其余是输入池；输入池按命中率切两段——
+ *  命中段从缓存读取；命中率 > 0 时未命中段是本次首次见到的内容、会写进缓存，按缓存写入计
+ *  （站点没给缓存写入价就回落按输入价）；命中率 = 0 时整池都是普通输入。
+ *  四档固定返回：没填价的档 tokens 照常拆出，单价/小计/占比为 null——明细表据此
+ *  照实展示该档用量并标注「未计入」，不让整行消失后占比看起来失真。 */
+export function calcCost(prices: CalcPrices, usage: CalcUsage): CalcResult {
+  const hit = parseHitRate(usage.hitRate != null ? String(usage.hitRate) : "") / 100;
+  const outputShare = parseOutputShare(usage.outputShare != null ? String(usage.outputShare) : "") / 100;
+  const totalTokens = positiveTokens(usage.total);
+  const outputTokens = totalTokens * outputShare;
+  const inputTokens = totalTokens - outputTokens;
+  const missTokens = inputTokens * (1 - hit);
+  // 命中率 0 表示这批用量完全没走缓存：整池都是普通输入。不能记到缓存写入档——
+  // 多数站点的写入价比输入价贵，记过去会凭空把花费估高。
+  const usingCache = hit > 0;
+  // 走了缓存时，未命中段是首次写入缓存的部分：填了缓存写入价就按写入计，否则按输入价计，
+  // 同一批 token 不重复计也不漏计。
+  const writePriced = usingCache && prices.cacheWrite !== null && prices.cacheWrite >= 0;
+  const tokensByKey: Record<PriceKey, number> = {
+    input: usingCache && writePriced ? 0 : missTokens,
+    output: outputTokens,
+    cacheRead: usingCache ? inputTokens * hit : 0,
+    cacheWrite: writePriced ? missTokens : 0,
   };
-}
-
-/** 总花费 = 各档 token 数 × 各档单价之和（缓存档没填单价时回落按输入价，见 calcCost）。
- *  每档独立计价：账单上四档 token 数各是各的，这里不拆分、不搬移，填多少算多少。
- *  缓存读取/写入没填单价时按输入价回落计（不假设有缓存折扣，也不按 0 元漏计），
- *  回落档带 fallback 标记，由界面挑明；输入价也没有，那一档才真的「未计入」。 */
-export function calcCost(prices: CalcPrices, tokens: UsageTokens): CalcResult {
   const lines: CostLine[] = PRICE_KEYS.map((key) => {
-    const count = positiveTokens(tokens?.[key]);
-    const own = prices[key];
-    let unitPrice = own !== null && own >= 0 ? own : null;
-    let fallback = false;
-    if (unitPrice === null && (key === "cacheRead" || key === "cacheWrite")) {
-      const inputPrice = prices.input;
-      if (inputPrice !== null && inputPrice >= 0) {
-        unitPrice = inputPrice;
-        fallback = true;
-      }
-    }
+    const tokens = tokensByKey[key];
+    const price = prices[key];
+    const unitPrice = price !== null && price >= 0 ? price : null;
     return {
       key,
       unitPrice,
-      tokens: count,
-      subtotal: unitPrice !== null ? (count / TOKENS_PER_UNIT) * unitPrice : null,
+      tokens,
+      subtotal: unitPrice !== null ? (tokens / TOKENS_PER_UNIT) * unitPrice : null,
       share: null,
-      fallback,
     };
   });
   const total = lines.reduce((sum, line) => sum + (line.subtotal ?? 0), 0);
@@ -226,8 +142,9 @@ export function formatPriceText(value: number | null | undefined): string {
   // 小于 1e-6 时 Number#toString 会退化成指数写法（1e-7），输入框里读不出量级，改回定长小数
   if (magnitude < -6) {
     const trimmed = text.replace(/0+$/, "").replace(/\.$/, "");
-    // 小到 12 位小数都印不出来时（1e-13）退回原样，宁可给个指数也好过给空框
-    return trimmed === "" ? String(num) : trimmed;
+    // 小到 12 位小数都印不出来时（1e-13）只剩个「0」，退回原样——
+    // 宁可给个指数写法，也好过把有值的单价显示成 0
+    return trimmed === "" || trimmed === "0" ? String(num) : trimmed;
   }
   return String(Number(text));
 }
@@ -257,20 +174,24 @@ export interface CalcState {
   /** 单价币种：只决定展示符号（CNY→¥，USD→$，其余不显示符号），不做汇率换算 */
   currency: string;
   prices: CalcPrices;
-  /** 四档 token 数（账单口径）；挂载时若全空会按估算默认值自动填充一次 */
-  tokens: UsageTokens;
-  /** 估算填充参数：驱动「按估算填充」按钮 */
-  estimate: CalcEstimate;
+  /** 总 token 用量；缺省回落默认档（1 亿） */
+  totalTokens: number | null;
+  /** 缓存命中率 0–100；缺省回落默认值（96） */
+  hitRate: number | null;
+  /** 输出占总用量百分比 0–100；缺省回落默认值（2） */
+  outputShare: number | null;
 }
+
+export const EMPTY_PRICES: CalcPrices = {
+  input: null,
+  output: null,
+  cacheRead: null,
+  cacheWrite: null,
+};
 
 /** 是否填了至少一档单价：决定结果区显示空态还是明细表。 */
 export function hasAnyPrice(prices: CalcPrices): boolean {
   return PRICE_KEYS.some((key) => prices[key] !== null);
-}
-
-/** 是否填了至少一档用量：挂载时据此决定要不要按估算默认值自动填充。 */
-export function hasAnyToken(tokens: UsageTokens): boolean {
-  return PRICE_KEYS.some((key) => (tokens[key] ?? 0) > 0);
 }
 
 export const EMPTY_STATE: CalcState = {
@@ -279,8 +200,9 @@ export const EMPTY_STATE: CalcState = {
   site: "",
   currency: "USD",
   prices: EMPTY_PRICES,
-  tokens: EMPTY_TOKENS,
-  estimate: EMPTY_ESTIMATE,
+  totalTokens: DEFAULT_TOTAL_TOKENS,
+  hitRate: DEFAULT_HIT_RATE,
+  outputShare: DEFAULT_OUTPUT_SHARE,
 };
 
 /** URL 参数名：短键，保证分享链接不至于过长。 */
@@ -290,7 +212,6 @@ const PARAM = {
   site: "s",
   currency: "cur",
   price: { input: "pi", output: "po", cacheRead: "pr", cacheWrite: "pw" },
-  token: { input: "ti", output: "to", cacheRead: "tr", cacheWrite: "tw" },
   total: "t",
   hit: "h",
   outputShare: "os",
@@ -300,7 +221,7 @@ function compact(value: number | null): string | undefined {
   return value === null ? undefined : String(value);
 }
 
-/** 状态 → query 参数；空值与估算默认值不写，保证链接干净。 */
+/** 状态 → query 参数；空值与默认值不写，保证链接干净。 */
 export function encodeCalcState(state: CalcState): URLSearchParams {
   const params = new URLSearchParams();
   if (state.source === "site") params.set(PARAM.source, "site");
@@ -309,48 +230,26 @@ export function encodeCalcState(state: CalcState): URLSearchParams {
   // USD 是解码默认值，省掉无损；其余币种必须写入，否则还原时币种会变
   if (state.currency && state.currency !== "USD") params.set(PARAM.currency, state.currency);
   for (const key of PRICE_KEYS) {
-    const price = compact(state.prices[key]);
-    if (price !== undefined) params.set(PARAM.price[key], price);
-    const tokens = state.tokens?.[key];
-    if (tokens != null && tokens > 0) params.set(PARAM.token[key], String(tokens));
+    const value = compact(state.prices[key]);
+    if (value !== undefined) params.set(PARAM.price[key], value);
   }
-  const estimate = state.estimate ?? EMPTY_ESTIMATE;
-  if (estimate.total != null && estimate.total !== DEFAULT_TOTAL_TOKENS) {
-    params.set(PARAM.total, String(estimate.total));
+  if (state.totalTokens != null && state.totalTokens !== DEFAULT_TOTAL_TOKENS) {
+    params.set(PARAM.total, String(state.totalTokens));
   }
-  if (estimate.hitRate != null && estimate.hitRate !== DEFAULT_HIT_RATE) {
-    params.set(PARAM.hit, String(estimate.hitRate));
+  if (state.hitRate != null && state.hitRate !== DEFAULT_HIT_RATE) {
+    params.set(PARAM.hit, String(state.hitRate));
   }
-  if (estimate.outputShare != null && estimate.outputShare !== DEFAULT_OUTPUT_SHARE) {
-    params.set(PARAM.outputShare, String(estimate.outputShare));
+  if (state.outputShare != null && state.outputShare !== DEFAULT_OUTPUT_SHARE) {
+    params.set(PARAM.outputShare, String(state.outputShare));
   }
   return params;
 }
 
-/** query 参数 → 状态。
- *  用量优先读四档 token（ti/to/tr/tw）；都没有而带旧参数（t/h/os）时，按旧口径
- *  「总量×输出占比×命中率」迁移成四档 token，老分享链接打开仍是同一笔账。 */
+/** query 参数 → 状态；总量只认快捷档位，命中率/输出占比缺失回落默认值。 */
 export function decodeCalcState(params: URLSearchParams): CalcState {
   const prices = { ...EMPTY_PRICES };
-  const tokens = { ...EMPTY_TOKENS };
-  let hasTokens = false;
   for (const key of PRICE_KEYS) {
     prices[key] = parseAmount(params.get(PARAM.price[key]) ?? "");
-    tokens[key] = parseAmount(params.get(PARAM.token[key]) ?? "");
-    if (tokens[key] !== null) hasTokens = true;
-  }
-  const total = parseAmount(params.get(PARAM.total) ?? "");
-  const hit = params.get(PARAM.hit);
-  const outputShare = params.get(PARAM.outputShare);
-  if (!hasTokens && (total !== null || hit !== null || outputShare !== null)) {
-    Object.assign(
-      tokens,
-      estimateTokens({
-        total,
-        hitRate: parseHitRate(hit ?? ""),
-        outputShare: parseOutputShare(outputShare ?? ""),
-      }),
-    );
   }
   return {
     source: params.get(PARAM.source) === "site" ? "site" : "official",
@@ -358,11 +257,8 @@ export function decodeCalcState(params: URLSearchParams): CalcState {
     site: params.get(PARAM.site) ?? "",
     currency: (params.get(PARAM.currency) ?? "USD").toUpperCase(),
     prices,
-    tokens,
-    estimate: {
-      total: presetTotal(total),
-      hitRate: parseHitRate(hit ?? ""),
-      outputShare: parseOutputShare(outputShare ?? ""),
-    },
+    totalTokens: presetTotal(parseAmount(params.get(PARAM.total) ?? "")),
+    hitRate: parseHitRate(params.get(PARAM.hit) ?? ""),
+    outputShare: parseOutputShare(params.get(PARAM.outputShare) ?? ""),
   };
 }

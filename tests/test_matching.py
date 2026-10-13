@@ -66,6 +66,30 @@ def test_resolve_site_names_uses_ai_alias_before_version_rule():
     assert resolved == {"deepseek-flash": "DeepSeek V4.1 Flash"}
 
 
+def test_resolve_site_names_matches_ignoring_separators():
+    """池内目标名与站点名只差分隔符（空格/连字符）时按同一个模型对上。
+
+    ERNIE 实锤：目标名来自厂商口径写作 "ERNIE 5.0"，站点照 API 习惯写作 ernie-5.0，
+    精确匹配永远对不上，采集侧该模型长期零覆盖。
+    """
+    resolved = resolve_site_names(
+        ["ernie-5.0", "ernie-5.1", "ernie-x1.1", "ernie-4.5-turbo-32k"],
+        {"ERNIE 5.0": ("ERNIE 5.0",), "ERNIE 5.1": ("ERNIE 5.1",), "ERNIE X1.1": ("ERNIE X1.1",)},
+    )
+
+    assert resolved == {"ERNIE 5.0": "ernie-5.0", "ERNIE 5.1": "ernie-5.1", "ERNIE X1.1": "ernie-x1.1"}
+
+
+def test_resolve_site_names_separator_match_still_abstains_on_multiple_hits():
+    """分隔符归一后仍多命中即歧义：同族挂着多个变体时不猜。"""
+    resolved = resolve_site_names(
+        ["ernie-4.5-turbo-32k", "ernie-4.5-turbo-128k"],
+        {"ERNIE 4.5 Turbo": ("ERNIE 4.5 Turbo",)},
+    )
+
+    assert resolved == {}
+
+
 def test_resolve_site_names_abstains_when_alias_hits_two_site_models():
     """AIHub365 实锤：目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash
     两个模型时，按 payload 顺序挑一个就是把两份价格张冠李戴，必须宁缺勿猜。"""

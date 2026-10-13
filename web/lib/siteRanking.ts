@@ -9,25 +9,20 @@
  * 谁最便宜谁价格分最高；不拿站点跨模型的中位数，否则会出现「本模型里最便宜的站却排在后面」。
  * 其余三项是站点级的：渠道稳定（近 7 天可用率/成功率）、配置完整（六项清单）、公告新鲜（距今分档）。
  *
- * 价格一项按**缓存加权实付成本**算：花费计算器同款 AI Agent 口径（输入里约 96% 从缓存读取、
- * 输出占 0.4%），缓存读写价直接决定成本——没给缓存读取价的站点按「无缓存优惠」计（读价回落输入价），
- * 不因缺数据被算便宜。
+ * 价格一项按**缓存加权实付成本**算：固定按一套「重缓存 Agent 用量」（输入里约 96% 从缓存读取、
+ * 输出占 0.4%，见 RANKING_* 常量）折算，缓存读写价直接决定成本——没给缓存读取价的站点按
+ * 「无缓存优惠」计（读价回落输入价），不因缺数据被算便宜。
+ * 这套口径只服务「站点之间横向比价」，与花费计算器的估算默认值**刻意解耦**：
+ * 两边都变了就等于排序变了，而这张表的排序不该被别处的默认值悄悄挪动。
  *
  * 纯函数 + 显式输入，便于单测；渠道稳定从 SiteStats（lib/statusData 的口径）取。
  */
-import { calcCost, estimateTokens } from "./calculator";
+import { calcCost } from "./calculator";
 import { effectiveCnyCachePrice, effectiveCnyPrice } from "./format";
 import { canonicalModel } from "./modelOrder";
 import { hasUsablePrice } from "./priceRows";
 import type { SiteStats } from "./channelStatus";
 import type { OverviewRecord, SiteFlags } from "./types";
-
-/** 榜单用的计价口径：重缓存的编码 Agent（输入里 96% 命中缓存、输出占 0.4%）。
- *  **这里刻意不复用计算器的默认场景**——计算器默认给「普通对话」（不算缓存），
- *  而站点综合分要按同一批用量横比各站，用不带缓存的口径会让「缓存便宜」的站看不出优势。
- *  改这两个数等于改榜单排序，动之前先看 /overview 的排序有没有因此翻盘。 */
-const RANKING_HIT_RATE = 96;
-const RANKING_OUTPUT_SHARE = 0.4;
 
 /** 四项权重（写死；改口径改这里）。价格占一半，其余三项共一半。 */
 export const SITE_RANK_WEIGHTS = {
@@ -36,6 +31,11 @@ export const SITE_RANK_WEIGHTS = {
   completeness: 15,
   notice: 15,
 } as const;
+
+/** 价格项折算成本的用量口径（与花费计算器的默认值无关，见文件头）：输入 96% 命中缓存、
+ *  输出占 0.4%。改这两个数等于改榜单排序，动之前先看排序会不会翻盘。 */
+const RANKING_HIT_RATE = 96;
+const RANKING_OUTPUT_SHARE = 0.4;
 
 /** 「配置完整」清单：逐项已配置记 1 分，取命中比例。 */
 export const SITE_RANK_CHECKLIST: (keyof SiteFlags)[] = [
@@ -117,15 +117,11 @@ export function effectiveCostCny(row: OverviewRecord, rate: number | null): numb
     cacheRead: effectiveCnyCachePrice(row, "cache_read_price", rate) ?? base,
     cacheWrite: effectiveCnyCachePrice(row, "cache_create_price", rate) ?? base,
   };
-  const { total } = calcCost(
-    prices,
-    // 榜单口径是「一个总量 + 两个假设」，先按上面两个比率折算成四档 token 再计价
-    estimateTokens({
-      total: 1_000_000,
-      hitRate: RANKING_HIT_RATE,
-      outputShare: RANKING_OUTPUT_SHARE,
-    }),
-  );
+  const { total } = calcCost(prices, {
+    total: 1_000_000,
+    hitRate: RANKING_HIT_RATE,
+    outputShare: RANKING_OUTPUT_SHARE,
+  });
   // 真免费档（0/0 confirmed）就是 0，算最便宜；只有两档价都缺才 null（上面已挡）
   return total;
 }

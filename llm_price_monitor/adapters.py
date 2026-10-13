@@ -29,6 +29,7 @@ from llm_price_monitor.config import (
 from llm_price_monitor.evidence import is_preferred_response_url, payload_hash, redact_url
 from llm_price_monitor.matching import resolve_site_names, version_omitted_match
 from llm_price_monitor.tracker import (
+    DEFAULT_NEWAPI_RATIO_BASE_PRICE,
     GroupRatioUnavailableError,
     PriceRecord,
     looks_like_newapi_pricing,
@@ -1402,6 +1403,276 @@ def billing_rate_item_records(spec: SiteSpec, captured: list[dict[str, Any]]) ->
     return list(records.values())
 
 
+def looks_like_group_price_map(payload: Any) -> bool:
+    """逐分组显式价结构：data[].group_prices{分组:{input,output,currency}}。
+
+    与标准 new-api 的「model_ratio 倍率」形态不同——这里站方已把每个渠道的实付单价算好
+    （infistar 实锤：step-5-preview 的 supply 分组直接给 CNY input=5.8125，而同条记录的
+    model_ratio 折算只有 1.04，差 5.6 倍）。显式价是站点自己展示的数，优先于倍率推导。
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and isinstance(item.get("group_prices"), dict)
+        and any(
+            isinstance(price, dict) and _plain_number(price.get("input")) and _plain_number(price.get("output"))
+            for price in item["group_prices"].values()
+        )
+        for item in data
+    )
+
+
+def group_price_map_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
+    """确定性解析逐分组显式价：按 (模型 × 分组) 展开，取站方给的 input/output 与币种。
+
+    同模型多分组按输入价升序，让最便宜的渠道排在前；model_ratio 只留核对线索不参与计价，
+    显式价已是实付口径。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    records: dict[tuple[str, str], PriceRecord] = {}
+    site_names = [str(item.get("model_name") or "") for item in data if isinstance(item, dict)]
+    accepted = {target.name: (target.name,) for target in spec.models}
+    resolved = {site: target for target, site in resolve_site_names(site_names, accepted).items()}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        site_name = str(item.get("model_name") or "")
+        # 名称归一化（大小写/空格/连字符差异，如目标 ERNIE 5.0 对站点 ernie-5.0）走共享匹配器，
+        # 与 newapi 倍率路径同口径，避免同站两条腿匹配结果不一致
+        target = next((t for t in spec.models if t.name == resolved.get(site_name)), None)
+        if target is None:
+            continue
+        prices = item.get("group_prices")
+        if not isinstance(prices, dict):
+            continue
+        for group, price in prices.items():
+            if not isinstance(price, dict):
+                continue
+            input_price = price.get("input")
+            if not _plain_number(input_price):
+                continue
+            output_price = price.get("output")
+            if not _plain_number(output_price):
+                continue
+            currency = str(price.get("currency") or "CNY").strip().upper() or "CNY"
+            key = (target.name, str(group))
+            if key in records:
+                continue
+            metadata = {
+                "adapter": "network",
+                "pricing_kind": "group_price_map",
+                "group": str(group),
+                "cache_read_price": price.get("cache_read") if _plain_number(price.get("cache_read")) else None,
+                "cache_create_price": price.get("cache_write") if _plain_number(price.get("cache_write")) else None,
+                "currency": currency,
+                "model_ratio": item.get("model_ratio"),
+                "billing_expr": (item.get("group_billing_expr") or {}).get(group),
+                "network_evidence": [{
+                    "source": "model_list",
+                    "url": redact_url(str(captured[0].get("url", ""))),
+                    "resource_type": captured[0].get("resource_type"),
+                    "status": captured[0].get("status"),
+                    "payload_sha256": payload_hash(payload),
+                }],
+                "page_evidence": [],
+                "notes": "逐分组显式价直读：站方已按渠道给出实付单价，优先于 model_ratio 倍率推导"
+                         "（infistar 实锤倍率折算偏低 5.6 倍）。",
+            }
+            records[key] = PriceRecord(
+                target.name,
+                float(input_price),
+                float(output_price),
+                f"{currency}/1M tokens",
+                response_source_url,
+                time.time(),
+                metadata,
+                "confirmed",
+            )
+
+    def _rank(entry: tuple[tuple[str, str], PriceRecord]) -> tuple[str, float]:
+        return (entry[0][0], entry[1].input_price)
+
+    return [record for _, record in sorted(records.items(), key=_rank)]
+
+
+def looks_like_grouped_ratio_pricing(payload: Any) -> bool:
+    """定价页聚合结构：data.model_info[].price_info{分组:{档位:倍率}} + data.group_info{分组:倍率}。
+
+    与标准 new-api 的 data[].model_ratio 平铺形态不同——这里倍率挂在「模型 × 分组 × 档位」
+    三层下，同一模型各分组倍率可以不同（88996 实锤：claude-fable-5 各分组倍率一致但
+    GroupRatio 0.2~2.5 不等）。group_info 的分组条目带 GroupRatio 数值才算数。
+    """
+    if not isinstance(payload, dict):
+        return False
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return False
+    models = data.get("model_info")
+    if not isinstance(models, list):
+        return False
+    groups = data.get("group_info")
+    return isinstance(groups, dict) and any(
+        isinstance(model, dict)
+        and isinstance(model.get("model_name"), str)
+        and isinstance(model.get("price_info"), dict)
+        for model in models
+    ) and any(
+        isinstance(entry, dict) and _plain_number(entry.get("GroupRatio"))
+        for entry in groups.values()
+    )
+
+
+def grouped_ratio_price_records(
+    spec: SiteSpec,
+    captured: list[dict[str, Any]],
+    status: dict[str, Any] | None = None,
+) -> list[PriceRecord]:
+    """确定性解析定价页聚合结构：实付 = 基准价 × model_ratio × completion/output × GroupRatio。
+
+    逐「模型 × 分组」合成一条记录（分组取站点 enable_groups，缺省该模型带的全部分组），
+    因为这种形态下倍率随分组走，只取一个组会漏掉便宜的渠道。基准价与币种同标准
+    new-api：/api/status 的充值口径（1e6/quota_per_unit × price），页面按美元展示
+    （currency_symbol=USD）时按 USD 计；同模型多分组按 GroupRatio 升序，让最便宜的渠道
+    排在前（下游取首条即最低价）。model_ratio=0 是站方未定价占位，不合成假免费价。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return []
+    models = data.get("model_info")
+    ratios = data.get("group_info")
+    if not isinstance(models, list) or not isinstance(ratios, dict):
+        return []
+    status_data = status if isinstance(status, dict) else {}
+    currency = _grouped_ratio_currency(status_data)
+    unit = f"{currency}/1M tokens"
+    base_price = _grouped_ratio_base_price(status_data)
+    records: dict[tuple[str, str], PriceRecord] = {}
+    accepted = {target.name: (target.name,) for target in spec.models}
+    resolved = {
+        site: target
+        for target, site in resolve_site_names(
+            [str(model.get("model_name") or "") for model in models if isinstance(model, dict)], accepted
+        ).items()
+    }
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        site_name = str(model.get("model_name") or "")
+        # 名称归一化走共享匹配器（大小写/空格/连字符差异），与 newapi 倍率路径同口径
+        target = next((t for t in spec.models if t.name == resolved.get(site_name)), None)
+        if target is None:
+            continue
+        price_info = model.get("price_info")
+        if not isinstance(price_info, dict):
+            continue
+        enabled = [str(g) for g in model.get("enable_groups") or [] if str(g)]
+        # 只保留站方标了 GroupRatio 的分组：未标价分组无法计价（K次/clf 实锤）
+        groups = [g for g in (enabled or list(price_info)) if _plain_number((ratios.get(g) or {}).get("GroupRatio"))]
+        for group in groups:
+            tiers = price_info.get(group)
+            tier = tiers.get("default") if isinstance(tiers, dict) else None
+            if not isinstance(tier, dict):
+                tier = next((v for v in tiers.values() if isinstance(v, dict)), None) if isinstance(tiers, dict) else None
+            if not isinstance(tier, dict):
+                continue
+            model_ratio = tier.get("model_ratio")
+            if not _plain_number(model_ratio) or model_ratio == 0:
+                continue
+            group_ratio = float((ratios.get(group) or {})["GroupRatio"])
+            completion_ratio = tier.get("model_completion_ratio")
+            input_price = float(model_ratio) * base_price * group_ratio
+            output_price = input_price * (float(completion_ratio) if _plain_number(completion_ratio) else 1.0)
+            cache_ratio = tier.get("model_cache_ratio")
+            create_ratio = tier.get("model_create_cache_ratio")
+            key = (target.name, group)
+            if key in records:
+                continue
+            metadata = {
+                "adapter": "network",
+                "pricing_kind": "ratio_multiplier",
+                "group": group,
+                "group_ratio": group_ratio,
+                "model_ratio": model_ratio,
+                "completion_ratio": completion_ratio if _plain_number(completion_ratio) else None,
+                "cache_read_price": input_price * float(cache_ratio) if _plain_number(cache_ratio) else None,
+                "cache_create_price": input_price * float(create_ratio) if _plain_number(create_ratio) else None,
+                "currency": currency,
+                "ratio_base_price": base_price,
+                "network_evidence": [{
+                    "source": "model_list",
+                    "url": redact_url(str(captured[0].get("url", ""))),
+                    "resource_type": captured[0].get("resource_type"),
+                    "status": captured[0].get("status"),
+                    "payload_sha256": payload_hash(payload),
+                }],
+                "page_evidence": [],
+                "notes": "定价页聚合结构直读：基准价 × model_ratio × 分组倍率（GroupRatio）合成实付价，"
+                         "同模型逐分组展开，倍率语义经页面渲染价对照验证。",
+            }
+            records[key] = PriceRecord(
+                target.name,
+                input_price,
+                output_price,
+                unit,
+                response_source_url,
+                time.time(),
+                metadata,
+                "candidate",
+            )
+    # 同模型按 GroupRatio 升序：最便宜的渠道排首位，下游取首条即最低价
+    def _rank(item: tuple[tuple[str, str], PriceRecord]) -> tuple[str, float]:
+        ratio = (item[1].metadata or {}).get("group_ratio")
+        return (item[0][0], ratio if _plain_number(ratio) else float("inf"))
+
+    return [record for _, record in sorted(records.items(), key=_rank)]
+
+
+def _grouped_ratio_status(client: httpx.Client, pricing_url: str, timeout: float) -> dict[str, Any]:
+    """读站点 /api/status 的 data（计价口径 + 展示币种）；失败返回空字典，解析器按默认基准计价。"""
+    try:
+        response = client.get(f"{_origin(pricing_url)}/api/status", timeout=timeout)
+        if not response.is_success:
+            return {}
+        data = response.json().get("data") if isinstance(response.json(), dict) else None
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _grouped_ratio_currency(status: dict[str, Any]) -> str:
+    """页面展示币种：status 里 currency_type 或 currency_symbol 标 USD 即按美元计。
+
+    usd_exchange_rate 仍不是判据（前端显示换算），只看站点声明的展示币种。
+    """
+    for key in ("currency_type", "currency_symbol", "display_currency"):
+        value = str(status.get(key) or "").strip().upper()
+        if value == "USD":
+            return "USD"
+    return "CNY"
+
+
+def _grouped_ratio_base_price(status: dict[str, Any]) -> float:
+    """倍率基准价：USD 站 = 1e6/quota_per_unit，人民币站再乘充值价 price；拿不到回落默认 2。"""
+    quota = status.get("quota_per_unit")
+    if not _plain_number(quota) or quota <= 0:
+        return DEFAULT_NEWAPI_RATIO_BASE_PRICE
+    base = 1e6 / float(quota)
+    if _grouped_ratio_currency(status) == "USD":
+        return base
+    price = status.get("price")
+    return base * (float(price) if _plain_number(price) and price > 0 else 1.0)
+
+
 class _BrowserPageResponse:
     """Headless抓到的页面伪装成 httpx.Response 的最小接口，让后续 HTML 解析路径直接复用。"""
 
@@ -1511,6 +1782,10 @@ class NetworkAdapter:
             return display_fork_price_records(
                 spec, [captured], client=client, user_agent=user_agent, timeout=timeout
             )
+        if looks_like_group_price_map(payload):
+            # 逐分组显式价（站方已算好实付单价）：优先于倍率推导——该形态也满足
+            # looks_like_newapi_pricing，必须先拦，否则倍率折算会偏低数倍（infistar 实锤）
+            return group_price_map_records(spec, [captured])
         if looks_like_newapi_pricing(payload):
             denomination = _newapi_denomination(client, str(response.url), timeout)
             direct_records = network_pricing_records(spec, [captured], denomination=denomination)
@@ -1569,6 +1844,14 @@ class NetworkAdapter:
         if looks_like_billing_rate_items(payload):
             # billing 费率清单（items[].*_per_1m 微美元）：确定性形状不落 AI
             return billing_rate_item_records(spec, [captured])
+        if looks_like_group_price_map(payload):
+            # 逐分组显式价（站方已算好实付单价）：优先于倍率推导，确定性形状不落 AI
+            return group_price_map_records(spec, [captured])
+        if looks_like_grouped_ratio_pricing(payload):
+            # 定价页聚合结构（一次导出 group_info + model_info，倍率按分组走）：确定性形状不落 AI
+            return grouped_ratio_price_records(
+                spec, [captured], status=_grouped_ratio_status(client, str(response.url), timeout)
+            )
         if ai is not None and ai.usable:
             return AIPriceExtractor(ai).extract(
                 spec,

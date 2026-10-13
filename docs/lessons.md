@@ -11,7 +11,7 @@
 | 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
-| 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 / 双列价格 / 删除线 / 官方价X% / display_prices / 自定义计费 / 高于官价 / 折扣>100% / 比官价还贵 | 本页 §3 |
+| 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 / 双列价格 / 删除线 / 官方价X% / display_prices / 自定义计费 / 高于官价 / 折扣>100% / 比官价还贵 / group_prices / 逐分组显式价 / 供应报价 | 本页 §3 |
 | 骨架屏 / 暗色 / 表格 / 窄屏 / 响应式 / 内容超出框 / 横向滚动 / min-width | 本页 §4 |
 | panic / char boundary / code-frame / dev 半死 / 改文件不生效 | 本页 §4 |
 | 强制刷新 / 数据不更新 / 页面旧数据 / revalidate / no-store / 缓存 | 本页 §4 |
@@ -107,6 +107,12 @@
 | 页面标 `¥` 但接口明写 `currency:"USD"`（2api），一度想按「页面为准」改 CNY——会整体差 6.7 倍。**「页面币种为准」只适用于接口没声明币种时**（91token 是接口不标）；接口逐条声明了币种就以接口为准，页面符号可能是前端统一渲染（2api 站点 JS 自身金额也统一用 ¥，但卖家定价是「官方价(USD)×倍率」、数值不换算） | 判币种三步：① 接口字段有没有 `currency`/`price_unit`（有则以它为准）；② 没有再看页面渲染符号；③ 两处都含糊就看计价逻辑（倍率对官价 = USD 口径）。2api 实测：offer 接口 `currency:"USD"` + 商家文档「倍率对官方价填」→ 判 USD，仓库现口径正确 | page-cross-check.md 2026-10-12「2api」；`adapters.marketplace_price_records` |
 | 站方定价页把「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示，实收价 = 参考价 × 按充值/套餐汇率实时算出的折扣（heyroute/aheapi 实锤：Grok 组 `$2.00`(划线)→`$0.040`，badge「≈2% of xAI official price」；CN-Models 56%）。标准 new-api 公式（model_ratio×基准×group_ratio）拿到的恰是**被划掉的参考价列**，`group_ratio` 是「Nx 计费」额度倍率、不是价格折扣，两者方向相反 → 整站偏高 2–50 倍（页面上 heyroute 显成「比官价还贵」，与它自己「省 95%」的口号自相矛盾，是排查入口） | 识别三特征：页面每格两个数（前灰删除线后加粗）、分组 badge「≈X% of official price」、`/api/pricing` 顶层带非标准字段 `display_prices`（全站扫过一次，仅 heyroute 一家）。**采集侧已内置该形态确定性解析**（`adapters.display_fork_price_records`，靠 `display_prices` 自动分派）：实收 = 参考价(model_ratio×2/a) × 分组折扣 `floor(组倍率×100×a/rate)`，rate = 钱包充值汇率(`/api/user/topup/info`)与套餐汇率(`/api/subscription/plans`)各算百分比后**取最小**，cn-models 分组 a=7；2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证通过。教训通用化：**标准公式自洽 ≠ 与页面一致**，倍率/表价类站必须先看页面每格到底几个数 | adapters.py `display_fork_price_records`；page-cross-check.md 2026-10-12（并更正了当日把删除线列当基准判「一致」的旧记录）；sites.md「站方自有计价站」 |
 
+| 「逐分组显式价」形态：`/api/pricing` 的 `data[].group_prices{分组:{input,output,currency}}` 是站方**按渠道直接算好的实付单价**，同条记录上的 `model_ratio` 只是被淘汰的旧倍率（infistar 实锤：step-5-preview 显式价 ¥5.8125，倍率折算只有 ¥1.04，**偏低 5.6 倍**）。该载荷同时满足 `looks_like_newapi_pricing`，不提前拦就会被倍率分支静默采成错价 | 采集侧已内置 `looks_like_group_price_map` / `group_price_map_records`，**必须排在 newapi 倍率分支之前**分派；显式价是站方自己展示的数，一律优先于任何倍率推导，`model_ratio`/`group_billing_expr` 只落 metadata 留核对线索。配站核对走 Browser Use 打开定价页、搜到该模型点开「渠道与供应」读「供应报价」那个数（列表页只给官方价+折扣标签，不是实付价） | adapters.py `group_price_map_records`；2026-10-13 全库 41 启用站 0 命中、563 候选仅 2 家，属稀有形态但不拦就是整站错价 |
+| 探测新候选站时「命中模型数」是虚荣指标，跟目录池（catalog 218 条）比会得出「新增 149 个」的假象；真实采集目标只有 `settings.monitor_models`（57 个），且站价高于官价的行会被丢弃 | 评估候选站一律按 **monitor_models ∩ 该站模型 − 现网已有价 − 超官价** 四层过滤算边际新增；2026-10-13 实测 563 家公开 new-api 站里只有 6 家能补缺口，多数站只是彼此克隆（按 pricing 载荷哈希去重后 563→148 家独立面板） | 见 `.zcode/plans`；导入前先算边际再配，别按「模型多」排序 |
+
+| 单页接口的「分页截断」会让整站覆盖率静默缩水：302 产品库 `page_size` 上限 100、全库 1618 条跨 17 页，配置只取第 1 页时约 2/3 的目标模型根本进不了采集——表现为「某些模型明明站上有价、库里却查不到」，且站点健康度全绿毫无告警（2026-10-13 补 page 2/3/5/10/13 后 SenseNova 两版与 step-3.7-flash 才回来） | 配大产品库站点时先读 `total_count`/末页探测总量，把承载目标模型的页全部加成附加 `networks`（沿用 2api 已有范式：主地址 + 多页附加地址合并，同键主地址优先）；不要指望 `page_size` 放大，站点普遍硬顶 100。判据：模型在站方页面可见但库里无价 → 先怀疑分页没取全 | adapters.py（networks 合并）；302 站点配置；本轮 .zcode/plans/site-audit-20261013.md |
+| 「站上有价、库里没有」的另一个高频真因是**站价高于官价被丢弃**（产品口径，不是故障）：302 的 Baichuan-M2/M3 站价 ¥2.14/¥10.56，官价 ¥2.00/¥10.00，折扣 105–107% → 采集侧显式摘除且不再回落旧价；同理 tokenage 的 ERNIE 系列（104.8%）也全部落不下来 | 排查「模型缺失」三步：① 站方页面/接口确认该模型有价；② 算折合 CNY 折扣是否 >100%（超了就是有意丢弃）；③ 再看分页/认证/解析。别直接当采集 bug 去改解析器 | report/scans.py `above_official` 段；catalog/discount.py |
+
 ## 4. 前端
 
 | 踩过的坑 | 已落地的方案 | 指针 |
@@ -140,6 +146,7 @@
 | 站点自报的指标字段"有键"不等于"有数"：sub2api v2 监控（2btocken）的 `cache_read_tokens`/`cache_creation_tokens`/`token_count` 在整份响应里恒为 0 占位，只有 `cache_rate` 有值；按 `!= null` 判"站点报了这项"会把 0 占位当真实读数展示（渠道表显示"读 0 · 写 0"） | 判站点有没有报某计数指标用 `> 0` 而不是 `!= null`；站点状态里的缓存指标展示见 `channelStatus.cacheMetricText`（有非零读写才展示读写、否则退回命中率） | 站点检测渠道表加缓存读取/写入实测（2btocken 81 条 token 数全 0） |
 | 服务端真分页下「本页为空但总数 > 0」（手改 URL 到 `?page=999`）会被表格 `rows.length === 0 → 整只空态` 的分支吞掉：分页器随表一起消失，用户卡在空白页翻不回去 | DataTable 早返回加判定：服务端模式且 `total > 0` 时不走空态，照常渲染表壳 + 分页器，页内提示「这一页没有内容」，页码钳到最后一页；`components/DataTable.test.tsx` 钉住该行为（含「total 真为 0 才走空态」的反例） | 本次提交；DataTable.tsx 早返回分支；DataTable.test.tsx |
 | 给列表接口加真分页、或改默认行为，属于**接口契约变更**——只改「主调用方」会漏掉旁路调用方：`/api/discovery` 改成默认不返回「忽略的站」后，管理台的站点导入弹窗（DiscoverModal）正靠这个字段显示「已忽略」与取消忽略，差点看不到被忽略的站 | 改接口默认值/返回形状前先全仓 grep 调用点逐个确认是否依赖旧行为；分页参数写成 `limit: int \| None = None`（不传=全量）保住首页/总览/目录页的旧取法，不强迫所有调用方跟着改 | 提交 3ae9c5a；web/components/DiscoverModal.tsx；webapi/routes/rankings.py、discovery.py |
+| 通栏告警色带（`alert-band`）被当成内容条用：价格表上方「需要关注的站点」提示横穿内容列、比相邻卡片各宽出 32px，用户点名「宽度不行，超出正常内容范围」；且黄底告警里再叠黄色状态徽标（需认证）会糊进底色看不出状态 | `band` 只留给页面级告警（页面顶部/贴内容区边缘）；内容列中段的清单类提示用普通 `Alert`（随内容列宽、条内换行），徽标底色在告警条内换 `--panel` 保对比。顺手把该提示从管理员专属 `collect_status` 改成公开脱敏的 `collect_alerts`（只给站点 id/状态/时间，原始报错仍只进管理台「采集异常」卡） | web/components/CollectAlerts.tsx；webapi/routes/data.py `collect_alerts`；design-guide §6 |
 
 ## 5. 部署与运维
 
@@ -164,7 +171,7 @@
 - 测试用 HTTPX mock transport / 进程内替身，不请求真实站点；改口径前先跑全量。
 - 测试里经 create_app 放行任何 >0 的调度间隔（含按键回填补出来的新键）会被调度线程首轮 `_run_due` 真提交并执行——真实外网请求（discovery 实测打了 zuiquanapi 4339 条，还泄漏进后续测试的断言）；这类场景直测纯函数（如 `_ensure_schedule_defaults`），别拉起整个应用。
 - 新增一类定时任务（settings.schedule 补新键）上线即跑一轮：_ensure_schedule_defaults 回填后 schedule_state 里没有该键，首轮 _run_due 视为到期当场提交——dev 热加载站点截图代码时全站真拍了一轮（2026-10-12），随后代码再热重载又把它打断（「服务重启，任务中断」，已知坑）。上线新调度项前想清楚首轮全量采集的影响；被打断的截图任务直接重跑即可，无副作用。
-- 文案说人话、给下一步动作，不出现"接口/字段/渲染"这类实现词。
+- 文案说人话、给下一步动作，不出现"接口/字段/渲染"这类实现词；提示/告示类别写成书面腔（"建议…""请自行判断""不构成…"），≤ 3 句、每句给动作或判断，写法样本见 `web/lib/copy.ts` 的 `risk` 块（2026-10-13 用户两轮纠正后定稿）。
 - 并行会话同仓干活时，共享大文件（如 globals.css）的未提交改动会被对方的主题提交卷走：主题无关的布局改动改完即小步提交，别攒。
 - 密钥回显方案终局是明文（2026-10-08）：设置接口 GET/PUT 直接回明文，前端 SecretInput 普通 password+眼睛本地显隐。此前的掩码/reveal/保长掩码机制全部拆除——给单管理员自托管后台加「完整密钥不出后端」这类安全硬化前先过问用户，交互摩擦会把它顶回来（连续三轮返工：掩码→按需 reveal→保长掩码→明文）。仍然有效的一条：新加管理类 GET 端点必须同步加进 app.py 的 admin_get_paths 白名单，漏加就是匿名可读。
 - git 历史批量归并只有 rev-list 机器清单是事实源：手抄提交清单必漏（74536f6 漏抄、并行会话中途新插的 1b75f27 都栽过）；hash 集合对比前先 rev-parse 规范化，重放分组必须是拓扑连续段。流程铁三角：先 branch 留底 → 重放后 `git diff backup` 必须为空 → 强推必用 `--force-with-lease`（2026-10-09 全量 224→42 实证，旧历史 backup/pre-squash-20261009）。
