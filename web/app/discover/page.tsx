@@ -8,8 +8,12 @@ import { JsonLd } from "@/components/JsonLd";
 import { alerts } from "@/lib/copy";
 import { formatCount } from "@/lib/format";
 import { pageMetadata, siteOrigin } from "@/lib/seo";
+import { pageOffset, parseTableQuery } from "@/lib/tableParams";
 
 export const dynamic = "force-dynamic";
+
+/** 发现页默认每页条数（前端与后端共用这一个值）。 */
+export const DISCOVER_PAGE_SIZE = 100;
 
 export const metadata = pageMetadata(
   "新站发现",
@@ -17,29 +21,44 @@ export const metadata = pageMetadata(
   "/discover",
 );
 
-export default async function DiscoverPage() {
+type StatusFilter = "all" | "imported" | "pending";
+
+export default async function DiscoverPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const rawStatus = Array.isArray(sp.status) ? sp.status[0] : sp.status;
+  const status: StatusFilter =
+    rawStatus === "imported" || rawStatus === "pending" ? rawStatus : "all";
+  const query = parseTableQuery(sp, { defaultSize: DISCOVER_PAGE_SIZE });
+
+  const params = new URLSearchParams({
+    limit: String(query.size),
+    offset: String(pageOffset(query)),
+  });
+  if (query.q) params.set("q", query.q);
+  if (status !== "all") params.set("status", status);
+
   let data: DiscoveryData | null = null;
   let notReady = false;
   try {
-    const fetched = await apiGetOptional<DiscoveryData>("/api/discovery");
-    if (fetched) {
-      // 「不看」是运营者的私人标记，不向访客展示；summary 照带原始计数
-      const stations = fetched.stations.filter((row) => !row.ignored);
-      data = stations.length === fetched.stations.length ? fetched : { ...fetched, stations };
-    }
+    data = await apiGetOptional<DiscoveryData>(`/api/discovery?${params.toString()}`);
   } catch {
     notReady = true;
   }
 
   const origin = await siteOrigin();
-  // 结构化数据：给搜索与 AI 摘要一份机器可读的站点清单（只放前 100 个，避免无界输出）
+  // 结构化数据只在规范 URL（第 1 页、无筛选）输出，避免给搜索引擎一堆分页变体
+  const canonical = status === "all" && !query.q && query.page === 1;
   const jsonLd =
-    data && data.stations.length > 0
+    canonical && data && data.stations.length > 0
       ? {
           "@context": "https://schema.org",
           "@type": "ItemList",
           name: "发现的中转站清单",
-          numberOfItems: data.stations.length,
+          numberOfItems: data.filtered_total ?? data.stations.length,
           itemListElement: data.stations.slice(0, 100).map((row, index) => ({
             "@type": "ListItem",
             position: index + 1,
@@ -66,7 +85,16 @@ export default async function DiscoverPage() {
       {data && data.stations.length === 0 && (
         <SiteAlert title={alerts.discovery.title} detail="" fix={alerts.discovery.fix} />
       )}
-      {data && data.stations.length > 0 && <DiscoverTable data={data} />}
+      {data && data.stations.length > 0 && (
+        <DiscoverTable
+          data={data}
+          page={query.page}
+          size={query.size}
+          query={query.q}
+          status={status}
+          total={data.filtered_total ?? data.stations.length}
+        />
+      )}
 
       {/* 发现的下一步：事件追踪入口。这些站接入监控后，价格与公告的变化都汇总在事件流里 */}
       <div

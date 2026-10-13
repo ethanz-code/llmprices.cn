@@ -55,7 +55,8 @@ export function DiscoverModal({
 
   const load = useCallback(async () => {
     try {
-      setData(await apiSend<DiscoveryData>("/api/discovery", "GET"));
+      // include_ignored：管理台要看到被忽略的站才能取消忽略 / 复核，访客列表则默认隐藏
+      setData(await apiSend<DiscoveryData>("/api/discovery?include_ignored=1", "GET"));
     } catch {
       setData(null);
     }
@@ -121,7 +122,7 @@ export function DiscoverModal({
         }
         // 任务接口不可用时的兜底：数据时间变了也算完成
         try {
-          const next = await apiSend<DiscoveryData>("/api/discovery", "GET");
+          const next = await apiSend<DiscoveryData>("/api/discovery?include_ignored=1", "GET");
           if (next.generated_at && next.generated_at !== before) {
             setData(next);
             toast("探测完成，列表已更新");

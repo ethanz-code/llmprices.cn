@@ -182,8 +182,9 @@ export function OverviewTable({
         </>
       ),
       dataIndex: "site_id",
-      // 不设固定宽度：与公告列一起平分剩余空间（两者都不设 width 即均分），
-      // 避免公告在宽屏独吞剩余宽度、也避免窄屏挤压价格列；手机端由 mobileScrollX 兜底
+      // 固定宽度贴住内容（站名+分），不设宽会在 fixed 布局里与公告列平分剩余空间、
+      // 站名后面拖出一大段空白；富余宽度让公告列（文本）吸收，手机端由 mobileScrollX 兜底
+      width: 150,
       render: (v: string, row) => {
         const site = getSiteInfo(v, row.source_url, siteHomepages);
         // 状态列已去掉：确认/候选/规则价是常态不挂标签；需认证/无数据挂标签
@@ -195,13 +196,19 @@ export function OverviewTable({
           .filter(Boolean)
           .join("\n") || undefined;
         // 行综合分只在每站首行显示：整表一次只展示一个模型，同站各分组行的分必然相同，
-        // 逐行重复是噪音（与实拍列、公告列同口径）
+        // 逐行重复是噪音（与公告列同口径）
         const score =
           siteRanking && firstRowKeys.has(rowKeyOf(row)) ? rowScore(siteRanking, row) : null;
         return (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, flexWrap: "wrap" }}>
-            <RiskLink href={site.homepage || row.source_url} variant="site">
-              <span className="mono">{site.name}</span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, maxWidth: "100%", flexWrap: "wrap" }}>
+            <RiskLink href={site.homepage || row.source_url} variant="site" title={site.name}>
+              {/* 列宽固定后长名靠省略号兜底，完整名字走悬停提示 */}
+              <span
+                className="mono"
+                style={{ display: "inline-block", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}
+              >
+                {site.name}
+              </span>
             </RiskLink>
             {score && (
               <span className="mono" title={siteScoreTitle(score)} style={{ fontSize: 11, color: "var(--text-3)" }}>
@@ -310,7 +317,7 @@ export function OverviewTable({
     {
       title: "公告",
       key: "notice",
-      // 不设固定宽度：与站点列平分剩余空间，宽屏下不再独吞；最多 2 行，悬停看更长摘要
+      // 唯一不设宽的列：吸收全部剩余宽度（文本越宽越好读）；最多 2 行，悬停看更长摘要
       mobileHide: true,
       render: (_v: unknown, row) => {
         const notice = data.notices?.[row.site_id];

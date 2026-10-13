@@ -1,12 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { DataTable, type DColumn } from "./DataTable";
 import { Empty, Input } from "./ui";
 import { IconSearch } from "./icons";
 import { DajuSit } from "./DajuArt";
-import { looseIncludes } from "@/lib/format";
 import type { DiscoveryData, DiscoveryStation } from "@/lib/types";
 
 type LibraryFilter = "all" | "imported" | "pending";
@@ -16,6 +16,9 @@ const FILTERS: { key: LibraryFilter; label: string }[] = [
   { key: "imported", label: "已在监控" },
   { key: "pending", label: "未监控" },
 ];
+
+/** 默认每页条数：与 app/discover/page.tsx 的 DISCOVER_PAGE_SIZE 一致。 */
+const DEFAULT_PAGE_SIZE = 100;
 
 /** 站点简介：导航收录的描述，没有就显示 —。 */
 function briefOf(row: DiscoveryStation): string {
@@ -28,20 +31,53 @@ function msLabel(ms: number | null): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 }
 
-/** 新站发现表：自动收录的中转站清单，带监测源的可用率与响应指标，标注是否已进入本站监控。 */
-export function DiscoverTable({ data }: { data: DiscoveryData }) {
-  const [keyword, setKeyword] = useState("");
-  const [filter, setFilter] = useState<LibraryFilter>("all");
+/** 新站发现表：真分页——搜索/筛选/翻页都改 URL，服务端按 limit/offset 只取当前页。 */
+export function DiscoverTable({
+  data,
+  page,
+  size,
+  query,
+  status,
+  total,
+}: {
+  data: DiscoveryData;
+  page: number;
+  size: number;
+  query: string;
+  status: LibraryFilter;
+  total: number;
+}) {
+  const [keyword, setKeyword] = useState(query);
+  const router = useRouter();
+  useEffect(() => setKeyword(query), [query]);
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
+    if (keyword === query) return;
+    const timer = setTimeout(() => go({ q: keyword, page: 1 }), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, query]);
 
-  const rows = useMemo<DiscoveryStation[]>(() => {
-    let all = data.stations;
-    if (filter === "imported") all = all.filter((row) => row.imported_id);
-    if (filter === "pending") all = all.filter((row) => !row.imported_id);
-    if (!keyword.trim()) return all;
-    return all.filter(
-      (row) => looseIncludes(row.host, keyword) || looseIncludes(row.name, keyword) || looseIncludes(row.description, keyword),
-    );
-  }, [data.stations, filter, keyword]);
+  /** 改分页/搜索/筛选参数 → 写 URL，服务端重新取当页数据。 */
+  function go(next: { page?: number; size?: number; q?: string; status?: LibraryFilter }) {
+    const params = new URLSearchParams();
+    const p = next.page ?? page;
+    const s = next.size ?? size;
+    const nq = next.q !== undefined ? next.q : query;
+    const ns = next.status ?? status;
+    if (p > 1) params.set("page", String(p));
+    if (s !== DEFAULT_PAGE_SIZE) params.set("size", String(s));
+    if (nq) params.set("q", nq);
+    if (ns !== "all") params.set("status", ns);
+    const search = params.toString();
+    router.push(search ? `/discover?${search}` : "/discover", { scroll: false });
+  }
+
+  const rows = data.stations;
 
   const columns: DColumn<DiscoveryStation>[] = [
     {
@@ -133,13 +169,13 @@ export function DiscoverTable({ data }: { data: DiscoveryData }) {
         />
         <div role="group" aria-label="按监控状态筛选" style={{ display: "flex", gap: 6 }}>
           {FILTERS.map((item) => {
-            const active = filter === item.key;
+            const active = status === item.key;
             return (
               <button
                 key={item.key}
                 type="button"
                 aria-pressed={active}
-                onClick={() => setFilter(item.key)}
+                onClick={() => go({ status: item.key, page: 1 })}
                 style={{
                   border: "none",
                   borderRadius: 999,
@@ -166,9 +202,11 @@ export function DiscoverTable({ data }: { data: DiscoveryData }) {
           rowKey={(row) => row.host}
           columns={columns}
           rows={rows}
-          paginated
-          defaultPageSize={100}
-          pageSizeStorageKey="discover-page-size"
+          total={total}
+          page={page}
+          pageSize={size}
+          onPageChange={(next) => go({ page: next })}
+          onPageSizeChange={(next) => go({ size: next, page: 1 })}
           scrollX={850}
           mobileScrollX={390}
           dense

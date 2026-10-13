@@ -172,6 +172,38 @@ def test_status_views_endpoint_parses_and_filters_onsale(workspace: Path):
     assert views["uptimeBuckets"]["demo"]
 
 
+def test_rankings_endpoint_paginates_searches_sorts(workspace: Path):
+    """榜单接口真分页：只回当前页，q 搜索与 sort/dir 排序在后端做，并回全量 total/creator_total。"""
+    from llm_price_monitor.store import Store
+
+    client = TestClient(create_app(_config(workspace)))
+    store = Store(workspace / "var" / "monitor.db")
+    store.set_document("rankings", {
+        "generated_at": 1.0,
+        "generated_at_iso": "2026-01-01T00:00:00Z",
+        "source": "AA",
+        "source_url": "https://example.test",
+        "models": [
+            {"slug": "gpt-a", "name": "GPT A", "creator": "OpenAI", "rank": 1, "intelligence_index": 50},
+            {"slug": "gpt-b", "name": "GPT B", "creator": "OpenAI", "rank": 2, "intelligence_index": 60},
+            {"slug": "claude-c", "name": "Claude C", "creator": "Anthropic", "rank": 3, "intelligence_index": 55},
+        ],
+    })
+    page = client.get("/api/rankings", params={"limit": 2, "offset": 0}).json()
+    assert page["total"] == 3 and page["creator_total"] == 2 and len(page["models"]) == 2
+    assert [m["slug"] for m in page["models"]] == ["gpt-a", "gpt-b"]
+    second = client.get("/api/rankings", params={"limit": 2, "offset": 2}).json()
+    assert [m["slug"] for m in second["models"]] == ["claude-c"]
+    # 搜索命中厂商/模型/slug（大小写与分隔符不敏感，与前端 looseSearchKey 同口径）
+    found = client.get("/api/rankings", params={"q": "anthropic"}).json()
+    assert found["filtered_total"] == 1 and found["models"][0]["slug"] == "claude-c"
+    # 排序：智能指数降序
+    ranked = client.get("/api/rankings", params={"sort": "intelligence_index", "dir": "descend"}).json()
+    assert [m["slug"] for m in ranked["models"]] == ["gpt-b", "claude-c", "gpt-a"]
+    # 无 limit 时回落全量（兼容旧调用）
+    assert len(client.get("/api/rankings").json()["models"]) == 3
+
+
 def test_catalog_missing_returns_404(workspace: Path):
     (workspace / "var" / "catalog.json").unlink()
     # 调度已在 _config 里关闭，目录缺失时不会触发自动同步，保持"无数据"状态

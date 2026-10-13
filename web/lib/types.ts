@@ -212,6 +212,10 @@ export interface RankingsData {
   source: string;
   source_url: string;
   models: RankingEntry[];
+  /** 服务端分页附加字段：全量条数、q 过滤后条数（分页器用）、评测厂商数 */
+  total?: number;
+  filtered_total?: number;
+  creator_total?: number;
 }
 
 /** 新站发现：自动收录的候选中转站清单（站点、简介与监测站自家监控指标）。
@@ -239,6 +243,9 @@ export interface DiscoveryData {
   generated_at: string;
   summary: { total: number; offline: number; imported: number; ignored: number };
   stations: DiscoveryStation[];
+  /** 服务端分页附加字段：收录总数、筛选后条数（分页器用） */
+  total?: number;
+  filtered_total?: number;
 }
 
 export interface SiteMeta {

@@ -110,11 +110,15 @@ def test_discovery_ignore_marks_sink_and_unmarks(workspace: Path, monkeypatch):
     assert resp.status_code == 200
     assert resp.json()["ignored"] == ["meh.example.net"]
 
+    # 默认不向访客展示「忽略」的站（summary 计数照带）
     body = client.get("/api/discovery").json()
     assert body["summary"]["ignored"] == 1
-    assert [row["ignored"] for row in body["stations"]] == [False, True]  # 标记的沉底
-    assert body["stations"][-1]["host"] == "meh.example.net"
-    assert body["stations"][-1]["ignore_reason"] == "注册关闭"
+    assert [row["host"] for row in body["stations"]] == ["plain.example.com"]
+    # 管理员要看全量时传 include_ignored：忽略的沉底并带原因
+    full = client.get("/api/discovery", params={"include_ignored": True}).json()
+    assert [row["ignored"] for row in full["stations"]] == [False, True]
+    assert full["stations"][-1]["host"] == "meh.example.net"
+    assert full["stations"][-1]["ignore_reason"] == "注册关闭"
 
     # 取消标记后恢复原排序与计数，原因一并清掉
     assert client.post("/api/discovery/ignore", json={"hosts": ["meh.example.net"], "ignored": False}).status_code == 200
@@ -125,15 +129,45 @@ def test_discovery_ignore_marks_sink_and_unmarks(workspace: Path, monkeypatch):
 
     # 再标记不带原因：原因留空
     client.post("/api/discovery/ignore", json={"hosts": ["meh.example.net"], "ignored": True})
-    body = client.get("/api/discovery").json()
-    assert body["stations"][-1]["ignored"] is True
-    assert body["stations"][-1]["ignore_reason"] is None
+    full = client.get("/api/discovery", params={"include_ignored": True}).json()
+    assert full["stations"][-1]["ignored"] is True
+    assert full["stations"][-1]["ignore_reason"] is None
+    # 默认视图里看不到被忽略的站
+    assert [row["host"] for row in client.get("/api/discovery").json()["stations"]] == ["plain.example.com"]
 
     # 候选池里不存在的域名进 unknown，不误入标记清单
     resp = client.post("/api/discovery/ignore", json={"hosts": ["ghost.example.io"], "ignored": True})
     assert resp.json()["unknown"] == ["ghost.example.io"]
     # ghost 不在候选池进 unknown；meh 的忽略不受影响
     assert client.get("/api/discovery").json()["summary"]["ignored"] == 1
+
+
+def test_discovery_paginates_searches_and_filters(workspace: Path, monkeypatch):
+    """发现页真分页：limit/offset 只回当前页，q 搜域名、status 按是否已监控筛选，并回 filtered_total。"""
+    monkeypatch.setattr(discover, "OUT_DIR", workspace / "discovery")
+    _write_pool(
+        workspace,
+        [
+            {"host": f"s{i}.example.com", "url": f"https://s{i}.example.com", "name": f"站点{i}", "sources": [], "note": "", "meta": {}}
+            for i in range(5)
+        ]
+        + [
+            {"host": "demo.test", "url": "https://demo.test", "name": "已监控站", "sources": [], "note": "", "meta": {}},
+        ],
+    )
+    client = _admin_client(workspace, monkeypatch)
+    page = client.get("/api/discovery", params={"limit": 2, "offset": 0}).json()
+    assert page["filtered_total"] == 6 and len(page["stations"]) == 2
+    second = client.get("/api/discovery", params={"limit": 2, "offset": 2}).json()
+    assert [row["host"] for row in page["stations"]] != [row["host"] for row in second["stations"]]
+    # 搜索命中域名（后缀可省去）
+    found = client.get("/api/discovery", params={"q": "s3"}).json()
+    assert [row["host"] for row in found["stations"]] == ["s3.example.com"]
+    # status 过滤：demo.test 是 _config 种子里的站点，按归一化域名标为已监控
+    imported = client.get("/api/discovery", params={"status": "imported"}).json()
+    assert [row["host"] for row in imported["stations"]] == ["demo.test"]
+    pending = client.get("/api/discovery", params={"status": "pending"}).json()
+    assert "demo.test" not in [row["host"] for row in pending["stations"]]
 
 
 def test_discovery_refresh_submits_task(workspace: Path, monkeypatch):

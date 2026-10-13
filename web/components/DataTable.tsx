@@ -54,6 +54,13 @@ export function DataTable<T extends object>({
   paginated,
   defaultPageSize,
   pageSizeStorageKey,
+  total,
+  page: pageProp,
+  pageSize: pageSizeProp,
+  onPageChange,
+  onPageSizeChange,
+  serverSort,
+  onSortChange,
   empty = "暂无数据",
   footer,
   scrollX,
@@ -73,6 +80,19 @@ export function DataTable<T extends object>({
   defaultPageSize?: number;
   /** 本表独立的每页条数存储键：传入后不被全站偏好影响（与 defaultPageSize 搭配用） */
   pageSizeStorageKey?: string;
+  /** 服务端分页模式：给出总条数即生效。此时 rows 已是当前页、本组件不再本地排序/切片，
+   *  页码/每页条数由 URL 或父组件受控，翻页/排序/改每页都走回调由调用方重新取数。 */
+  total?: number;
+  /** 服务端模式：当前页（1 起） */
+  page?: number;
+  /** 服务端模式：每页条数（受控） */
+  pageSize?: number;
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (size: number) => void;
+  /** 服务端模式：当前排序状态（由调用方按 URL 提供） */
+  serverSort?: { key: string; dir: "ascend" | "descend" } | null;
+  /** 服务端模式：点击表头排序，dir=null 表示取消排序 */
+  onSortChange?: (key: string, dir: "ascend" | "descend" | null) => void;
   empty?: ReactNode;
   footer?: ReactNode;
   /** 表格最小宽度（px），超出时容器横向滚动 */
@@ -94,6 +114,8 @@ export function DataTable<T extends object>({
   const narrow = useNarrow();
   // 藏列只在窄屏生效，minWidth 同步切换，避免手机上为看不见的列空拖几百像素
   const effectiveScrollX = narrow ? (mobileScrollX ?? scrollX) : scrollX;
+  /** 服务端分页：给出 total 即托管分页——数据已切好、排序/翻页都交调用方 */
+  const server = total !== undefined;
 
   // 横向滚动渐隐提示：内容在某侧被截断时显示渐隐遮罩，让"可以横向滑动"可感知
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -118,12 +140,15 @@ export function DataTable<T extends object>({
   }, [updateFade]);
 
   const initial = columns.find((column) => column.defaultSortOrder);
-  const [sort, setSort] = useState<{ key: string; dir: "ascend" | "descend" } | null>(
+  const [localSort, setLocalSort] = useState<{ key: string; dir: "ascend" | "descend" } | null>(
     initial?.sorter ? { key: colKey(initial), dir: initial.defaultSortOrder ?? "ascend" } : null,
   );
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [pageSize, setPageSize] = usePageSize(defaultPageSize, pageSizeStorageKey);
+  const [storedPageSize, setStoredPageSize] = usePageSize(defaultPageSize, pageSizeStorageKey);
+  // 服务端模式：排序状态来自调用方（URL），每页条数也由调用方受控
+  const sort = server ? (serverSort ?? null) : localSort;
+  const pageSize = server ? (pageSizeProp ?? defaultPageSize ?? 35) : storedPageSize;
 
   function toggleExpand(key: string) {
     setExpanded((previous) => {
@@ -135,25 +160,39 @@ export function DataTable<T extends object>({
   }
 
   const sorted = useMemo(() => {
-    if (!sort) return rows;
+    if (server || !sort) return rows;
     const column = columns.find((item) => colKey(item) === sort.key);
     if (!column?.sorter) return rows;
     const factor = sort.dir === "ascend" ? 1 : -1;
     return [...rows].sort((a, b) => column.sorter!(a, b) * factor);
-  }, [rows, columns, sort]);
+  }, [rows, columns, sort, server]);
 
-  const pageCount = paginated ? Math.max(1, Math.ceil(sorted.length / pageSize)) : 1;
-  const current = Math.min(page, pageCount);
-  const visible = paginated ? sorted.slice((current - 1) * pageSize, current * pageSize) : sorted;
+  // 服务端模式：rows 就是当前页，只算页数不切片；总条数取受控的 total
+  const totalCount = server ? total! : sorted.length;
+  const pageCount = server
+    ? Math.max(1, Math.ceil(total! / pageSize))
+    : paginated
+      ? Math.max(1, Math.ceil(sorted.length / pageSize))
+      : 1;
+  const current = server ? Math.max(1, Math.min(pageProp ?? 1, pageCount)) : Math.min(page, pageCount);
+  const visible = server ? rows : paginated ? sorted.slice((current - 1) * pageSize, current * pageSize) : sorted;
+  const showPager = server || (paginated && (pageCount > 1 || sorted.length > PAGE_SIZE_OPTIONS[0]));
+
+  const goToPage = (next: number) => {
+    if (server) onPageChange?.(next);
+    else setPage(next);
+  };
 
   function toggleSort(column: DColumn<T>) {
     if (!column.sorter) return;
     const key = colKey(column);
-    setSort((previous) => {
-      if (previous?.key !== key) return { key, dir: "ascend" };
-      if (previous.dir === "ascend") return { key, dir: "descend" };
-      return null;
-    });
+    const nextDir: "ascend" | "descend" | null =
+      sort?.key !== key ? "ascend" : sort.dir === "ascend" ? "descend" : null;
+    if (server) {
+      onSortChange?.(key, nextDir);
+      return;
+    }
+    setLocalSort(nextDir ? { key, dir: nextDir } : null);
     setPage(1);
   }
 
@@ -315,14 +354,14 @@ export function DataTable<T extends object>({
         </table>
       </div>
       {footer}
-      {paginated && (pageCount > 1 || sorted.length > PAGE_SIZE_OPTIONS[0]) && (
+      {showPager && (
         <div className="pager">
           <span className="pager-info">
-            共 <span className="mono">{formatCount(sorted.length)}</span> 条
+            共 <span className="mono">{formatCount(totalCount)}</span> 条
           </span>
           {pageCount > 1 && (
             <>
-              <Btn variant="ghost" size="sm" disabled={current <= 1} onClick={() => setPage(current - 1)}>
+              <Btn variant="ghost" size="sm" disabled={current <= 1} onClick={() => goToPage(current - 1)}>
                 上一页
               </Btn>
               {pageList(current, pageCount).map((page, index) =>
@@ -336,13 +375,13 @@ export function DataTable<T extends object>({
                     type="button"
                     className={`pager-page${page === current ? " on" : ""}`}
                     aria-current={page === current ? "page" : undefined}
-                    onClick={() => setPage(page)}
+                    onClick={() => goToPage(page)}
                   >
                     {page}
                   </button>
                 ),
               )}
-              <Btn variant="ghost" size="sm" disabled={current >= pageCount} onClick={() => setPage(current + 1)}>
+              <Btn variant="ghost" size="sm" disabled={current >= pageCount} onClick={() => goToPage(current + 1)}>
                 下一页
               </Btn>
             </>
@@ -352,8 +391,12 @@ export function DataTable<T extends object>({
             <Sel
               value={String(pageSize)}
               onChange={(value) => {
-                setPageSize(Number(value));
-                setPage(1);
+                const size = Number(value);
+                if (server) onPageSizeChange?.(size);
+                else {
+                  setStoredPageSize(size);
+                  setPage(1);
+                }
               }}
               options={PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: String(n) }))}
               style={{ width: 72 }}

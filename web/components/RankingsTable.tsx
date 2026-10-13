@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DataTable, type DColumn } from "./DataTable";
 import { Btn, Empty, Input, toast } from "./ui";
@@ -8,22 +8,66 @@ import { IconSearch } from "./icons";
 import { DajuSit } from "./DajuArt";
 import { TermTip } from "./TermTip";
 import { apiSend } from "@/lib/api";
-import { formatCount, formatIsoMinute, looseIncludes } from "@/lib/format";
+import { formatCount, formatIsoMinute } from "@/lib/format";
+import { tableQueryString } from "@/lib/tableParams";
 import type { RankingEntry, RankingsData } from "@/lib/types";
 
-/** AA 榜单表：Artificial Analysis 的模型自测排名，独立于站点折扣口径，仅供选型参考。 */
-export function RankingsTable({ data }: { data: RankingsData | null }) {
-  const [keyword, setKeyword] = useState("");
+/** 默认每页条数：与 app/rankings/page.tsx 的 RANKINGS_PAGE_SIZE 保持一致。 */
+const DEFAULT_PAGE_SIZE = 100;
+
+/** AA 榜单表：Artificial Analysis 的模型自测排名，独立于站点折扣口径，仅供选型参考。
+ *  真分页：搜索/排序/翻页都改 URL，服务端按 limit/offset 只取当前页。 */
+export function RankingsTable({
+  data,
+  page,
+  size,
+  query,
+  sortKey,
+  dir,
+  total,
+}: {
+  data: RankingsData | null;
+  page: number;
+  size: number;
+  query: string;
+  sortKey: string | null;
+  dir: "ascend" | "descend";
+  total: number;
+}) {
+  const [keyword, setKeyword] = useState(query);
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
+  // 服务端回传的 query 变化时同步输入框（点浏览器后退也能对上）
+  useEffect(() => setKeyword(query), [query]);
+  // 输入防抖：停顿 300ms 再改 URL（真分页下搜索走后端，搜索即时性靠防抖换）
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
+    if (keyword === query) return;
+    const timer = setTimeout(() => go({ q: keyword, page: 1 }), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, query]);
 
-  const rows = useMemo<RankingEntry[]>(() => {
-    const all = data?.models ?? [];
-    if (!keyword.trim()) return all;
-    return all.filter(
-      (row) => looseIncludes(row.name, keyword) || looseIncludes(row.creator ?? "", keyword) || looseIncludes(row.slug, keyword),
+  /** 改分页/搜索/排序参数 → 写进 URL，服务端重新取当页数据。 */
+  function go(next: { page?: number; size?: number; q?: string; sortKey?: string | null; dir?: "ascend" | "descend" }) {
+    const search = tableQueryString(
+      {
+        page: next.page ?? page,
+        size: next.size ?? size,
+        q: next.q ?? query,
+        sortKey: next.sortKey !== undefined ? next.sortKey : sortKey,
+        dir: next.dir ?? dir,
+      },
+      { defaultSize: DEFAULT_PAGE_SIZE },
     );
-  }, [data, keyword]);
+    router.push(search ? `/rankings?${search}` : "/rankings", { scroll: false });
+  }
+
+  const rows = data?.models ?? [];
 
   /** 手动触发榜单同步（需管理员登录）；就绪后刷新服务端页面。 */
   async function refreshRankings() {
@@ -190,9 +234,13 @@ export function RankingsTable({ data }: { data: RankingsData | null }) {
           rowKey={(row) => row.slug}
           columns={columns}
           rows={rows}
-          paginated
-          defaultPageSize={100}
-          pageSizeStorageKey="rankings-page-size"
+          total={total}
+          page={page}
+          pageSize={size}
+          onPageChange={(next) => go({ page: next })}
+          onPageSizeChange={(next) => go({ size: next, page: 1 })}
+          serverSort={sortKey ? { key: sortKey, dir } : null}
+          onSortChange={(key, nextDir) => go({ sortKey: nextDir ? key : null, dir: nextDir ?? "ascend", page: 1 })}
           scrollX={640}
           mobileScrollX={390}
           dense

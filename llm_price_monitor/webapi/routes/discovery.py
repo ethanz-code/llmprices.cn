@@ -19,8 +19,12 @@ from pydantic import BaseModel, Field
 
 from llm_price_monitor import discover
 from llm_price_monitor.store import Store
+from llm_price_monitor.text_search import loose_key
 from llm_price_monitor.webapi import tasks
 from llm_price_monitor.webapi.jobs import discovery_refresh_job
+
+# 单页条数上限：候选池数千条，防止一次请求把整池拉进来
+_PAGE_LIMIT_MAX = 500
 
 
 class DiscoveryImportBody(BaseModel):
@@ -75,7 +79,16 @@ def build_router(store: Store) -> APIRouter:
         return hosts
 
     @router.get("/api/discovery")
-    def discovery() -> dict[str, Any]:
+    def discovery(
+        limit: int | None = None,
+        offset: int = 0,
+        q: str | None = None,
+        status: str | None = None,
+        include_ignored: bool = False,
+    ) -> dict[str, Any]:
+        """候选站真分页读取：默认隐藏「忽略」的站（运营私人标记，不向访客展示），
+        status=imported/pending 按是否已监控筛选，q 搜域名/名称/简介（与前端 looseSearchKey 同口径）。
+        total 为收录总数、filtered_total 为筛选后条数（分页器用）。"""
         pool, generated_at = _load_discovery()
         in_library = library_hosts()
         ignored_hosts, ignore_reasons = _ignored_doc(store)
@@ -107,25 +120,48 @@ def build_router(store: Store) -> APIRouter:
                     "ignore_reason": ignore_reasons.get(discover.normalize_host(host)) or None,
                 }
             )
+        summary = {
+            "total": len(stations) + offline,
+            "offline": offline,
+            "imported": len([s for s in stations if s["imported_id"]]),
+            "ignored": len([s for s in stations if s["ignored"]]),
+        }
+        # 未监控的排前面（运营最关心），同组里可用率高的在前，没监控数据的垫底；
+        # 标记「忽略」的沉到最底，不再进运营视线
+        ordered = sorted(
+            stations,
+            key=lambda s: (
+                bool(s["ignored"]),
+                bool(s["imported_id"]),
+                -(s["uptime_7d"] if isinstance(s["uptime_7d"], (int, float)) else -1),
+                s["host"],
+            ),
+        )
+        rows = ordered if include_ignored else [row for row in ordered if not row["ignored"]]
+        if status == "imported":
+            rows = [row for row in rows if row["imported_id"]]
+        elif status == "pending":
+            rows = [row for row in rows if not row["imported_id"]]
+        if q and q.strip():
+            needle = loose_key(q)
+            rows = [
+                row
+                for row in rows
+                if needle in loose_key(row["host"])
+                or needle in loose_key(row["name"])
+                or needle in loose_key(row["description"])
+            ]
+        filtered_total = len(rows)
+        if limit is not None:
+            limit = max(1, min(limit, _PAGE_LIMIT_MAX))
+            offset = max(0, offset)
+            rows = rows[offset : offset + limit]
         return {
             "generated_at": generated_at,
-            "summary": {
-                "total": len(stations) + offline,
-                "offline": offline,
-                "imported": len([s for s in stations if s["imported_id"]]),
-                "ignored": len([s for s in stations if s["ignored"]]),
-            },
-            # 未监控的排前面（运营最关心），同组里可用率高的在前，没监控数据的垫底；
-            # 标记「忽略」的沉到最底，不再进运营视线
-            "stations": sorted(
-                stations,
-                key=lambda s: (
-                    bool(s["ignored"]),
-                    bool(s["imported_id"]),
-                    -(s["uptime_7d"] if isinstance(s["uptime_7d"], (int, float)) else -1),
-                    s["host"],
-                ),
-            ),
+            "summary": summary,
+            "stations": rows,
+            "total": summary["total"],
+            "filtered_total": filtered_total,
         }
 
     @router.post("/api/discovery/ignore")
