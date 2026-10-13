@@ -155,6 +155,8 @@
 
 ## 6. 工程习惯（踩出来的规矩）
 
+- 列表接口里「只有详情弹窗才用得到」的胖字段会跟着每一份列表下发：`/api/feed` 一次 1.30 MB，其中整份公告正文 HTML 625 KB、价格事件的采集溯源 metadata（网络证据/计价口径/启用分组）484 KB，而列表侧只渲染摘要与分组标签——首页 657 KB、历史页 2.78 MB 全被它顶起来。排查口径：按字段累计字节排序，比读代码快 | 列表只下发渲染用得上的字段：正文换成与前端同口径的摘要（`llm_price_monitor/feed_page.py` 的 `notice_excerpt`），metadata 走白名单 `EVENT_METADATA_KEYS`；全文/明细另开按需端点（`GET /api/notice/event`），浏览器侧经 `web/app/api/notice-event` 转发取（带内网令牌，不动生产的读接口封锁）| 本次提交；feed_page.py；web/app/api/notice-event/route.ts；实测 1.30 MB → 284 KB |
+- 后端新增 GET 路由必须显式归类，漏了会被守卫测试抓住：`tests/test_webapi.py::test_admin_get_routes_denied_to_anonymous_by_default` 枚举全部 `GET /api` 路由，凡不在 `public_gets` 里的都断言匿名访问返回 401（新加的 `/api/notice/event` 匿名拿到 422，说明既没进公开清单也没被门禁挡住）| 新加 GET 端点后同步登记：公开读进测试的 `public_gets`，管理员专属进 `app.py` 的 `admin_get_paths`/`admin_get_prefixes`；只想让服务端转发调用（浏览器拿不到）的端点归前者，封锁交给 `public_get_paths` 决定 | 2026-10-13 实测；tests/test_webapi.py 的 `public_gets` |
 - 改纯函数口径（如 `calcCost` 的缓存档缺价回落）必须同一提交改掉钉旧口径的断言：只改实现不改测试，工作区就停在「实现已改、断言没跟」的自验红状态，下一个跑测试的人得先分辨这是新漏洞还是旧钉子。收尾必跑全量（后端 `uv run pytest tests -q` + 前端 `tsc --noEmit` 与 `vitest run`），红了不许收。
 - 静默兜底是坑：吞异常、回落默认值会掩盖真问题 → 删静默兜底、吞异常点补日志（提交 843bcd9 / f2346a1）。
 - 默认路径不藏重活：默认动作（刷新/保存/打开页面）要秒级返回，逐个请求几千候选这类重活只放显式入口（CLI/单独按钮）；进度条救不了语义错误的默认行为，用户点破「我只是要清单」后先改语义再谈体验。

@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, HTTPException, Response
 
 from llm_price_monitor.catalog.discount import ABOVE_OFFICIAL_MAX_RATIO, build_discount
 from llm_price_monitor.report import summary_row
@@ -148,5 +148,13 @@ def build_router(store: Store) -> APIRouter:
         """站点公告版本时序；content 为公告正文（Markdown/纯文本），仅在内容变化时新增版本。"""
         records, total = store.read_notice(site_id=site_id, limit=limit)
         return {"records": records, "total": total}
+
+    @router.get("/api/notice/event")
+    def notice_event_body(site_id: str, detected_at: float) -> dict[str, Any]:
+        """单条公告事件的正文：事件流为省体积只下发摘要，详情弹窗打开时按需来这里取全文。"""
+        content = store.notice_event_content(site_id=site_id, detected_at=detected_at)
+        if content is None:
+            raise HTTPException(status_code=404, detail="公告事件不存在")
+        return {"site_id": site_id, "detected_at": detected_at, "content": content}
 
     return router

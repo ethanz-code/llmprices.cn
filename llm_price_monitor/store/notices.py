@@ -64,3 +64,20 @@ class NoticeStoreMixin(StoreBase):
             since=since,
             since_column="detected_at",
         )
+
+    def notice_event_content(self, *, site_id: str, detected_at: float) -> str | None:
+        """单条公告事件的正文：事件流不再下发正文，详情弹窗按需来这里取。
+
+        事件流条目只带 site_id/detected_at/kind，没有表主键，所以按站点 + 检出时间定位。
+        时间戳是同一份浮点值经 JSON 往返（Python json.dumps ↔ JS Number）传回来的，
+        留 1 毫秒容差防序列化末位误差；同站点不同事件的间隔远大于此。
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM notice_events WHERE site_id = ? AND ABS(detected_at - ?) < 0.001 ORDER BY id DESC LIMIT 1",
+                (site_id, detected_at),
+            ).fetchone()
+        if row is None:
+            return None
+        content = json.loads(row["payload"]).get("content")
+        return str(content) if content is not None else None

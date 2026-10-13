@@ -15,12 +15,19 @@
  *
  * 纯函数 + 显式输入，便于单测；渠道稳定从 SiteStats（lib/statusData 的口径）取。
  */
-import { DEFAULT_HIT_RATE, DEFAULT_OUTPUT_SHARE, calcCost } from "./calculator";
+import { calcCost, estimateTokens } from "./calculator";
 import { effectiveCnyCachePrice, effectiveCnyPrice } from "./format";
 import { canonicalModel } from "./modelOrder";
 import { hasUsablePrice } from "./priceRows";
 import type { SiteStats } from "./channelStatus";
 import type { OverviewRecord, SiteFlags } from "./types";
+
+/** 榜单用的计价口径：重缓存的编码 Agent（输入里 96% 命中缓存、输出占 0.4%）。
+ *  **这里刻意不复用计算器的默认场景**——计算器默认给「普通对话」（不算缓存），
+ *  而站点综合分要按同一批用量横比各站，用不带缓存的口径会让「缓存便宜」的站看不出优势。
+ *  改这两个数等于改榜单排序，动之前先看 /overview 的排序有没有因此翻盘。 */
+const RANKING_HIT_RATE = 96;
+const RANKING_OUTPUT_SHARE = 0.4;
 
 /** 四项权重（写死；改口径改这里）。价格占一半，其余三项共一半。 */
 export const SITE_RANK_WEIGHTS = {
@@ -110,11 +117,15 @@ export function effectiveCostCny(row: OverviewRecord, rate: number | null): numb
     cacheRead: effectiveCnyCachePrice(row, "cache_read_price", rate) ?? base,
     cacheWrite: effectiveCnyCachePrice(row, "cache_create_price", rate) ?? base,
   };
-  const { total } = calcCost(prices, {
-    total: 1_000_000,
-    hitRate: DEFAULT_HIT_RATE,
-    outputShare: DEFAULT_OUTPUT_SHARE,
-  });
+  const { total } = calcCost(
+    prices,
+    // 榜单口径是「一个总量 + 两个假设」，先按上面两个比率折算成四档 token 再计价
+    estimateTokens({
+      total: 1_000_000,
+      hitRate: RANKING_HIT_RATE,
+      outputShare: RANKING_OUTPUT_SHARE,
+    }),
+  );
   // 真免费档（0/0 confirmed）就是 0，算最便宜；只有两档价都缺才 null（上面已挡）
   return total;
 }

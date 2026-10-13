@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from llm_price_monitor.catalog import fx
 from llm_price_monitor.catalog.discount import ABOVE_OFFICIAL_MAX_RATIO, build_discount
+from llm_price_monitor.feed_page import slim_events
 from llm_price_monitor.report import summary_row
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import auth
@@ -130,11 +131,15 @@ def build_router(store: Store) -> APIRouter:
 
         分组下线事件只在库里留档（排查模型消失时查 price_events），不在任何页面展示：
         首页、历史页、管理台共用本接口，在这里拦掉即全端隐藏。
+
+        下发前瘦身（见 llm_price_monitor/feed_page.py）：公告正文换摘要（全文走
+        /api/notice/event 按需取）、价格事件 metadata 走白名单；两者列表侧都用不到，
+        整份 1.3 MB 降到约三分之一。
         """
         price_events, price_total = store.read_events(limit=events_limit, exclude_kind="group_removed")
         notice_events, notice_total = store.read_notice_events(limit=notice_limit)
         return {
-            "events": sorted([*price_events, *notice_events], key=lambda e: e["detected_at"], reverse=True),
+            "events": slim_events(price_events, notice_events),
             "price_total": price_total,
             "notice_total": notice_total,
         }

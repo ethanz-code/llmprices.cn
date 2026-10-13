@@ -2,7 +2,7 @@
  *  写岔了就会出现「翻页丢筛选」或「URL 里挂一堆废话参数」。 */
 import { describe, expect, it } from "vitest";
 
-import { PAGE_SIZE_MAX, pageOffset, parseTableQuery, tableQueryString } from "@/lib/tableParams";
+import { PAGE_SIZE_MAX, pageOffset, paramValue, parseTableQuery, tableQueryString } from "@/lib/tableParams";
 
 const SORT_KEYS = ["rank", "intelligence_index"] as const;
 
@@ -77,5 +77,25 @@ describe("tableQueryString", () => {
       { defaultSize: 100, sortKeys: SORT_KEYS },
     );
     expect(back).toEqual(next);
+  });
+
+  it("extra 参数（视图、厂商这类）跟着一起写，空值省略", () => {
+    const search = tableQueryString(
+      { page: 2, size: 100 },
+      { defaultSize: 100, extra: { view: "all", vendor: "Zhipu AI", q: null } },
+    );
+    const params = new URLSearchParams(search);
+    expect(params.get("view")).toBe("all");
+    expect(params.get("vendor")).toBe("Zhipu AI");
+    expect(params.get("q")).toBeNull();
+    expect(search).not.toContain("q=");
+  });
+});
+
+describe("paramValue", () => {
+  it("取单个参数，多值时取第一个；没有则 undefined", () => {
+    expect(paramValue({ view: "all" }, "view")).toBe("all");
+    expect(paramValue({ view: ["all", "official"] }, "view")).toBe("all");
+    expect(paramValue({}, "view")).toBeUndefined();
   });
 });

@@ -11,28 +11,45 @@ import { vendorDisplay } from "@/lib/vendorNames";
 import { CatalogTable } from "./CatalogTable";
 import { CatalogAllTable } from "./CatalogAllTable";
 import { CatalogEmptyState } from "./CatalogEmptyState";
+import type { CatalogAllPage } from "@/lib/catalogPage";
 import type { CatalogData } from "@/lib/types";
 import type { RankingHit } from "@/lib/rankings";
 
 type CatalogViewKey = "official" | "all";
 
-/** 厂商定价页双视图：官方定价（折扣基准）与全量渠道（models.dev 所有厂商，比价参考）。 */
+/** 厂商定价页双视图：官方定价（折扣基准）与全量渠道（models.dev 所有厂商，比价参考）。
+ *
+ *  视图本身由地址栏决定（`/catalog?view=all`）且切换走导航：全量渠道那 8000+ 条明细
+ *  只在需要时由服务端按页取，官方定价视图不会顺带把它整份拉下来。官方定价表条目少
+ *  （200 多条），它的搜索/厂商筛选仍是前端本地过滤，状态在切换视图时保留。 */
 export function CatalogView({
   official,
   all,
   rankingsIndex = {},
   initialView = "official",
+  page,
+  size,
+  query,
+  vendor,
+  sortKey,
+  dir,
 }: {
   official: CatalogData | null;
-  all: CatalogData | null;
+  all: CatalogAllPage | null;
   /** AA 榜单匹配索引：模型名 → 排名/智能指数，官方定价表里给条目挂徽标用 */
   rankingsIndex?: Record<string, RankingHit>;
   initialView?: CatalogViewKey;
+  page: number;
+  size: number;
+  query: string;
+  vendor: string;
+  sortKey: string | null;
+  dir: "ascend" | "descend";
 }) {
-  const [view, setView] = useState<CatalogViewKey>(initialView);
+  const view = initialView;
   const [refreshing, setRefreshing] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [vendor, setVendor] = useState("all");
+  const [vendorFilter, setVendorFilter] = useState("all");
   const router = useRouter();
 
   // 官方定价视图的厂商下拉选项：与表格行序同款（各家最新发布倒序），筛选顺序跟表一致
@@ -42,9 +59,9 @@ export function CatalogView({
   }, [official]);
 
   function switchView(next: string) {
-    setView(next as CatalogViewKey);
-    // 地址栏跟着切，/catalog?view=all 可直接分享或从别处跳转进来
-    window.history.replaceState(null, "", next === "all" ? "/catalog?view=all" : "/catalog");
+    if (next === view) return;
+    // 全量渠道的筛选/页码不带到另一侧去，切过去是干净的第 1 页
+    router.push(next === "all" ? "/catalog?view=all" : "/catalog", { scroll: false });
   }
 
   /** 手动触发目录同步（需管理员登录）；轮询全量渠道目录就绪后刷新页面。 */
@@ -89,8 +106,8 @@ export function CatalogView({
               prefix={<IconSearch size={14} />}
             />
             <Pick
-              value={vendor}
-              onChange={setVendor}
+              value={vendorFilter}
+              onChange={setVendorFilter}
               style={{ width: 160, maxWidth: "100%" }}
               options={[{ value: "all", label: "全部厂商" }, ...vendors.map((v) => ({ value: v, label: vendorDisplay(v) }))]}
             />
@@ -119,12 +136,20 @@ export function CatalogView({
       </div>
       {view === "official" ? (
         official ? (
-          <CatalogTable data={official} keyword={keyword} vendor={vendor} rankingsIndex={rankingsIndex} />
+          <CatalogTable data={official} keyword={keyword} vendor={vendorFilter} rankingsIndex={rankingsIndex} />
         ) : (
           <CatalogEmptyState />
         )
       ) : all ? (
-        <CatalogAllTable data={all} />
+        <CatalogAllTable
+          data={all}
+          page={page}
+          size={size}
+          query={query}
+          vendor={vendor}
+          sortKey={sortKey}
+          dir={dir}
+        />
       ) : (
         <div className="panel" style={{ padding: "32px 28px", textAlign: "center" }}>
           <div style={{ fontSize: 15, fontWeight: 550, marginBottom: 8 }}>全量渠道价还没生成</div>

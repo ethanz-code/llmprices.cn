@@ -28,6 +28,11 @@ function clampInt(value: string | undefined, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
 
+/** 读取单个字符串参数（同名多值取第一个）：给分页表里的额外筛选项（如厂商）用。 */
+export function paramValue(params: RawParams, key: string): string | undefined {
+  return one(params, key);
+}
+
 /** 从 searchParams 解析表格分页参数；sort 只接受 sortKeys 白名单里的字段。 */
 export function parseTableQuery(
   params: RawParams,
@@ -47,8 +52,12 @@ export function pageOffset(query: TableQuery): number {
   return (query.page - 1) * query.size;
 }
 
-/** 由分页参数拼回查询串（省略默认值与空值，URL 干净）；客户端改参数时用。 */
-export function tableQueryString(next: Partial<TableQuery>, options: { defaultSize: number }): string {
+/** 由分页参数拼回查询串（省略默认值与空值，URL 干净）；客户端改参数时用。
+ *  extra 是分页之外但要留在 URL 里的参数（如厂商筛选、视图）：值为空则省略。 */
+export function tableQueryString(
+  next: Partial<TableQuery>,
+  options: { defaultSize: number; extra?: Record<string, string | null | undefined> },
+): string {
   const params = new URLSearchParams();
   if (next.page && next.page > 1) params.set("page", String(next.page));
   if (next.size && next.size !== options.defaultSize) params.set("size", String(next.size));
@@ -56,6 +65,9 @@ export function tableQueryString(next: Partial<TableQuery>, options: { defaultSi
   if (next.sortKey) {
     params.set("sort", next.sortKey);
     params.set("dir", next.dir === "descend" ? "descend" : "ascend");
+  }
+  for (const [key, value] of Object.entries(options.extra ?? {})) {
+    if (value) params.set(key, value);
   }
   return params.toString();
 }

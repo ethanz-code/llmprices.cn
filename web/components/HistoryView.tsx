@@ -7,8 +7,8 @@ import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
 import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import type { EventRow } from "@/lib/types";
-import { dayKey, dayLabel, eventMeta, formatTime, isNoticeEvent, noticeExcerpt, noticePlainText } from "@/lib/format";
-import { foldEvents } from "@/lib/events";
+import { dayKey, dayLabel, eventMeta, formatTime, isNoticeEvent } from "@/lib/format";
+import { foldEvents, noticeText } from "@/lib/events";
 import type { FeedEvent, HistoryListData } from "@/lib/types";
 import { describeChange, EventDetailModal } from "./EventDetailModal";
 
@@ -101,7 +101,7 @@ function EventFeed({
                   </span>
                 </div>
                 <div style={{ color: "var(--text-2)", fontSize: 13, marginTop: 4 }}>
-                  <span title={noticePlainText(event.content)}>{noticeExcerpt(event.content)}</span>
+                  <span title={noticeText(event)}>{noticeText(event)}</span>
                 </div>
               </div>
             </div>

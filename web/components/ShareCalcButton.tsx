@@ -7,7 +7,7 @@ import { CAPTURE_TIMEOUT_MS, nextFrame, withFrameFallback, withTimeout } from "@
 import { Btn, Modal, toast } from "./ui";
 import { ShareCalcCard } from "./ShareCalcCard";
 import type { ShareTheme } from "./ShareSiteCard";
-import type { CalcPrices, CalcResult } from "@/lib/calculator";
+import type { CalcPrices, CalcResult, UsageTokens } from "@/lib/calculator";
 
 /** 花费计算分享图：把当前参数与结果栅格化成 PNG，预览后一键保存。
  *  截图链路与站点状况分享图同一套（离屏卡片 + html-to-image），交互也保持一致：
@@ -18,11 +18,9 @@ export function ShareCalcButton({
   sourceLabel,
   currency,
   prices,
-  totalTokens,
-  hitRate,
-  outputShare,
+  tokens,
+  fallbackCache,
   result,
-  missingCacheRead,
   disabled = false,
 }: {
   modelName: string;
@@ -30,12 +28,11 @@ export function ShareCalcButton({
   sourceLabel: string;
   currency: string;
   prices: CalcPrices;
-  totalTokens: number;
-  hitRate: number;
-  /** 输出占总用量百分比：图上与命中率并列显示，标明这笔账的拆分口径 */
-  outputShare: number;
+  /** 四档 token 数：明细表照账单口径逐档展示 */
+  tokens: UsageTokens;
+  /** 缓存档没填价、按输入价回落计费时为真：图上要挑明，免得把总价当全量 */
+  fallbackCache: boolean;
   result: CalcResult;
-  missingCacheRead: boolean;
   /** 还没有可展示的花费结果（没填任何单价）时按钮置灰 */
   disabled?: boolean;
 }) {
@@ -104,11 +101,9 @@ export function ShareCalcButton({
           sourceLabel={sourceLabel}
           currency={currency}
           prices={prices}
-          totalTokens={totalTokens}
-          hitRate={hitRate}
-          outputShare={outputShare}
+          tokens={tokens}
           result={result}
-          missingCacheRead={missingCacheRead}
+          fallbackCache={fallbackCache}
           domain={domain}
           generatedAt={generatedAt}
           theme={theme}

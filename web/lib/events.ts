@@ -1,5 +1,12 @@
-import { isNoticeEvent } from "@/lib/format";
-import type { EventRow, FeedEvent } from "@/lib/types";
+import { isNoticeEvent, noticeExcerpt } from "@/lib/format";
+import type { EventRow, FeedEvent, NoticeEvent } from "@/lib/types";
+
+/** 事件流里的公告短文本：后端为省体积只随列表下发摘要（excerpt，同 noticeExcerpt 口径），
+ *  完整正文按需另取（见 EventDetailModal 与 app/api/notice-event）。摘要缺失时（老缓存、
+ *  别处构造的事件）回落到前端摘要规则，两种来源渲染出来一致。 */
+export function noticeText(event: Pick<NoticeEvent, "excerpt" | "content">): string {
+  return event.excerpt ?? noticeExcerpt(event.content ?? "");
+}
 
 /**
  * 同一轮扫描（检测时间相邻 120 秒内）同站点+模型+同类事件折成一组，多分组只算一张卡；公告事件不折叠。

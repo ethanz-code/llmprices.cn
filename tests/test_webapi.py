@@ -2162,6 +2162,8 @@ def test_admin_get_routes_denied_to_anonymous_by_default(workspace: Path, monkey
         "/api/health", "/api/auth/state", "/api/assistant/status",
         "/api/meta", "/api/overview", "/api/latest", "/api/feed", "/api/history",
         "/api/status", "/api/status/latest", "/api/status/views", "/api/status/events", "/api/notice",
+        # 单条公告正文（事件流只下发摘要，详情弹窗按需取全文）：与 /api/notice 同为公开读
+        "/api/notice/event",
         "/api/rankings", "/api/catalog", "/api/catalog/all", "/api/geo", "/api/discovery",
         # 站点截图与首页覆盖表是公开页面的公共内容：匿名可读
         "/api/sites/screenshots", "/api/sites/{site_id}/screenshot", "/api/sites/homepages",

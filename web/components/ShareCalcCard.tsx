@@ -3,7 +3,7 @@
 import { formatCount, formatDiscount, formatPrice, formatTime, formatTokens } from "@/lib/format";
 import { formatAmount } from "@/lib/calculator";
 import { calculator, share } from "@/lib/copy";
-import type { CalcPrices, CalcResult, PriceKey } from "@/lib/calculator";
+import type { CalcPrices, CalcResult, PriceKey, UsageTokens } from "@/lib/calculator";
 import { DajuPeek } from "./DajuArt";
 import { IconAlertCircle } from "./icons";
 import { chartPanelStyle, SHARE_PALETTES, useShareFontStacks, type ShareTheme } from "./ShareSiteCard";
@@ -25,6 +25,13 @@ function symbolOf(currency: string): string {
   return "";
 }
 
+/** 比率 → 百分比文本：≥10 取整，不足 10 保留一位小数
+ *  （编码 Agent 场景的输出占比是 0.4% 这个量级，取整会直接变成 0%）。 */
+function pct(ratio: number): string {
+  const value = ratio * 100;
+  return `${value < 10 ? Math.round(value * 10) / 10 : Math.round(value)}%`;
+}
+
 /** 花费计算分享卡：纯 DOM、固定 1000px 宽、全部内联样式，由 ShareCalcButton 用
  *  html-to-image 栅格化成 PNG；支持亮/暗两套配色，与站点状况分享卡同一套规则。 */
 export function ShareCalcCard({
@@ -33,11 +40,9 @@ export function ShareCalcCard({
   sourceLabel,
   currency,
   prices,
-  totalTokens,
-  hitRate,
-  outputShare,
+  tokens,
   result,
-  missingCacheRead,
+  fallbackCache,
   domain,
   generatedAt,
   theme = "dark",
@@ -51,13 +56,11 @@ export function ShareCalcCard({
   currency: string;
   /** 四档单价（每 100 万 token），缺失的档显示 — */
   prices: CalcPrices;
-  totalTokens: number;
-  hitRate: number;
-  /** 输出占总用量百分比：与命中率一起标在 KPI 上，看图的人才知道这笔账按什么口径拆的 */
-  outputShare: number;
+  /** 四档 token 数，与 result.lines 逐档对应 */
+  tokens: UsageTokens;
   result: CalcResult;
-  /** 缓存命中价没填时命中的 token 不计费，图上要挑明，免得看图的人把总价当全量 */
-  missingCacheRead: boolean;
+  /** 缓存档没填单价、按输入价回落计费时为真：图上标出来，免得看图的人把总价当全量 */
+  fallbackCache: boolean;
   /** 监控站自己的域名，用于分享回流 */
   domain: string;
   /** 生成时刻（秒级时间戳），由调用方传入避免 SSR/客户端差异 */
@@ -67,6 +70,16 @@ export function ShareCalcCard({
   const c = SHARE_PALETTES[theme];
   const { sans: sansStack, mono: monoStack } = useShareFontStacks();
   const symbol = symbolOf(currency);
+  // KPI 全由四档 token 反推，跟明细表同一份数：总量 = 四档之和；
+  // 命中率 = 缓存读取 / 输入方向三档（输入 + 读取 + 写入）；输出占比 = 输出 / 总量。
+  const tokenOf = (key: PriceKey) => {
+    const value = tokens?.[key];
+    return typeof value === "number" && value > 0 ? value : 0;
+  };
+  const totalTokens = BUCKET_ORDER.reduce((sum, key) => sum + tokenOf(key), 0);
+  const inputSide = tokenOf("input") + tokenOf("cacheRead") + tokenOf("cacheWrite");
+  const hitRate = inputSide > 0 ? tokenOf("cacheRead") / inputSide : 0;
+  const outputShare = totalTokens > 0 ? tokenOf("output") / totalTokens : 0;
   // 占比条与图例只画已计费的档；没填价的档在明细表里标注「未计入」
   const billed = result.lines.filter((line) => line.share !== null);
   let host = domain;
@@ -147,7 +160,7 @@ export function ShareCalcCard({
         </span>
       </div>
 
-      {/* KPI：总价是主数，用量与两个拆分假设说明口径 */}
+      {/* KPI：总价是主数；用量与两个比率都由四档 token 反推，跟明细表同一份数 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
         {[
           {
@@ -156,8 +169,8 @@ export function ShareCalcCard({
             color: c.accent,
           },
           { label: "总用量", value: `${formatTokens(totalTokens)} tokens`, color: c.text },
-          { label: "缓存命中率", value: `${hitRate}%`, color: c.text },
-          { label: "输出占比", value: `${outputShare}%`, color: c.text },
+          { label: "缓存命中率", value: pct(hitRate), color: c.text },
+          { label: "输出占比", value: pct(outputShare), color: c.text },
         ].map((kpi) => (
           <div
             key={kpi.label}
@@ -270,10 +283,10 @@ export function ShareCalcCard({
               })}
             </tbody>
           </table>
-          {missingCacheRead && (
+          {fallbackCache && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: c.redBg, color: c.redText, borderRadius: 8, padding: "10px 14px", fontSize: 13 }}>
               <IconAlertCircle size={14} />
-              <span>{calculator.missingCache}</span>
+              <span>{calculator.fallbackCache}</span>
             </div>
           )}
         </div>

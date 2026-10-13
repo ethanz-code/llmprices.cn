@@ -477,7 +477,10 @@ export interface NoticeEvent {
   site_id: string;
   kind: string;
   detected_at: number;
-  content: string;
+  /** 公告正文摘要（与 noticeExcerpt 同口径）：列表侧只渲染它，正文不随列表下发 */
+  excerpt?: string;
+  /** 公告正文原文：列表接口已不下发（一份十几 KB），仅按需取详情时才有 */
+  content?: string;
 }
 
 /** 事件流条目：价格事件（带模型与前后价格）或公告事件（带公告正文）。 */

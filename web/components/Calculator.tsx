@@ -12,20 +12,29 @@ import { vendorDisplay } from "@/lib/vendorNames";
 import { ShareCalcButton } from "./ShareCalcButton";
 import type { CatalogData, CatalogEntry, OverviewData, OverviewRecord } from "@/lib/types";
 import {
-  DEFAULT_TOTAL_TOKENS,
+  DEFAULT_HIT_RATE,
+  DEFAULT_OUTPUT_SHARE,
   EMPTY_PRICES,
+  EMPTY_TOKENS,
+  ESTIMATE_PRESETS,
   PRICE_KEYS,
   TOKEN_PRESET_VALUES,
   calcCost,
   encodeCalcState,
+  estimateTokens,
   formatAmount,
+  formatPriceText,
   hasAnyPrice,
+  hasAnyToken,
+  matchPreset,
   parseAmount,
   parseHitRate,
   parseOutputShare,
+  type CalcEstimate,
   type CalcSource,
   type CalcState,
   type PriceKey,
+  type UsageTokens,
 } from "@/lib/calculator";
 
 /** 一个候选模型：选定后带出其单价 */
@@ -104,9 +113,10 @@ export function Calculator({
   const [model, setModel] = useState(initial.model);
   const [currency, setCurrency] = useState(initial.currency);
   const [prices, setPrices] = useState<Record<PriceKey, string>>(textsOf(initial.prices));
-  const [totalTokens, setTotalTokens] = useState(initial.totalTokens ?? DEFAULT_TOTAL_TOKENS);
-  const [hitRate, setHitRate] = useState(textOfNumber(initial.hitRate));
-  const [outputShare, setOutputShare] = useState(textOfNumber(initial.outputShare));
+  const [tokens, setTokens] = useState<Record<PriceKey, string>>(tokenTextsOf(initial.tokens));
+  const [totalTokens, setTotalTokens] = useState(initial.estimate?.total ?? TOKEN_PRESET_VALUES[1]);
+  const [hitRate, setHitRate] = useState(textOfNumber(initial.estimate?.hitRate));
+  const [outputShare, setOutputShare] = useState(textOfNumber(initial.estimate?.outputShare));
   const [keyword, setKeyword] = useState("");
   // 厂商分组的展开状态：默认全部折叠，只露每家前几条；深链带着模型进来时自动展开其厂商
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -167,20 +177,24 @@ export function Calculator({
     return result;
   }, [prices]);
 
-  // 命中率/输出占比留空回落默认值（96% / 0.4%）
-  const hitNum = parseHitRate(hitRate);
-  const outputShareNum = parseOutputShare(outputShare);
-  const result = useMemo(
-    () => calcCost(parsedPrices, { total: totalTokens, hitRate: hitNum, outputShare: outputShareNum }),
-    [parsedPrices, totalTokens, hitNum, outputShareNum],
-  );
-  // 命中价缺失时命中的 token 不计费，要在结果里挑明，免得总价被悄悄低估
-  const missingCacheRead =
-    parsedPrices.cacheRead == null && hitNum > 0 && totalTokens > 0;
+  const parsedTokens = useMemo(() => {
+    const result = { ...EMPTY_TOKENS } as UsageTokens;
+    for (const key of PRICE_KEYS) result[key] = parseAmount(tokens[key]);
+    return result;
+  }, [tokens]);
+
+  const result = useMemo(() => calcCost(parsedPrices, parsedTokens), [parsedPrices, parsedTokens]);
+  // 真的按输入价回落的档才提示：整档 0 token 时回落不会影响总价，不必占一行提示
+  const hasFallback = result.lines.some((line) => line.fallback && line.tokens > 0);
   // 至少填了一档单价才有得算：明细表四档常显，空态与导出按钮都以它为准
   const anyPriced = hasAnyPrice(parsedPrices);
 
   const symbol = symbolOf(currency);
+
+  // 估算区：两个比率与哪个场景对得上（手改过就为 null，高亮全部取消）
+  const outputShareNum = parseOutputShare(outputShare);
+  const hitRateNum = parseHitRate(hitRate);
+  const activePreset = matchPreset(outputShareNum, hitRateNum);
 
   // 分享图要的展示信息：选中模型的显示名与厂商/分组，价格来源标签
   const selected = useMemo(
@@ -200,13 +214,16 @@ export function Calculator({
       site,
       currency,
       prices: parsedPrices,
-      totalTokens,
-      hitRate: hitNum,
-      outputShare: outputShareNum,
+      tokens: parsedTokens,
+      estimate: {
+        total: totalTokens,
+        hitRate: parseHitRate(hitRate),
+        outputShare: parseOutputShare(outputShare),
+      },
     });
     const query = params.toString();
     window.history.replaceState(null, "", query ? `/calculator?${query}` : "/calculator");
-  }, [source, model, site, currency, parsedPrices, totalTokens, hitNum, outputShareNum]);
+  }, [source, model, site, currency, parsedPrices, parsedTokens, totalTokens, hitRate, outputShare]);
 
   function switchSource(next: string) {
     setSource(next as CalcSource);
@@ -228,6 +245,16 @@ export function Calculator({
     setCurrency(first.currency);
     setExpanded((prev) => (prev.has(first.sub) ? prev : new Set(prev).add(first.sub)));
   }, [model, source, options]);
+
+  // 用量挂载时为空就按估算默认值自动填充一次：打开页面就能看到第一笔账，
+  // 之后改估算参数只更新输入框，要点「填充用量」才会套用（不悄悄覆盖手填的账）
+  const autoFilled = useRef(false);
+  useEffect(() => {
+    if (autoFilled.current || hasAnyToken(parsedTokens)) return;
+    autoFilled.current = true;
+    applyEstimate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function toggleVendor(vendor: string) {
     setExpanded((prev) => {
@@ -256,7 +283,35 @@ export function Calculator({
     setPrices((prev) => ({ ...prev, [key]: text }));
   }
 
-  /** 单档单价输入框：基础区与高级配置区共用同一套渲染 */
+  function setToken(key: PriceKey, text: string) {
+    setTokens((prev) => ({ ...prev, [key]: text }));
+  }
+
+  /** 估算参数 → 四档 token 数，覆盖用量区当前值。 */
+  function fillFromEstimate(estimate: CalcEstimate) {
+    setTokens(tokenTextsOf(estimateTokens(estimate)));
+  }
+
+  /** 「填充用量」按钮：按当前两个比率与总用量重算四档用量。 */
+  function applyEstimate() {
+    fillFromEstimate({
+      total: totalTokens,
+      hitRate: parseHitRate(hitRate),
+      outputShare: parseOutputShare(outputShare),
+    });
+  }
+
+  /** 选场景：两个比率按该场景设好并立刻重算用量——选场景就是「按这个用法再估一遍」，
+   *  不该让人选完再点一次按钮。手改了比率时不再高亮任何场景。 */
+  function applyPreset(key: string) {
+    const preset = ESTIMATE_PRESETS.find((item) => item.key === key);
+    if (!preset) return;
+    setOutputShare(String(preset.outputShare));
+    setHitRate(String(preset.hitRate));
+    fillFromEstimate({ total: totalTokens, outputShare: preset.outputShare, hitRate: preset.hitRate });
+  }
+
+  /** 单档单价输入框：四档共用同一套渲染 */
   const renderPriceField = (key: PriceKey) => (
     <label key={key} className="calc-field">
       <span className="calc-field-label">{BUCKET_LABEL[key]}</span>
@@ -265,6 +320,19 @@ export function Calculator({
         onChange={(text) => setPrice(key, text)}
         prefix={symbol ? <span className="calc-affix">{symbol}</span> : undefined}
         placeholder="—"
+      />
+    </label>
+  );
+
+  /** 单档用量输入框：与单价四档一一对应，按账单直接填 token 数 */
+  const renderTokenField = (key: PriceKey) => (
+    <label key={key} className="calc-field">
+      <span className="calc-field-label">{BUCKET_LABEL[key]}</span>
+      <Input
+        value={tokens[key]}
+        onChange={(text) => setToken(key, text)}
+        suffix={<span className="calc-affix is-right">token</span>}
+        placeholder="0"
       />
     </label>
   );
@@ -379,12 +447,37 @@ export function Calculator({
           {PRICE_KEYS.map(renderPriceField)}
         </div>
         <div className="calc-head" style={{ margin: "18px 0 0" }}>
-          <span className="calc-label">{calculator.usageTotal}</span>
+          <span className="calc-label">{calculator.usageTitle}</span>
         </div>
-        {/* 三格用量输入：auto-fit 自动折行，窄屏不必靠 .calc-grid 的固定列数（那套只服务四档单价） */}
+        {/* 四格用量输入：与单价四档一一对应，auto-fit 自动折行 */}
         <div
           className="calc-grid"
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
+        >
+          {PRICE_KEYS.map(renderTokenField)}
+        </div>
+        <div className="calc-head" style={{ margin: "18px 0 0" }}>
+          <span className="calc-label">{calculator.estimateTitle}</span>
+        </div>
+        {/* 场景预设：按用法一键设好两个比率并立刻重算用量；手改过比率就不再高亮任何场景 */}
+        <div className="calc-row" style={{ marginBottom: 14 }}>
+          <span className="calc-field-label">{calculator.presetLabel}</span>
+          <Seg
+            value={activePreset?.key ?? ""}
+            onChange={applyPreset}
+            options={ESTIMATE_PRESETS.map((item) => ({
+              value: item.key,
+              label: calculator.presets[item.key],
+            }))}
+          />
+          <span className="calc-tip">
+            {activePreset ? calculator.presetHints[activePreset.key] : calculator.presetCustom}
+          </span>
+        </div>
+        {/* 估算填充：没有账单时按「用量档位 + 两个假设」折算成四档 token；改比率后点按钮套用 */}
+        <div
+          className="calc-grid"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", alignItems: "end" }}
         >
           <label className="calc-field">
             <span className="calc-field-label">{calculator.usageSelect}</span>
@@ -392,7 +485,7 @@ export function Calculator({
               <select
                 name="calc-token-preset"
                 className="sel"
-                aria-label="选择用量档位"
+                aria-label="选择估算总用量"
                 value={String(totalTokens)}
                 onChange={(event) => setTotalTokens(Number(event.target.value))}
               >
@@ -405,23 +498,28 @@ export function Calculator({
             </span>
           </label>
           <label className="calc-field">
-            <span className="calc-field-label">{calculator.hitRate}</span>
-            <Input
-              value={hitRate}
-              onChange={setHitRate}
-              suffix={<span className="calc-affix is-right">%</span>}
-              placeholder="96"
-            />
-          </label>
-          <label className="calc-field">
             <span className="calc-field-label">{calculator.outputShare}</span>
             <Input
               value={outputShare}
               onChange={setOutputShare}
               suffix={<span className="calc-affix is-right">%</span>}
-              placeholder="0.4"
+              placeholder={String(DEFAULT_OUTPUT_SHARE)}
             />
           </label>
+          <label className="calc-field">
+            <span className="calc-field-label">{calculator.hitRate}</span>
+            <Input
+              value={hitRate}
+              onChange={setHitRate}
+              suffix={<span className="calc-affix is-right">%</span>}
+              placeholder={String(DEFAULT_HIT_RATE)}
+            />
+          </label>
+          <div className="calc-field">
+            <Btn variant="ghost" size="sm" onClick={applyEstimate}>
+              {calculator.applyEstimate}
+            </Btn>
+          </div>
         </div>
         <div className="calc-actions">
           <span className="calc-tip">{calculator.usageHint}</span>
@@ -445,11 +543,9 @@ export function Calculator({
               sourceLabel={sourceLabel}
               currency={currency}
               prices={parsedPrices}
-              totalTokens={totalTokens}
-              hitRate={hitNum}
-              outputShare={outputShareNum}
+              tokens={parsedTokens}
+              fallbackCache={hasFallback}
               result={result}
-              missingCacheRead={missingCacheRead}
               disabled={!anyPriced}
             />
             <Btn variant="ghost" size="sm" onClick={copyLink} disabled={!anyPriced}>
@@ -471,7 +567,7 @@ export function Calculator({
                 {formatAmount(result.total)}
               </span>
             </div>
-            {missingCacheRead && <p className="calc-tip">{calculator.missingCache}</p>}
+            {hasFallback && <p className="calc-tip">{calculator.fallbackCache}</p>}
             <div className="dtable-wrap">
               <div className="dtable-scroll">
                 <table className="dtable">
@@ -486,7 +582,7 @@ export function Calculator({
                   </thead>
                   <tbody>
                     {result.lines.map((line) => {
-                      // 没填价的档：单价/小计/占比留空并标注「未计入」，用量照实展示，
+                      // 没价可计的档：单价/小计/占比留空并标注「未计入」，用量照实展示，
                       // 让各档用量加总与总用量对得上，占比失真的疑问在表内就有答案
                       const unbilled = line.subtotal === null;
                       return (
@@ -496,7 +592,15 @@ export function Calculator({
                             {unbilled && <span className="calc-unbilled">未计入</span>}
                           </td>
                           <td className="num" style={{ textAlign: "right" }}>
-                            {line.unitPrice !== null ? `${symbol}${formatPrice(line.unitPrice)}` : "—"}
+                            {line.unitPrice !== null ? (
+                              <>
+                                {symbol}
+                                {formatPrice(line.unitPrice)}
+                                {line.fallback && <span className="calc-unbilled">按输入价</span>}
+                              </>
+                            ) : (
+                              "—"
+                            )}
                           </td>
                           <td className="num" style={{ textAlign: "right" }}>
                             {formatCount(line.tokens)}
@@ -521,12 +625,22 @@ export function Calculator({
   );
 }
 
-/** 数字 → 输入框文本；null 留空，让用户看到"这一档没填"。 */
+/** 数字 → 输入框文本；null 留空，让用户看到"这一档没填"。
+ *  单价先收敛浮点噪声与循环小数（formatPriceText），避免选中模型后输入框里是一长串小数。 */
 function textsOf(source: Record<PriceKey, number | null>): Record<PriceKey, string> {
   const result = { ...EMPTY_PRICES } as unknown as Record<PriceKey, string>;
   for (const key of PRICE_KEYS) {
+    result[key] = formatPriceText(source[key]);
+  }
+  return result;
+}
+
+/** 四档 token 数 → 输入框文本；null/0 留空（留空就是不计这一档）。 */
+function tokenTextsOf(source: UsageTokens): Record<PriceKey, string> {
+  const result = { ...EMPTY_TOKENS } as unknown as Record<PriceKey, string>;
+  for (const key of PRICE_KEYS) {
     const value = source[key];
-    result[key] = value === null || value === undefined ? "" : String(value);
+    result[key] = value != null && value > 0 ? String(Math.round(value)) : "";
   }
   return result;
 }

@@ -7,6 +7,7 @@ import {
   effectiveCnyPrice,
   formatPrice,
   formatTimeAgo,
+  noticeExcerpt,
   toCnyPrice,
   tieredPrices,
 } from "@/lib/format";
@@ -89,5 +90,26 @@ describe("formatPrice", () => {
     expect(formatPrice(3.5)).toBe("3.5");
     expect(formatPrice(0.125)).toBe("0.125");
     expect(formatPrice(null)).toBe("—");
+  });
+});
+
+/** 公告摘要规则：后端 llm_price_monitor/feed_page.py 的 notice_excerpt 是同一套口径
+ *  （事件流为省体积只下发摘要），下面这批样例在 tests/test_feed_page.py 里有逐条对应断言，
+ *  改规则时两边一起改，否则页面上的摘要会与后端下发的不一致。 */
+describe("noticeExcerpt", () => {
+  const cases: [string, string][] = [
+    ["<div>公告</div>\n<p>第二行</p>", "公告"],
+    ["# 标题\n正文", "标题"],
+    ["###   带空格的标题\n正文", "带空格的标题"],
+    ["\n\n   \n只有一个段落", "只有一个段落"],
+    ["", ""],
+  ];
+
+  it.each(cases)("剥掉标签与标题井号后取首行：%j", (content, expected) => {
+    expect(noticeExcerpt(content)).toBe(expected);
+  });
+
+  it("超过 120 字截断加省略号", () => {
+    expect(noticeExcerpt("字".repeat(200))).toBe(`${"字".repeat(120)}…`);
   });
 });

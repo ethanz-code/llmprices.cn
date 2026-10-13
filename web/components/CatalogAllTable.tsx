@@ -1,50 +1,88 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { DataTable, type DColumn } from "./DataTable";
 import { Empty, Input, Pick } from "./ui";
 import { IconSearch } from "./icons";
 import { RiskLink } from "./RiskLink";
 import { ToneNum } from "./ToneTag";
 import { VendorBadge } from "./CatalogTable";
-import { formatCount, formatIsoMinute, formatPrice, formatTokens, isFreePrice, looseIncludes } from "@/lib/format";
-import { compareByReleaseDesc, latestReleaseByVendor, vendorBlockCompare } from "@/lib/modelOrder";
+import { catalogAllPageUrl, type CatalogAllPage } from "@/lib/catalogPage";
+import { formatCount, formatIsoMinute, formatPrice, formatTokens, isFreePrice } from "@/lib/format";
 import { useNarrow } from "@/lib/useNarrow";
 import { vendorDisplay } from "@/lib/vendorNames";
-import type { CatalogData, CatalogEntry } from "@/lib/types";
+import type { CatalogEntry } from "@/lib/types";
 
 interface Row extends CatalogEntry {
   key: string;
 }
 
-/** 全量渠道价表：models.dev 所有厂商的带价模型，仅供浏览。 */
-export function CatalogAllTable({ data }: { data: CatalogData }) {
-  const [keyword, setKeyword] = useState("");
-  const [vendor, setVendor] = useState("all");
+/** 全量渠道价表：models.dev 所有厂商的带价模型，仅供浏览。
+ *
+ *  真分页：8000+ 条（整份约 8 MB）由后端按目录口径排序筛选后按页下发，页面只取当前页；
+ *  搜索、厂商筛选、列排序、翻页都改 URL，服务端重新取数（分页之后前端排序只能排当页，没意义）。 */
+export function CatalogAllTable({
+  data,
+  page,
+  size,
+  query,
+  vendor,
+  sortKey,
+  dir,
+}: {
+  data: CatalogAllPage;
+  page: number;
+  size: number;
+  query: string;
+  vendor: string;
+  sortKey: string | null;
+  dir: "ascend" | "descend";
+}) {
+  const [keyword, setKeyword] = useState(query);
   // 手机（≤560px）：渠道并入模型列上下两行，价格一列，避免横滑藏住最后一列
   const phone = useNarrow(560);
+  const router = useRouter();
 
-  // 厂商块排序依据：各家最新发布日期倒序，筛选下拉与表格行序共用（官方视图同款口径）
-  const vendorOrder = useMemo(() => vendorBlockCompare(latestReleaseByVendor(data.models ?? {})), [data]);
-  const vendors = useMemo(
-    () => Array.from(new Set(Object.values(data.models).map((entry) => entry.vendor))).sort(vendorOrder),
-    [data, vendorOrder],
-  );
+  // 服务端回传的搜索词变化时同步输入框（点浏览器后退也能对上）
+  useEffect(() => setKeyword(query), [query]);
+  // 输入防抖：停顿 300ms 再改 URL（真分页下搜索走后端，即时性靠防抖换）
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
+    if (keyword === query) return;
+    const timer = setTimeout(() => go({ q: keyword, page: 1 }), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, query]);
 
-  const rows: Row[] = useMemo(() => {
-    const lower = keyword.trim().toLowerCase();
-    return Object.entries(data.models)
-      .map(([key, entry]) => ({ ...entry, key }))
-      .filter((row) => row.found)
-      .filter((row) => (vendor === "all" ? true : row.vendor === vendor))
-      .filter((row) => (lower ? looseIncludes(`${row.model} ${row.vendor} ${vendorDisplay(row.vendor)} ${row.name ?? ""}`, lower) : true))
-      .sort(
-        (a, b) =>
-          vendorOrder(a.vendor, b.vendor) ||
-          compareByReleaseDesc({ name: a.model ?? "", release: a.release_date }, { name: b.model ?? "", release: b.release_date }),
-      );
-    // 模糊匹配忽略 - _ . 空格等分隔符：搜 GLM5.3 也能命中 GLM-5.3；重排为目录口径（厂商块+发布倒序）
-  }, [data, keyword, vendor, vendorOrder]);
+  /** 改搜索/厂商/排序/分页参数 → 写进 URL，服务端重新取当页数据。 */
+  function go(next: {
+    page?: number;
+    size?: number;
+    q?: string;
+    vendor?: string;
+    sortKey?: string | null;
+    dir?: "ascend" | "descend";
+  }) {
+    router.push(
+      catalogAllPageUrl({
+        page: next.page ?? page,
+        size: next.size ?? size,
+        q: next.q ?? query,
+        vendor: next.vendor ?? vendor,
+        sortKey: next.sortKey !== undefined ? next.sortKey : sortKey,
+        dir: next.dir ?? dir,
+      }),
+      { scroll: false },
+    );
+  }
+
+  const rows: Row[] = Object.entries(data.models).map(([key, entry]) => ({ ...entry, key }));
+  const filtered = Boolean(query || vendor);
 
   const columns: DColumn<Row>[] = [
     {
@@ -211,9 +249,9 @@ export function CatalogAllTable({ data }: { data: CatalogData }) {
         />
         <Pick
           value={vendor}
-          onChange={setVendor}
+          onChange={(next) => go({ vendor: next, page: 1 })}
           style={{ width: 200, maxWidth: "100%" }}
-          options={[{ value: "all", label: "全部渠道" }, ...vendors.map((v) => ({ value: v, label: v }))]}
+          options={[{ value: "", label: "全部渠道" }, ...data.vendors.map((v) => ({ value: v, label: v }))]}
         />
       </div>
       <div className="panel" style={{ overflow: "hidden" }}>
@@ -230,25 +268,47 @@ export function CatalogAllTable({ data }: { data: CatalogData }) {
         >
           <span style={{ fontWeight: 550, fontSize: 15 }}>全量渠道价格</span>
           <span style={{ color: "var(--text-2)", fontSize: 13 }}>
-            共 <span className="mono">{formatCount(Object.values(data.models).filter((entry) => entry.found).length)}</span> 条 ·{" "}
-            <span className="mono">{vendors.length}</span> 个渠道 · 截至{" "}
+            共 <span className="mono">{formatCount(data.total)}</span> 条
+            {filtered && (
+              <>
+                （当前筛选 <span className="mono">{formatCount(data.filtered_total)}</span> 条）
+              </>
+            )}{" "}
+            · <span className="mono">{data.vendors.length}</span> 个渠道 · 截至{" "}
             <span className="mono" title={data.generated_at_iso}>{formatIsoMinute(data.generated_at_iso)}</span> · 汇率{" "}
             <span className="mono">{data.usd_cny_rate}</span>（{data.rate_source}）
           </span>
         </div>
-        {rows.length === 0 ? (
-          <Empty icon={<IconSearch size={18} />} title="没有匹配的渠道价" description="换个关键词或调整筛选条件再试试。" />
-        ) : (
-          <DataTable<Row>
-            rowKey="key"
-            columns={displayColumns}
-            rows={rows}
-            paginated
-            scrollX={1130}
-            mobileScrollX={phone ? 360 : 560}
-            dense
-          />
-        )}
+        <DataTable<Row>
+          rowKey="key"
+          columns={displayColumns}
+          rows={rows}
+          total={data.filtered_total}
+          page={page}
+          pageSize={size}
+          onPageChange={(next) => go({ page: next })}
+          onPageSizeChange={(next) => go({ size: next, page: 1 })}
+          serverSort={sortKey ? { key: sortKey, dir } : null}
+          onSortChange={(key, nextDir) => go({ sortKey: nextDir ? key : null, dir: nextDir ?? "ascend", page: 1 })}
+          scrollX={1130}
+          mobileScrollX={phone ? 360 : 560}
+          dense
+          empty={
+            filtered ? (
+              <Empty
+                icon={<IconSearch size={18} />}
+                title="没有匹配的渠道价"
+                description="换个关键词或调整筛选条件再试试。"
+              />
+            ) : (
+              <Empty
+                icon={<IconSearch size={18} />}
+                title="目录里还没有带价条目"
+                description="等下一轮目录同步完成后，这里会列出各渠道的带价模型。"
+              />
+            )
+          }
+        />
       </div>
     </div>
   );

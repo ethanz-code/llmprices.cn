@@ -4,9 +4,16 @@ import { buildRankingIndex } from "@/lib/rankings";
 import { PageDigest } from "@/components/PageDigest";
 import { SiteAlert } from "@/components/SiteAlert";
 import { CatalogView } from "@/components/CatalogView";
+import {
+  CATALOG_ALL_PAGE_SIZE,
+  CATALOG_ALL_SORT_KEYS,
+  catalogAllApiUrl,
+  type CatalogAllPage,
+} from "@/lib/catalogPage";
 import { alerts } from "@/lib/copy";
 import { formatCount } from "@/lib/format";
 import { pageMetadata } from "@/lib/seo";
+import { paramValue, parseTableQuery } from "@/lib/tableParams";
 
 export const dynamic = "force-dynamic";
 
@@ -19,18 +26,28 @@ export const metadata = pageMetadata(
 export default async function CatalogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { view } = await searchParams;
+  const params = await searchParams;
+  const wantAll = paramValue(params, "view") === "all";
+  const query = parseTableQuery(params, {
+    defaultSize: CATALOG_ALL_PAGE_SIZE,
+    sortKeys: CATALOG_ALL_SORT_KEYS,
+  });
+  const vendor = paramValue(params, "vendor")?.trim() ?? "";
+
   let official: CatalogData | null = null;
-  let all: CatalogData | null = null;
+  let all: CatalogAllPage | null = null;
   let rankings: RankingsData | null = null;
   let error: string | null = null;
   try {
+    // 全量渠道目录 8000+ 条（整份约 8 MB）：官方定价视图只要它的条数，用 limit=0 只取计数，
+    // 明细只在「全量渠道」视图按页取——两个视图都不再整份下发。
+    const allUrl = wantAll ? catalogAllApiUrl(query, vendor) : catalogAllApiUrl(query, "", 0);
     // 榜单用于给目录条目补 AA 排名徽标；拉不到只影响徽标，不阻塞目录
     [official, all, rankings] = await Promise.all([
       apiGetOptional<CatalogData>("/api/catalog"),
-      apiGetOptional<CatalogData>("/api/catalog/all"),
+      apiGetOptional<CatalogAllPage>(allUrl),
       apiGetOptional<RankingsData>("/api/rankings").catch(() => null),
     ]);
   } catch (cause) {
@@ -45,14 +62,25 @@ export default async function CatalogPage({
         <PageDigest
           items={[
             { label: "官方定价模型", value: formatCount(Object.keys(official.models).length) },
-            ...(all ? [{ label: "全量渠道模型", value: formatCount(Object.keys(all.models).length) }] : []),
+            ...(all ? [{ label: "全量渠道模型", value: formatCount(all.total) }] : []),
           ]}
         />
       )}
       {error && (
         <SiteAlert title={alerts.catalog.title} detail={error} fix={alerts.catalog.fix} />
       )}
-      <CatalogView official={official} all={all} rankingsIndex={rankingsIndex} initialView={view === "all" ? "all" : "official"} />
+      <CatalogView
+        official={official}
+        all={wantAll ? all : null}
+        rankingsIndex={rankingsIndex}
+        initialView={wantAll ? "all" : "official"}
+        page={query.page}
+        size={query.size}
+        query={query.q}
+        vendor={vendor}
+        sortKey={query.sortKey}
+        dir={query.dir}
+      />
     </div>
   );
 }

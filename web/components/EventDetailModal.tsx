@@ -2,10 +2,13 @@
 
 /** 事件详情弹窗：价格事件展示前后完整价格与采集信息，公告事件展示全文。 */
 
+import { useEffect, useState } from "react";
 import { Modal } from "./ui";
 import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
 import { NoticeBody } from "./NoticeBody";
+import { apiGet } from "@/lib/api";
+import { noticeText } from "@/lib/events";
 import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import {
   CACHE_PRICE_LABELS,
@@ -21,7 +24,7 @@ import {
   toCnyPrice,
   type CachePriceField,
 } from "@/lib/format";
-import type { FeedEvent, PriceRecord } from "@/lib/types";
+import type { FeedEvent, NoticeEvent, PriceRecord } from "@/lib/types";
 
 interface ChangeLike {
   current?: { input_price: number | null; output_price: number | null; unit?: string; metadata?: PriceRecord["metadata"] } | null;
@@ -169,6 +172,51 @@ function RecordBlock({
   );
 }
 
+/** 公告正文：事件流不再随列表下发正文（一份十几 KB，几十条就上兆），弹窗打开时按需取全文；
+ *  取不到就退回列表摘要，不让弹窗空着。 */
+function NoticeEventBody({ event }: { event: NoticeEvent }) {
+  // 事件本身带了正文（别处构造的事件、老数据）就直接渲染，省一次往返
+  const [content, setContent] = useState<string | null>(event.content ?? null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (content !== null) return;
+    let alive = true;
+    apiGet<{ content: string | null }>(
+      // 时间戳原样回传：后端按 站点 + 检出时间 定位这条事件
+      `/api/notice-event?site_id=${encodeURIComponent(event.site_id)}&detected_at=${event.detected_at}`,
+    )
+      .then((data) => {
+        if (!alive) return;
+        if (data.content) setContent(data.content);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [content, event.site_id, event.detected_at]);
+
+  const boxStyle: React.CSSProperties = {
+    maxHeight: 360,
+    overflowY: "auto",
+    padding: 12,
+    borderRadius: 10,
+    background: "var(--panel-2)",
+  };
+  if (content !== null) return <NoticeBody content={content} style={boxStyle} />;
+  return (
+    <div style={boxStyle}>
+      <p style={{ color: "var(--text-3)", fontSize: 12.5, margin: failed ? "0 0 8px" : 0 }}>
+        {failed ? "公告原文没取到，先看摘要：" : "正在取公告原文…"}
+      </p>
+      {failed && <p style={{ margin: 0 }}>{noticeText(event)}</p>}
+    </div>
+  );
+}
+
 /** 详情弹窗：内容按事件类型区分；关闭后由 Modal 播完退出动画。 */
 export function EventDetailModal({
   event,
@@ -201,16 +249,7 @@ export function EventDetailModal({
               {formatTime(event.detected_at)}
             </span>
           </div>
-          <NoticeBody
-            content={event.content}
-            style={{
-              maxHeight: 360,
-              overflowY: "auto",
-              padding: 12,
-              borderRadius: 10,
-              background: "var(--panel-2)",
-            }}
-          />
+          <NoticeEventBody event={event} />
         </div>
       </Modal>
     );

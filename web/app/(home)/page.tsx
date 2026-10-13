@@ -7,12 +7,11 @@ import {
   formatTime,
   formatTimeAgo,
   isNoticeEvent,
-  noticeExcerpt,
   toCnyPrice,
 } from "@/lib/format";
 import { getSiteInfo, loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
 import { canonicalModel, lowestPriceRowPerModel, orderByReleaseDesc } from "@/lib/priceRows";
-import { foldEvents } from "@/lib/events";
+import { foldEvents, noticeText } from "@/lib/events";
 import {
   buildSiteViews,
   chartToneVar,
@@ -515,8 +514,8 @@ export default async function LandingPage() {
                           <span className="event-site">{site.name}</span>
                           <span className="event-sub">
                             {isNoticeEvent(event) ? (
-                              <span title={event.content}>
-                                {noticeExcerpt(event.content)}
+                              <span title={noticeText(event)}>
+                                {noticeText(event)}
                               </span>
                             ) : (
                               <span className="mono">{event.model}</span>
