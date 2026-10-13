@@ -20,6 +20,7 @@
 | 网站打不开 / 域名被拦 / webblock / 302 跳备案页 | 本页 §5 |
 | 密钥 / 掩码 / 打码 / api_key / secret / app_token | 本页 §6 |
 | 历史归并 / 重写历史 / squash / cherry-pick 重放 / force push / 手抄提交清单 | 本页 §6 |
+| 浏览器走查 / 截图 / 登录态注入 / agent-browser / Browser Use / DevTools / IAB / 预览面板 | [sites.md](sites.md)「工具栈」表（ZCode / WorkBuddy 双环境对照） |
 
 ## 1. 采集与网络（坑最多）
 
@@ -103,6 +104,7 @@
 | 订阅池转售真价被 sanity 误杀（totokens Haiku CC-MAX 组 14.9 USD=官价 149 倍，站方页面明码，两轮确认照作废）：20 倍上界防的是「提取事故」，但结构化 API 字段直采没有提取环节，只剩单位口径风险——错位量级是千倍/百万倍，**上界按价格来源分级**：直采（pricing_kind=explicit_price 且 adapter=network）放宽到 500，页面/AI 提取维持 20 | discount.py `SANITY_DIRECT_MAX_RATIO=500`；误杀的 totokens Haiku CC-MAX-纯血已恢复 confirmed | discount.py `sanity_violation`；test_catalog.py 分级测试 |
 | 续签失败报错刷屏先看最后一条时间再动手：1for/totokens/DaiTuAI/2000lab 四站 168 条「续签 401」全是 10-11 21:40 前的历史（当晚 21:44 主动续签上线后恢复），流水只增不清会长期挂着旧账 | 判「还在发生吗」看流水最新时间戳 + 解码库里 auth_token 的 JWT exp/iat；icodeeasy「公告 401」同款（10-09 换 token 前尾巴，带库内 token 实测 200） | 任务流水 documents.task_errors；token_refresh.py |
 | 站价**高于**官方价（折扣 > 100%）的行照样入库、上首页——中转站比官价还贵，对用户没有选择价值（2026-10-12 用户定：这类价「完全没有意义」）| 产品口径（与提取校验分开）：`catalog/discount.above_official`（任一轴折扣 > 1.0），采集侧 `scans.py` 直接摘除该 key（不入快照、不走"沿用旧价"分支），展示侧 `data.py /api/overview`、`report/summary.attach_catalog_discounts` 再兜一层（兼顾旧行）；无官方基准的条目放行。**注意这也让 `_apply_price_sanity` 的高倍端作废路径退居二线**（>1 已先被丢弃，低倍端因 `round2` 把 <0.005 折成 0 基本够不到），改口径时两条测试要跟着调 | `catalog/discount.above_official`；`report/scans.py`；`webapi/routes/data.py` |
+| 页面标 `¥` 但接口明写 `currency:"USD"`（2api），一度想按「页面为准」改 CNY——会整体差 6.7 倍。**「页面币种为准」只适用于接口没声明币种时**（91token 是接口不标）；接口逐条声明了币种就以接口为准，页面符号可能是前端统一渲染（2api 站点 JS 自身金额也统一用 ¥，但卖家定价是「官方价(USD)×倍率」、数值不换算） | 判币种三步：① 接口字段有没有 `currency`/`price_unit`（有则以它为准）；② 没有再看页面渲染符号；③ 两处都含糊就看计价逻辑（倍率对官价 = USD 口径）。2api 实测：offer 接口 `currency:"USD"` + 商家文档「倍率对官方价填」→ 判 USD，仓库现口径正确 | page-cross-check.md 2026-10-12「2api」；`adapters.marketplace_price_records` |
 | 站方定价页把「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示，实收价 = 参考价 × 按充值/套餐汇率实时算出的折扣（heyroute/aheapi 实锤：Grok 组 `$2.00`(划线)→`$0.040`，badge「≈2% of xAI official price」；CN-Models 56%）。标准 new-api 公式（model_ratio×基准×group_ratio）拿到的恰是**被划掉的参考价列**，`group_ratio` 是「Nx 计费」额度倍率、不是价格折扣，两者方向相反 → 整站偏高 2–50 倍（页面上 heyroute 显成「比官价还贵」，与它自己「省 95%」的口号自相矛盾，是排查入口） | 识别三特征：页面每格两个数（前灰删除线后加粗）、分组 badge「≈X% of official price」、`/api/pricing` 顶层带非标准字段 `display_prices`（全站扫过一次，仅 heyroute 一家）。**采集侧已内置该形态确定性解析**（`adapters.display_fork_price_records`，靠 `display_prices` 自动分派）：实收 = 参考价(model_ratio×2/a) × 分组折扣 `floor(组倍率×100×a/rate)`，rate = 钱包充值汇率(`/api/user/topup/info`)与套餐汇率(`/api/subscription/plans`)各算百分比后**取最小**，cn-models 分组 a=7；2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证通过。教训通用化：**标准公式自洽 ≠ 与页面一致**，倍率/表价类站必须先看页面每格到底几个数 | adapters.py `display_fork_price_records`；page-cross-check.md 2026-10-12（并更正了当日把删除线列当基准判「一致」的旧记录）；sites.md「站方自有计价站」 |
 
 ## 4. 前端
@@ -136,6 +138,8 @@
 | 组件修饰类用裸常用词（如 `empty`）静默继承全局同名工具类——globals.css 里有全局 `.empty { padding: 36px 0 }`，flex 子项被撑高 72px 溢出卡片，视觉上"多出几根悬挂灰条" | 修饰类避开裸常用词（改 `is-empty`）；或像 `.uptime-slot` 那样显式声明 `padding: 0` 压制。新增类名前先 grep globals.css 是否已有同名/同名单类 | 首页站点墙 uptime 色条实测 |
 | 给 space-between 行里的控件外包一层提示容器（如密钥框下的说明文字），宽度留在内层 Input 上：外层容器按内容自适应收缩，内层百分比宽度在里面靠左，输入框整体看着没贴右 | 宽度样式挪到最外层容器（弹性子项），内层全部 100% 跟随；对齐问题先看「宽度定在哪一层」 | 系统设置密钥框对齐实测 |
 | 站点自报的指标字段"有键"不等于"有数"：sub2api v2 监控（2btocken）的 `cache_read_tokens`/`cache_creation_tokens`/`token_count` 在整份响应里恒为 0 占位，只有 `cache_rate` 有值；按 `!= null` 判"站点报了这项"会把 0 占位当真实读数展示（渠道表显示"读 0 · 写 0"） | 判站点有没有报某计数指标用 `> 0` 而不是 `!= null`；站点状态里的缓存指标展示见 `channelStatus.cacheMetricText`（有非零读写才展示读写、否则退回命中率） | 站点检测渠道表加缓存读取/写入实测（2btocken 81 条 token 数全 0） |
+| 服务端真分页下「本页为空但总数 > 0」（手改 URL 到 `?page=999`）会被表格 `rows.length === 0 → 整只空态` 的分支吞掉：分页器随表一起消失，用户卡在空白页翻不回去 | DataTable 早返回加判定：服务端模式且 `total > 0` 时不走空态，照常渲染表壳 + 分页器，页内提示「这一页没有内容」，页码钳到最后一页；`components/DataTable.test.tsx` 钉住该行为（含「total 真为 0 才走空态」的反例） | 本次提交；DataTable.tsx 早返回分支；DataTable.test.tsx |
+| 给列表接口加真分页、或改默认行为，属于**接口契约变更**——只改「主调用方」会漏掉旁路调用方：`/api/discovery` 改成默认不返回「忽略的站」后，管理台的站点导入弹窗（DiscoverModal）正靠这个字段显示「已忽略」与取消忽略，差点看不到被忽略的站 | 改接口默认值/返回形状前先全仓 grep 调用点逐个确认是否依赖旧行为；分页参数写成 `limit: int \| None = None`（不传=全量）保住首页/总览/目录页的旧取法，不强迫所有调用方跟着改 | 提交 3ae9c5a；web/components/DiscoverModal.tsx；webapi/routes/rankings.py、discovery.py |
 
 ## 5. 部署与运维
 
@@ -151,6 +155,7 @@
 
 ## 6. 工程习惯（踩出来的规矩）
 
+- 改纯函数口径（如 `calcCost` 的缓存档缺价回落）必须同一提交改掉钉旧口径的断言：只改实现不改测试，工作区就停在「实现已改、断言没跟」的自验红状态，下一个跑测试的人得先分辨这是新漏洞还是旧钉子。收尾必跑全量（后端 `uv run pytest tests -q` + 前端 `tsc --noEmit` 与 `vitest run`），红了不许收。
 - 静默兜底是坑：吞异常、回落默认值会掩盖真问题 → 删静默兜底、吞异常点补日志（提交 843bcd9 / f2346a1）。
 - 默认路径不藏重活：默认动作（刷新/保存/打开页面）要秒级返回，逐个请求几千候选这类重活只放显式入口（CLI/单独按钮）；进度条救不了语义错误的默认行为，用户点破「我只是要清单」后先改语义再谈体验。
 - 提交信息中文讲清"改了什么、为什么"，不写 `fix`/`update` 空话。

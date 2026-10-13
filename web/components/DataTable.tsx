@@ -196,14 +196,16 @@ export function DataTable<T extends object>({
     setPage(1);
   }
 
-  if (rows.length === 0) {
-    // 调用方传整只 Empty（带标题/按钮）时原样渲染，否则包一层带默认图标的空状态框
-    const emptyNode =
-      isValidElement(empty) && empty.type === Empty ? (
-        empty
-      ) : (
-        <Empty icon={<IconNodes size={18} />} description={empty} />
-      );
+  // 调用方传整只 Empty（带标题/按钮）时原样渲染，否则包一层带默认图标的空状态框
+  const emptyNode =
+    isValidElement(empty) && empty.type === Empty ? (
+      empty
+    ) : (
+      <Empty icon={<IconNodes size={18} />} description={empty} />
+    );
+  // 服务端模式下「本页为空但总数>0」（如 URL 页码越界）不能直接吞掉整表，
+  // 否则没有分页器可点、用户卡住——这种情况继续渲染表格壳与分页器，让页内空提示 + 可翻页
+  if (rows.length === 0 && !(server && total! > 0)) {
     return (
       <div className="dtable-wrap">
         {emptyNode}
@@ -263,6 +265,13 @@ export function DataTable<T extends object>({
           </tr>
         </thead>
         <tbody>
+          {visible.length === 0 && (
+            <tr>
+              <td colSpan={columns.length} style={{ padding: "22px 12px", textAlign: "center", color: "var(--text-3)" }}>
+                这一页没有内容
+              </td>
+            </tr>
+          )}
           {visible.map((row) => {
             const rowKeyValue = getKey(row);
             const children = childrenOf?.(row);

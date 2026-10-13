@@ -40,8 +40,8 @@ type AiLog = {
 };
 
 const SCENES = ["", "助手分类", "助手问答", "价格抽取", "公告提取", "token 分析"];
-// 明细单次拉取上限（与后端 _AI_LOG_LIST_LIMIT 对齐）：超过时表格上方提示只显示最近一部分
-const LOGS_LIST_LIMIT = 5000;
+/** 明细默认每页条数：真分页后每次只取一页（后端单次上限 5000，这里不需要那么大）。 */
+const LOGS_PAGE_SIZE = 100;
 const STATUSES = [
   { value: "", label: "全部结果" },
   { value: "ok", label: "成功" },
@@ -312,13 +312,26 @@ export function AdminAiLogs() {
   const { lineColor, secondaryColor } = useChartTheme();
   const [summary, setSummary] = useState<AiLogSummary | null>(null);
   const [logs, setLogs] = useState<AiLog[]>([]);
-  // 明细一次拉全量，交给 DataTable 本地分页；total 大于已加载数时提示只看到最近一部分
+  // 明细走服务端真分页：只取当前页，total 为筛选后的总条数
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(LOGS_PAGE_SIZE);
   // 首次明细未回来前先画骨架，避免空表闪「还没有记录」的假空态
   const [logsReady, setLogsReady] = useState(false);
   const [scene, setScene] = useState("");
   const [status, setStatus] = useState("");
   const [detail, setDetail] = useState<AiLog | null>(null);
+
+  // 筛选一变就回第 1 页：否则新条件下条数变少时，会停在越界页码上看到空表
+  function changeScene(next: string) {
+    setScene(next);
+    setPage(1);
+  }
+
+  function changeStatus(next: string) {
+    setStatus(next);
+    setPage(1);
+  }
 
   // 统计口径固定为全部保留记录，不随下方筛选联动，只在进入页面时取一次
   useEffect(() => {
@@ -335,7 +348,7 @@ export function AdminAiLogs() {
 
   useEffect(() => {
     let alive = true;
-    const query = new URLSearchParams({ limit: String(LOGS_LIST_LIMIT) });
+    const query = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
     if (scene) query.set("scene", scene);
     if (status) query.set("status", status);
     apiSend<{ logs: AiLog[]; total: number }>(`/api/ai-logs?${query}`, "GET")
@@ -350,7 +363,7 @@ export function AdminAiLogs() {
     return () => {
       alive = false;
     };
-  }, [scene, status]);
+  }, [scene, status, page, pageSize]);
 
   const hasCalls = (summary?.total ?? 0) > 0;
   // 有 token 用量记录才展示推演入口；日志没记到 usage（供应商没返回）时不给按钮
@@ -542,11 +555,11 @@ export function AdminAiLogs() {
       <div style={{ display: "flex", gap: 8 }}>
         <Sel
           value={scene}
-          onChange={setScene}
+          onChange={changeScene}
           ariaLabel="按场景筛选"
           options={SCENES.map((item) => ({ value: item, label: item === "" ? "全部场景" : item }))}
         />
-        <Sel value={status} onChange={setStatus} ariaLabel="按结果筛选" options={STATUSES} />
+        <Sel value={status} onChange={changeStatus} ariaLabel="按结果筛选" options={STATUSES} />
       </div>
       <div className="panel" style={{ overflow: "hidden" }}>
         {!logsReady ? (
@@ -558,7 +571,14 @@ export function AdminAiLogs() {
           rowKey="id"
           columns={columns}
           rows={logs}
-          paginated
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(next) => {
+            setPageSize(next);
+            setPage(1);
+          }}
           scrollX={900}
           mobileScrollX={850}
           empty={
@@ -571,11 +591,6 @@ export function AdminAiLogs() {
         />
         )}
       </div>
-      {logsReady && logs.length < total && (
-        <p style={{ color: "var(--text-3)", fontSize: 12, margin: 0 }}>
-          记录太多，这里只显示最近 {formatCount(logs.length)} 条（共 {formatCount(total)} 条）；用上方筛选缩小范围可以看到更早的。
-        </p>
-      )}
     </div>
   );
 }

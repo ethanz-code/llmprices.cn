@@ -34,6 +34,9 @@ const DEVICE_LABELS: Record<string, string> = {
   bot: "爬虫/脚本",
 };
 
+/** 明细默认每页条数：真分页后每次只取一页（后端单次上限 500）。 */
+const VISITS_PAGE_SIZE = 100;
+
 function deviceLabel(name: string): string {
   return DEVICE_LABELS[name] ?? name;
 }
@@ -154,26 +157,44 @@ export function AdminAnalytics() {
   const { lineColor, secondaryColor, axisColor, gridColor, palette } = useChartTheme();
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [visits, setVisits] = useState<VisitLog[]>([]);
+  // 明细走服务端真分页：只取当前页，visitsTotal 为总条数
+  const [visitsTotal, setVisitsTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(VISITS_PAGE_SIZE);
+  const [visitsReady, setVisitsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  const load = useCallback(async () => {
+  // 汇总口径是近 30 天全量，与下方明细页码无关，只在进入页面（与清空后）取
+  const loadSummary = useCallback(async () => {
     try {
-      const [summaryData, logsData] = await Promise.all([
-        apiSend<AnalyticsSummary>("/api/analytics/summary", "GET"),
-        apiSend<VisitLogsData>("/api/analytics/logs?limit=500", "GET"),
-      ]);
-      setSummary(summaryData);
-      setVisits(logsData.visits);
+      setSummary(await apiSend<AnalyticsSummary>("/api/analytics/summary", "GET"));
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, []);
 
+  const loadVisits = useCallback(async () => {
+    try {
+      const query = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
+      const data = await apiSend<VisitLogsData>(`/api/analytics/logs?${query}`, "GET");
+      setVisits(data.visits);
+      setVisitsTotal(data.total);
+      setVisitsReady(true);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [page, pageSize]);
+
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadSummary();
+  }, [loadSummary]);
+
+  useEffect(() => {
+    void loadVisits();
+  }, [loadVisits]);
 
   async function clearVisits() {
     if (!confirmClear) {
@@ -184,7 +205,11 @@ export function AdminAnalytics() {
     try {
       await apiSend("/api/analytics/clear", "POST");
       toast("访问记录已清空");
-      await load();
+      setVisits([]);
+      setVisitsTotal(0);
+      if (page !== 1) setPage(1); // 回第 1 页会触发重取
+      else await loadVisits();
+      await loadSummary();
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : "清空失败");
     }
@@ -288,7 +313,20 @@ export function AdminAnalytics() {
         <p className="section-sub">
           同一 IP 30 秒内重复打开同一页面只计一次；记录自动保留 {summary.retained_days} 天
         </p>
-        <DataTable columns={VisitColumns()} rows={visits} rowKey={(row) => `${row.ts}:${row.path}:${row.ip}`} paginated empty="暂无访问记录" />
+        <DataTable
+          columns={VisitColumns()}
+          rows={visits}
+          rowKey={(row) => `${row.ts}:${row.path}:${row.ip}`}
+          total={visitsTotal}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(next) => {
+            setPageSize(next);
+            setPage(1);
+          }}
+          empty={visitsReady ? "暂无访问记录" : "正在读取访问记录…"}
+        />
       </section>
 
       <div  style={{ display: "flex", alignItems: "center", gap: 12 }}>

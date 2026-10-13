@@ -8,10 +8,10 @@
 2. **Model Plaza / 模型广场只在没有模型列表时兜底**（sub2api 系部分部署只有广场没有列表，如 2btocken）。
 3. 两者都没有、只有渠道倍率 → 走渠道倍率合成（见 sites.md），标 candidate。
 
-## 核查步骤（内置浏览器，带登录态）
+## 核查步骤（真实浏览器 + 登录态；工具按当前环境选，见 [sites.md](sites.md)「工具栈」表）
 
-1. 打开站点价格页（登录墙站先注入登录态：sub2api 系 localStorage 四键，new-api 系 session Cookie，见 lessons.md §3）。
-2. 看页面网络请求（performance 资源列表或 DevTools），确认页面实际打的价格接口与站点配置的 `network.url` 是同一个；顺带扫一眼有没有漏配的渠道状态/公告接口。
+1. 打开站点价格页——公开页直接开（ZCode 用 IAB、WorkBuddy 用 `agent-browser`）；登录墙站先注入登录态（sub2api 系 localStorage 四键、new-api 系 session Cookie，见 lessons.md §3；WorkBuddy 无内嵌 cookie 库可拷，从用户系统浏览器手抄或 `agent-browser` 会话内登录，见 sites.md SOP 步骤 4）。
+2. 看页面网络请求（ZCode：performance 资源列表或 DevTools 网络面板；WorkBuddy：`agent-browser snapshot` 看渲染结果 + `curl` 候选接口族），确认页面实际打的价格接口与站点配置的 `network.url` 是同一个；顺带扫一眼有没有漏配的渠道状态/公告接口。
 3. 挑 1-2 个监控清单内模型，读页面显示的输入/输出价与币种标注，和库里 `latest` 对应记录对账：
    - 页面价 = 库里价：通过。
    - 差一个组倍率/充值汇率倍数：页面展示的是基准价、计费才乘系数（HeyRoute 型：页面 $12 = 基准，库里 ¥157.68 = $12×组倍率 1.8×充值汇率 7.3）——在 notes 里写明语义即可，不算错。
@@ -42,4 +42,7 @@
 - 2026-10-12 | 988665(佛爷API) | 模型广场 /pricing | gpt-6-luna / grok-4.6-4.7 | 页面卡片单列 `输入 $0.4 / 输出 $2.4 / 缓存 $0.04`（gpt官key 组） | 库 ¥2.92/¥17.52（=$0.4/$2.4×7.3） | 一致：单列显示，站方真实标价（其 gpt官key 组对官价约 4x）；公告「gpt plus 0.05 倍率 pro 0.15 倍率 claude max 1.3 倍率」与分组倍率口径吻合 | — |
 - 2026-10-12 | 134-175-71(CC中转) | 模型广场 /pricing | glm-5.3 | 页面单列 `输入 $3.2 / 输出 $11.2`（国产模型 组） | 库 ¥23.36/¥81.76 | 一致：$3.2×7.3=¥23.36；单列显示，站方真实标价（对官价约 2.8x） | — |
 - 2026-10-12 | 128api | 模型列表 /pricing | grok-4.7 | 页面行 `Model ratio 2 / Completion ratio 12 / Group ratio 1 → Prompt $4.000、Completion $48.000` | 库 ¥58.4/¥700.8（pro百万token 组=$8/$96） | 一致：页未登录按 1x 基准，×2 组倍率=$8/$96；单列显示，高倍来自站方自定义 completion_ratio 12 | 公告为微信/上新，无调价说明 |
-- 2026-10-12 | 2api | marketplace 模型页 /marketplace/models/split | gpt-6-astra / deepseek-v4-pro | 页面单列 `Input ¥0.500000/M、Output ¥3.000000/M`（196 个 ¥、0 个 $） | 库 USD 0.5/3.0 | **币种存疑（待确认）**：接口声明 `currency:USD`、页面显示 ¥（数值相同不换算）——按「币种以页面为准」应为 CNY；此站折扣口径可能整体差 6.7 倍。若确认页面 ¥（本地化换算）为准，需把该站 unit 改 CNY 重采 | 公告「ccmax 价格调整至 1.2」等 | 
+- 2026-10-12 | 2api(2API) | 模型页 /marketplace/models/split | gpt-6-astra / deepseek-v4-pro | 页面单列 `Input ¥0.500000/M、Output ¥3.000000/M`（196 个 ¥、0 个 $） | 库 USD 0.5/3.0 | **已核：USD 无问题，仓库现口径正确**。逐 offer 接口 `pricing.currency="USD"`（unit per_1m_tokens），卖家按「官方价(USD)×倍率」定价（商家文档实锤：倍率对官方价填），页面 ¥ 只是前端符号渲染（数值不换算，站点 JS 自身金额也统一用 ¥）；按「接口已声明币种则从接口」——91token 是**接口不标**才以页面为准，两者不矛盾 | 文档为商家指南（无币种条款）；公告「ccmax 价格调整至 1.2」等 |
+- 2026-10-13 | ai-070798(星舟API) | 模型广场 /pricing（xtm-patches fork） | claude-sonnet-5-5 / claude-opus-5-5 / claude-fable-5-1 | 页面每格**一个数**：sonnet-5-5 `$75/$75`（CCMAX 组 x1）、opus-5-5 `$0.6/$3`、fable-5-1 `$1.5/$7.5` | 库 ¥75/¥75、¥0.6/¥3、¥1.5/¥7.5 | 一致：比例路径 37.5×基准2×组倍率1=75；expr 路径 `tier("standard", p*4+c*20+…)`→4/20 再乘组倍率（KIRO x0.15→0.6/3，逐分吻合）。页面标 `$` 但 status `price=1`（充值 1:1）→ 数值即人民币实付，与 1-cnmz 同口径，勿被 `usd_exchange_rate` 带走 | /api/notice 是**静态介绍页**（QQ群+充值比例），活公告在 /api/status 公告板（7 条，最新 2026-08-12）→ 配 /api/status | `/api/model_status/groups` 404 → 改配 `/api/perf-metrics/summary?hours=24`（models 带 avg_latency_ms/success_rate） |
+- 2026-10-13 | ai-7code(7Code AI) | 模型广场 /pricing（xtm-patches fork，rc.40.2） | claude-opus-5-5 / claude-sonnet-5-5 / claude-fable-5-1 / deepseek-v4-pro | 页面 `$14/$70`（Claude 企业级 x3.5）、`$7/$35`、`$15/$75`、`$5.4/$16.2`（国产模型 x0.6） | 库 ¥14/¥70、¥7/¥35、¥15/¥75、¥5.4/¥16.2 | 一致：expr 系数 p*4+c*20（opus）/p*2+c*10（sonnet）/p*10+c*50（fable）乘各自组倍率逐分吻合；`price=1` 充值 1:1，同 1-cnmz 口径。前端公式已从 bundle 实锤：`显示 = raw×组倍率×(Recharge视图 ? price/usd_exchange_rate : 1)`——「Standard」视图（默认）就是我们采的值，`usd_exchange_rate=7` 只在 Recharge 视图里做折算，不是基准 | /api/status 公告板 30+ 条（最新 2026-09-29）→ 配 /api/status | `/api/model_status/groups` 404 → 配 `/api/perf-metrics/summary?hours=24`；⚠️ 该形态带 `data.window_start/window_end` 滚动字段，每轮会生成一条 `status_changed` 噪音（1rr/1for 同款，225 条先例，属既有现象） |
+
