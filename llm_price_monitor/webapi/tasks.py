@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 from llm_price_monitor import tasklog
-from llm_price_monitor.report import is_transport_error
+from llm_price_monitor.report import is_origin_fault, is_transport_error
 
 _log = logging.getLogger("llm_price_monitor.webapi.tasks")
 
@@ -142,8 +142,11 @@ def _append_log(task_id: str, message: str, level: str) -> None:
         while len(logs) > max_lines:
             logs.pop(0)
         # 异常卡片抄送：warn/error 在写任务日志时同步记入持久化流水；
-        # 传输层抖动的 warn 是重试后已自愈的环境噪声，与健康档案同口径不收
-        if level in ("warn", "error") and not (level == "warn" and is_transport_error(message)):
+        # 容忍窗口内的 warn（链路抖动、站方源站故障未达容忍轮数）是重试后仍待观察的噪声，
+        # 与健康档案同口径不收；达标后的 error 行照常进卡片
+        if level in ("warn", "error") and not (
+            level == "warn" and (is_transport_error(message) or is_origin_fault(message))
+        ):
             _journal.append(
                 {
                     "key": _error_key(task_id, log),

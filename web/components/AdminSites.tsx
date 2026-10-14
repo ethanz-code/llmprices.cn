@@ -3,8 +3,8 @@
 /** 站点管理：列表、启停、编辑与删除；数据在浏览器侧拉取管理员接口。 */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import { toast, Btn, Check, Empty, Modal, Switch, Skel, LoadingRows } from "./ui";
-import { IconActivity, IconMegaphone, IconPercent, IconTag, IconUsers } from "./icons";
+import { toast, Btn, Check, Empty, Modal, Seg, Switch, Skel, LoadingRows } from "./ui";
+import { IconActivity, IconMegaphone, IconPercent, IconSearch, IconTag } from "./icons";
 import { DajuSit } from "./DajuArt";
 import { DataTable, type DColumn } from "./DataTable";
 import { apiSend } from "@/lib/api";
@@ -17,7 +17,6 @@ import { errorText } from "@/lib/api";
 import { SiteModal } from "./sites/SiteModal";
 import { DeleteSitesModal, SiteHealthTip, SitesGuide } from "./sites/SitesExtras";
 import { ImportSitesModal, downloadSitesExport, readSitesExportFile } from "./sites/SitesTransfer";
-import { loadSitePopularity, popularityTip, type SitePopularityMap } from "@/lib/popularity";
 import type { SiteCollectHealth, SiteConfig, SitesData } from "@/lib/types";
 
 /** 新建站点用的默认字段模板；认证等高级字段留空，需要时在高级配置 JSON 里补充。 */
@@ -42,11 +41,23 @@ function ratioUrlText(row: SiteConfig): string {
   return ratio !== null && typeof ratio === "object" && typeof ratio.url === "string" ? ratio.url : "";
 }
 
+/** 启用判定：enabled 允许缺省，缺省即启用（旧配置不带这个字段，不能按 falsy 判停用） */
+function isEnabled(row: SiteConfig): boolean {
+  return row.enabled !== false;
+}
+
+/** 站点显示名：与「站点」列同源（id + 首页地址 → 内置映射） */
+function siteName(row: SiteConfig): string {
+  const url = typeof row.network?.url === "string" ? row.network.url : "";
+  return getSiteInfo(row.id, url || undefined).name;
+}
+
+/** 启停筛选：all 不筛，其余按启用状态过滤 */
+type EnabledFilter = "all" | "enabled" | "disabled";
+
 export function AdminSites() {
   const [sites, setSites] = useState<SiteConfig[] | null>(null);
   const [siteHealth, setSiteHealth] = useState<Record<string, SiteCollectHealth>>({});
-  // 站点人气（交流群/访问量/排名）：选站参考，公开接口拉取，失败不挂图标
-  const [popularity, setPopularity] = useState<SitePopularityMap>({});
   const [editing, setEditing] = useState<{ config: SiteConfig; isNew: boolean } | null>(null);
   const [deleting, setDeleting] = useState<string[] | null>(null);
   // 导入流程：非 null 时展示导入确认弹窗，内容是文件里解析出的站点
@@ -54,6 +65,8 @@ export function AdminSites() {
   const importInput = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [multiSelect, setMultiSelect] = useState(false);
+  // 启停筛选：清扫停用站是常用动作，单独给视图比在全部里翻找省事
+  const [enabledFilter, setEnabledFilter] = useState<EnabledFilter>("all");
   // 配置速查默认收起：不打扰熟手，新手需要时一眼能找到
   const [guideOpen, setGuideOpen] = useState(false);
   const [importChoice, setImportChoice] = useState<boolean | null>(null);
@@ -154,11 +167,6 @@ export function AdminSites() {
     reloadSites();
   }, [reloadSites]);
 
-  // 人气数据与站点列表相互独立（一个是采集文档、一个是配置），各自拉取互不阻塞
-  useEffect(() => {
-    loadSitePopularity().then(setPopularity);
-  }, []);
-
   async function toggleSite(site: SiteConfig, next: boolean) {
     try {
       await apiSend(`/api/sites/${encodeURIComponent(site.id)}`, "PUT", { config: { ...site, enabled: next } });
@@ -184,6 +192,29 @@ export function AdminSites() {
 
   // 导入弹窗里判断重名用：当前库里的站点 id 集合
   const existingSiteIds = useMemo(() => new Set(sites?.map((site) => site.id) ?? []), [sites]);
+
+  // 筛选标签上的数字：全部 / 已启用 / 已停用
+  const siteCounts = useMemo(() => {
+    const list = sites ?? [];
+    const disabled = list.filter((site) => !isEnabled(site)).length;
+    return { all: list.length, enabled: list.length - disabled, disabled };
+  }, [sites]);
+
+  // 当前筛选结果：分页与「全选筛选结果」都基于它，而不是整份站点清单
+  const filteredSites = useMemo(() => {
+    const list = sites ?? [];
+    if (enabledFilter === "all") return list;
+    const want = enabledFilter === "enabled";
+    return list.filter((site) => isEnabled(site) === want);
+  }, [sites, enabledFilter]);
+
+  // 勾选里有多少在当前筛选结果之外：勾选跨页跨筛选保留，这个数必须明示，避免"看不见却被删"
+  const selectedOutside = useMemo(() => {
+    const visible = new Set(filteredSites.map((site) => site.id));
+    let count = 0;
+    for (const id of selected) if (!visible.has(id)) count += 1;
+    return count;
+  }, [filteredSites, selected]);
 
   function handleExport() {
     if (!sites) return;
@@ -214,6 +245,8 @@ export function AdminSites() {
       title: "站点",
       // 站点名 + 公告/状态/倍率图标 + 报错图标的最小实宽，窄了会把名字挤换行
       width: 230,
+      // 站点多了以后靠排序找站比翻页快；默认不排，保持采集配置顺序
+      sorter: (a, b) => siteName(a).localeCompare(siteName(b), "zh-Hans-CN"),
       render: (_value, row) => {
         const priceUrl = typeof row.network?.url === "string" ? row.network.url : "";
         const site = getSiteInfo(row.id, priceUrl || undefined);
@@ -228,10 +261,6 @@ export function AdminSites() {
           const ratio = ratioUrlText(row);
           if (ratio) extraMarks.push({ label: "倍率", tip: `倍率接口：${ratio}`, icon: <IconPercent size={13} /> });
         }
-        // 人气图标：有交流群/访问量/排名的站才挂，悬停看明细——选站时「有群且人多」一眼可查
-        const popularityInfo = popularity[row.id];
-        const popularityText = popularityTip(popularityInfo);
-        if (popularityText) extraMarks.push({ label: "人气", tip: popularityText, icon: <IconUsers size={13} /> });
         const nameNode = (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <span className="mono" style={{ fontWeight: 550 }}>
@@ -247,7 +276,7 @@ export function AdminSites() {
               </span>
             )}
             {/* 三类采集最近一次的异常：红=失败，黄=需认证/没抓到数据；停用站点不提示 */}
-            {row.enabled && <SiteHealthTip health={siteHealth[row.id]} />}
+            {isEnabled(row) && <SiteHealthTip health={siteHealth[row.id]} />}
           </span>
         );
         return site.homepage ? (
@@ -280,8 +309,8 @@ export function AdminSites() {
       width: 80,
       render: (_value, row) => (
         <Switch
-          defaultChecked={row.enabled !== false}
-          title={row.enabled !== false ? "已启用" : "已停用"}
+          defaultChecked={isEnabled(row)}
+          title={isEnabled(row) ? "已启用" : "已停用"}
           onChange={(next) => toggleSite(row, next)}
         />
       ),
@@ -414,45 +443,99 @@ export function AdminSites() {
             <LoadingRows rows={6} />
           </div>
         ) : (
-          <DataTable<SiteConfig>
-            rowKey="id"
-            columns={siteColumns}
-            rows={sites}
-            scrollX={860}
-            mobileScrollX={560}
-            empty={
-              <Empty
-                icon={<DajuSit width={30} />}
-                title="还没有站点"
-                description="添加第一个检测目标后，这里会展示各站点与模型的采集状态。"
-                action={
-                  <span style={{ display: "inline-flex", gap: 10 }}>
-                    <Btn size="sm" onClick={() => setEditing({ config: siteSkeleton(), isNew: true })}>
-                      新增站点
-                    </Btn>
-                    <Btn size="sm" variant="ghost" onClick={() => importInput.current?.click()}>
-                      从文件导入
-                    </Btn>
-                  </span>
-                }
+          <>
+            {/* 启停筛选：标签直接带数量，停用站有多少一眼可见 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 10,
+                padding: "12px 16px",
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              <Seg
+                value={enabledFilter}
+                onChange={(next) => setEnabledFilter(next as EnabledFilter)}
+                options={[
+                  { value: "all", label: <>全部 <span className="mono" style={{ opacity: 0.6 }}>{siteCounts.all}</span></> },
+                  { value: "enabled", label: <>已启用 <span className="mono" style={{ opacity: 0.6 }}>{siteCounts.enabled}</span></> },
+                  { value: "disabled", label: <>已停用 <span className="mono" style={{ opacity: 0.6 }}>{siteCounts.disabled}</span></> },
+                ]}
               />
-            }
-          />
+            </div>
+            <DataTable<SiteConfig>
+              /* 切筛选重挂：页码/排序回到初始，避免停在上一次的页码上 */
+              key={enabledFilter}
+              rowKey="id"
+              columns={siteColumns}
+              rows={filteredSites}
+              paginated
+              /* 站点行信息重，默认每页 20 条；用独立存储键，别的表改偏好不牵动它 */
+              defaultPageSize={20}
+              pageSizeStorageKey="admin-sites"
+              scrollX={860}
+              mobileScrollX={560}
+              empty={
+                (sites?.length ?? 0) === 0 ? (
+                  <Empty
+                    icon={<DajuSit width={30} />}
+                    title="还没有站点"
+                    description="添加第一个检测目标后，这里会展示各站点与模型的采集状态。"
+                    action={
+                      <span style={{ display: "inline-flex", gap: 10 }}>
+                        <Btn size="sm" onClick={() => setEditing({ config: siteSkeleton(), isNew: true })}>
+                          新增站点
+                        </Btn>
+                        <Btn size="sm" variant="ghost" onClick={() => importInput.current?.click()}>
+                          从文件导入
+                        </Btn>
+                      </span>
+                    }
+                  />
+                ) : (
+                  <Empty
+                    icon={<IconSearch size={18} />}
+                    title="这个筛选下没有站点"
+                    description="换个筛选看看，比如切回「全部」。"
+                  />
+                )
+              }
+            />
+          </>
         )}
       </div>
 
       {/* 表格底部操作条：与表格面板拼接，滚动时贴住屏幕底部始终可点 */}
       <div className="table-bottom-bar">
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
-          {selected.size > 0 && (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {multiSelect && (
             <>
-              <span style={{ fontSize: 12.5, color: "var(--text-2)" }}>已选 {selected.size} 个站点</span>
-              <Btn size="sm" onClick={() => setDeleting([...selected])}>
-                删除所选
+              <span style={{ fontSize: 12.5, color: "var(--text-2)" }}>
+                已选 {selected.size} 个站点
+                {selectedOutside > 0 && (
+                  <span style={{ color: "var(--text-3)" }}>（含筛选外 {selectedOutside} 个）</span>
+                )}
+              </span>
+              <Btn
+                size="sm"
+                variant="ghost"
+                title="把当前筛选出的站点全部勾上（跨页生效），配合「删除所选」批量清理"
+                onClick={() => setSelected(new Set(filteredSites.map((site) => site.id)))}
+              >
+                全选筛选结果（{filteredSites.length}）
               </Btn>
-              <Btn size="sm" variant="text" onClick={() => setSelected(new Set())}>
-                清除选择
-              </Btn>
+              {selected.size > 0 && (
+                <>
+                  <Btn size="sm" onClick={() => setDeleting([...selected])}>
+                    删除所选
+                  </Btn>
+                  <Btn size="sm" variant="text" onClick={() => setSelected(new Set())}>
+                    清除选择
+                  </Btn>
+                </>
+              )}
             </>
           )}
         </span>
@@ -471,7 +554,7 @@ export function AdminSites() {
           <Btn
             size="sm"
             variant={multiSelect ? "primary" : "ghost"}
-            title="显示勾选列，可批量删除站点"
+            title="显示勾选列：勾选后可批量删除，或只导出所选站点"
             onClick={() =>
               setMultiSelect((open) => {
                 if (open) setSelected(new Set());

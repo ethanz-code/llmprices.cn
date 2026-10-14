@@ -37,6 +37,13 @@ function DeleteSitesModal({
           将删除{batch ? `所选 ${ids.length} 个站点` : <>站点 <span className="mono">{ids[0]}</span></>} 的采集配置；
           历史价格与事件数据默认保留在数据库中。
         </p>
+        {/* 勾选可以跨页跨筛选累积，删除名单必须摆出来，避免"看不见却被删" */}
+        {batch && (
+          <p className="mono" style={{ margin: 0, fontSize: 12.5, color: "var(--text-3)", lineHeight: 1.8, wordBreak: "break-all" }}>
+            {ids.slice(0, 20).join("、")}
+            {ids.length > 20 ? ` …等 ${ids.length} 个` : ""}
+          </p>
+        )}
         <Check checked={purge} onChange={setPurge}>
           同时清理{batch ? "这些站点" : "该站点"}的历史价格、事件与状态数据（不可恢复）
         </Check>

@@ -97,6 +97,8 @@ from .health import (
     _section_health_entries,
     _TRANSPORT_ERROR_RE,
     _TRANSPORT_STREAK_DOC,
+    is_origin_fault,
+    is_transient_link_error,
     is_transport_error,
 )
 from .persist import (

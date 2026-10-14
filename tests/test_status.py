@@ -314,6 +314,94 @@ def test_status_transport_flap_needs_three_rounds_before_error(tmp_path: Path, m
     assert not has_status_error(after_reset)  # 中间成功过一轮，计数已清零
 
 
+def test_origin_fault_takes_precedence_over_transport_pattern():
+    """CF 源站故障码（HTTP 52x）带 "timed out" 字样，仍要判成站方故障而不是静默的链路抖动。"""
+    from llm_price_monitor.report import is_origin_fault, is_transient_link_error, is_transport_error
+
+    cf_522 = "渠道状态地址返回 HTTP 522：666ai.top | 522: Connection timed out（请求 https://666ai.top/api/v1/channel-monitors）"
+    assert is_transport_error(cf_522)  # 文案命中传输层正则
+    assert is_origin_fault(cf_522)
+    assert not is_transient_link_error(cf_522)  # 站方问题，不算可静默的环境噪声
+
+    # httpx raise_for_status 直抛的格式（公告等链路）：同样识别为源站故障
+    httpx_style = "站点公告采集失败: Server error '522 <none>' for url 'https://666ai.top/api/v1/announcements'"
+    assert is_origin_fault(httpx_style) and not is_transient_link_error(httpx_style)
+
+    plain = "SSL: UNEXPECTED_EOF_WHILE_READING"
+    assert is_transport_error(plain) and is_transient_link_error(plain) and not is_origin_fault(plain)
+
+
+def test_status_origin_fault_named_and_enters_health_after_tolerance(tmp_path: Path, monkeypatch):
+    """站方源站故障（CF 522）与链路抖动同容忍窗口，但文案点名站方源站故障，
+    达标后进健康档案（站方问题让用户在管理台看到），恢复一轮即清除。"""
+    from llm_price_monitor import tasklog
+    from llm_price_monitor.adapters import NetworkAdapter
+    from llm_price_monitor.tracker import PriceRecord
+
+    def collect(*_args):
+        return [PriceRecord("demo-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {})]
+
+    monkeypatch.setattr(NetworkAdapter, "collect", collect)
+    config = _config_file(tmp_path, _site_raw_config(None))
+    store = Store(tmp_path / "monitor.db")
+    merged = MonitorConfig(
+        settings=config.settings,
+        ai=config.ai,
+        sites=sites_from_raw([_site_raw_config({"url": "https://demo.test/status"})]),
+    )
+
+    def cf_522(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(522, text="demo.test | 522: Connection timed out")
+
+    def healthy(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"channels": []})
+
+    logs: list[tuple[str, str]] = []
+    tasklog.bind(lambda message, level: logs.append((message, level)))
+    try:
+        with httpx.Client(transport=httpx.MockTransport(cf_522)) as client:
+            first = run_once(merged, store=store, client=client)
+            second = run_once(merged, store=store, client=client)
+            third = run_once(merged, store=store, client=client)
+
+        def has_status_error(report) -> bool:
+            return any("渠道状态采集失败" in error["error"] for error in report.errors)
+
+        assert not has_status_error(first)
+        assert not has_status_error(second)
+        assert any("站点源站故障" in message and "暂不报警" in message for message, level in logs if level == "warn")
+        assert not any("网络抖动" in message for message, _ in logs)  # 措辞不再误报成我方网络问题
+        assert has_status_error(third)  # 连续第 3 轮：升级为错误并进档案
+        health = store.get_document("site_collect_health")
+        assert health["demo"]["status"]["level"] == "error" and "522" in health["demo"]["status"]["message"]
+
+        with httpx.Client(transport=httpx.MockTransport(healthy)) as client:
+            run_once(merged, store=store, client=client)
+    finally:
+        tasklog.unbind()
+
+    # 恢复一轮：档案条目清除
+    assert "status" not in (store.get_document("site_collect_health").get("demo") or {})
+
+
+def test_price_origin_fault_enters_health_archive(tmp_path: Path):
+    """价格采集撞上站方源站故障（CF 522）：文案带 timed out 也要进健康档案，站方问题要可见。"""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "settings": {"monitor_models": ["demo-model"]},
+        "ai": {"enabled": False},
+        "sites": [{"id": "demo", "network": {"url": "https://demo.test/api/pricing"}}],
+    }), encoding="utf-8")
+    config = load_config(config_path)
+    store = Store(tmp_path / "monitor.db")
+    handler = lambda request: httpx.Response(522, text="demo.test | 522: Connection timed out")  # noqa: E731
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = run_once(config, store=store, client=client)
+    assert report.records == []
+    health = store.get_document("site_collect_health")
+    assert health["demo"]["price"]["level"] == "error" and "522" in health["demo"]["price"]["message"]
+
+
 # ---------- store ----------
 
 def test_store_status_round_trip(tmp_path: Path):

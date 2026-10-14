@@ -27,6 +27,7 @@ from .health import (
     STATUS_TRANSPORT_TOLERANCE,
     _bump_transport_streak,
     _reset_transport_streak,
+    is_origin_fault,
     is_transport_error,
 )
 from .persist import _persist_scan_results
@@ -349,9 +350,21 @@ def _scan_statuses(
     tasklog.emit("开始渠道状态采集")
 
     def _record_status_failure(site_id: str, exc_text: str) -> None:
-        """状态采集失败落账：传输抖动（SSL/超时/连接重置）连续不足容忍轮数只留 warn 日志、
-        不刷错误卡片；达到容忍轮数或非传输类失败照旧报错。成功与非传输失败会清零抖动计数。"""
-        if is_transport_error(exc_text):
+        """状态采集失败落账，三类分开处理：
+        - 站方源站故障（CF 520-526）：同样容忍连续几轮，但文案点名站方；达标后进健康档案，
+          站方问题要让用户在管理台看到（纯链路抖动达标后也只留任务日志）。
+        - 链路抖动（SSL/超时/连接重置）：连续不足容忍轮数只留 warn 日志、不刷错误卡片。
+        - 业务类失败：立即报错。成功与非容忍类失败会清零连续失败计数。"""
+        if is_origin_fault(exc_text):
+            streak = _bump_transport_streak(store, site_id)
+            if streak < STATUS_TRANSPORT_TOLERANCE:
+                tasklog.emit(
+                    f"[{site_id}] 渠道状态采集失败：{exc_text}（站点源站故障连续第 {streak}/{STATUS_TRANSPORT_TOLERANCE} 轮，暂不报警）",
+                    "warn",
+                )
+                return
+            tasklog.emit(f"[{site_id}] 渠道状态采集失败：{exc_text}（站点源站故障已连续 {streak} 轮）", "error")
+        elif is_transport_error(exc_text):
             streak = _bump_transport_streak(store, site_id)
             if streak < STATUS_TRANSPORT_TOLERANCE:
                 tasklog.emit(

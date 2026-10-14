@@ -6,10 +6,10 @@
 
 | 途中见到这些词 | 先看 |
 | --- | --- |
-| 401 / 403 / WAF / Cookie / Cloudflare / 认证 / 登录态 / 续签 / refresh_token 失效 | 本页 §1 + Serena 记忆 `dom_url_auth_constraint` |
+| 401 / 403 / WAF / Cookie / Cloudflare / 认证 / 登录态 / 续签 / refresh_token 失效 / 410 / 死域 / 换域 / 配置没变却没数据 | 本页 §1 + Serena 记忆 `dom_url_auth_constraint` |
 | 人气 / 访问量 / 交流群 / 群人数 / 群号 / Tranco / SimilarWeb / t.me | 本页 §1 |
 | 访客统计 / visit_logs / IP 全一样 / XFF / client_ip | 本页 §1 |
-| 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 / 环境变量代理 / 自动切换没生效 | 本页 §1 |
+| 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 / 环境变量代理 / 自动切换没生效 / 网络抖动 / 522 / 源站故障 / Connection timed out | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
 | 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 / 双列价格 / 删除线 / 官方价X% / display_prices / 自定义计费 / 高于官价 / 折扣>100% / 比官价还贵 / group_prices / 逐分组显式价 / 供应报价 | 本页 §3 |
@@ -63,6 +63,9 @@
 | 自动换节点两处静默失效叠加（2026-10-12 排查 cun.ai 时实锤）：settings 里组名是旧值「宝可梦」（当前内核无此组 → 切换 PUT/GET 全 404），且代理腿收到 403 **风控拦截页**时根本不在切换触发条件里（此前只有连接失败才换）——功能「配了」却从未生效过，全程只有任务日志一条 warn | ① 组名以当前内核 `GET /proxies` 实存为准（现已校回「采集出口」、切换范围留空；该组只被 7899 专线口引用，浏览流量与其他组的选点互不影响）；② 代理腿 403/451 且是风控页（`cf-mitigated` 头或 HTML content-type）才换节点，API 层 403 JSON（认证/权限错误）原样交回不换；③ 验证专线隔离用 `/connections` 看 chains（实测 7899→采集出口、7897→良心云，两口完全独立） | http_retry.py `_via_proxy`/`_is_waf_block`；proxy_switch.py |
 | 自动换节点第三种静默失效：兜底代理地址被 **shell 环境变量遮蔽**（2026-10-14 cun.ai 复查实锤）。旧逻辑环境变量（https_proxy 等）优先于面板 fallback_proxy——本机 .zshrc 常驻 `https_proxy=127.0.0.1:7897`，采集兜底流量实际走 7897 的规则路由（良心云组），而节点自动切换改的是面板配置那条链路上的「采集出口」组 → 切换照常执行、采集流量纹丝不动，mihomo 日志实证 cun.ai 一直 `match Match using 良心云[...]` | 面板「备用代理 + 控制口 + 切换组」是同一条出口链路的整体，必须整体赢：`egress.effective_proxy()` 统一「面板 fallback_proxy 优先、环境变量兜底」，http_retry 与 current_egress_ip（会话绑定站 XFF）共用；排这类问题用 mihomo `/logs` 流式抓一段，看采集域名实际 `using` 哪个组——`/connections` 只看得到瞬时链路，日志流才是轮次级证据（提交 ab71bc4） | egress.py `effective_proxy`；http_retry.py `build_client` |
 | 「站点人气」数据源实测（2026-10-14）：月访问量没有覆盖小站的免费源——SimilarWeb 公共端点 `data.similarweb.com` 被 CloudFront 直接 403（直连与专线代理都拒），Cloudflare Radar 域名榜只给排名档位（68 个监控站全部 `>200000` 无数值），hypestat 只覆盖大站（302.ai 134.7K/月，小站整页无数据），Tranco 只有排名（19/68 站有）且间隔 1.1s 就偶发 429；QQ 群人数无公开接口（join.html 跳 SPA），只有 Telegram 公开群/频道能从 t.me 预览页拿到真实人数（`tgme_page_extra` 如 "1 183 members, 53 online"，私邀 `+hash`/joinchat 无数据） | 「月访问量」按能力分层：有第三方估算就存数字并标来源，没有退回 Tranco 排名当热度信号，都没有就不显示（不编数字）；群链接主源是站点 `/api/status` 的 `chat_link` + 全载荷扫描 + 首页 HTML，**已存公告正文（notice_records）是群号高产来源**（68 站里 14 站命中）——公告里的裸 QQ 群号必须带上下文词（QQ群/交流群/群号）才收，无公开加群网页只存群号文本；t.me 保留路径段（joinchat/s/share）不是用户名，抓预览页前先排除 | popularity.py；docs/sites.md「选站口径」 |
+
+| 「配置被重置」假象：站点 `network.url` 一直是死域，采集却长期成功——旧域在跳转，httpx 跟随后把**跳转后地址**记进 `source_url`，配置和真实采集入口不一致（aheapi 实锤：config 写 aheapi.com/api/pricing，10-12/10-13 落库 payload 的 source_url 全是 heyroute.ai/api/pricing）。站方把旧域从跳转改成 **410 永久停用**（响应体明示迁新域）后整站静默失效，翻配置看不出任何改动痕迹 | 判「配置丢了/被回滚」前先看最近一条 payload 的 `source_url`（它以跳转后地址为准，是真实入口）；换域站直接显式写活域重配，别再依赖跳转。HeyRoute 复活配置：network/notice/status 全指 heyroute.ai，`request_headers` 带 `Cookie: session=…`（IAB cookie 库取，2026-11-11 到期）+ 品牌化头 `HeyRoute-User: <user_id>`（id 在 IAB localStorage `user.id`） | page-cross-check.md 2026-10-14；plans/2026-10-14-disabled-sites-review.md |
+| CF 源站故障码被误判成"网络抖动"：**522 错误页文本自带 "Connection timed out"**，命中 `_TRANSPORT_ERROR_RE` 的超时词 → 连续 79 轮只刷「网络抖动已连续 N 轮」、健康档案里按传输层噪声被过滤——措辞把站方故障误导成我方网络问题（2026-10-14 666ai 实锤：站方源站从 10-13 23:43 起宕机 18 小时，域名 WHOIS/NS 均正常） | 判定新增 `is_origin_fault`（`http/error` + `52[0-6]`，收自造 "HTTP 522" 与 httpx 直抛 "Server error '522 <none>'" 两种措辞），**优先于 transport 判定**；状态侧文案点名「站点源站故障」、过容忍窗口后进健康档案，价格/公告侧也不再被健康档案过滤。**判"站方挂了还是我们挂了"的标准手法**：check-host.net 多节点检测（8 节点全挂 = 站方故障，`curl "https://check-host.net/check-http?host=<url>&max_nodes=8"` + 查 `check-result/<id>`）+ 本机直连/代理双出口对照 + 全库错误分布（仅一家失败 = 单站故障，非出口问题） | health.py `is_origin_fault` / `is_transient_link_error` |
 
 ## 2. AI 抽取与助手
 

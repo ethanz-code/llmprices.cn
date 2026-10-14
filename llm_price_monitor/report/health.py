@@ -26,6 +26,13 @@ _TRANSPORT_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Cloudflare 源站故障码（520-526）：请求已到达 CF 边缘、连不上或无响应的是源站，
+# 属于站方故障，不是本地链路抖动——错误文本里也带 "timed out"，会被 _TRANSPORT_ERROR_RE
+# 匹配到，判定必须先看这枚错误码（2026-10-14 666ai 连续 79 轮 522 只刷"网络抖动"日志、
+# 不进健康档案，实锤过）。两种措辞都收：自造的 "HTTP 522" 与 httpx 直抛的
+# "Server error '522 <none>' for url …"。
+_ORIGIN_FAULT_RE = re.compile(r"(?:http|error)\s*'?\s*52[0-6]\b", re.IGNORECASE)
+
 # 渠道状态连续多少轮传输抖动后才升级为错误：状态 5 分钟一轮，3 轮约 15 分钟。
 # 秒级/分钟级的线路抖动每轮都刷错误卡片等于噪声，持续宕机仍会在容忍窗口内报警
 STATUS_TRANSPORT_TOLERANCE = 3
@@ -63,7 +70,7 @@ def _merge_site_health(store: Store, section: str, entries: dict[str, dict[str, 
 
 
 def _bump_transport_streak(store: Store | None, site_id: str) -> int:
-    """渠道状态传输抖动的连续失败轮数 +1，返回新值；无库可记时按首轮处理。"""
+    """连续采集失败轮数 +1（链路抖动与站方源站故障共用一枚计数器），返回新值；无库可记时按首轮处理。"""
     if store is None:
         return 1
     with _MERGE_LOCK:
@@ -75,7 +82,7 @@ def _bump_transport_streak(store: Store | None, site_id: str) -> int:
 
 
 def _reset_transport_streak(store: Store | None, site_id: str) -> None:
-    """站点采集恢复正常（或换成了非传输类失败）后清零抖动计数。"""
+    """站点采集恢复正常（或换成了非容忍类失败）后清零连续失败计数。"""
     if store is None:
         return
     with _MERGE_LOCK:
@@ -90,6 +97,16 @@ def is_transport_error(message: str) -> bool:
     return bool(_TRANSPORT_ERROR_RE.search(message))
 
 
+def is_origin_fault(message: str) -> bool:
+    """站方源站故障（CF 520-526）：站点自身不可用，不是本地网络问题，要进健康档案让用户看到。"""
+    return bool(_ORIGIN_FAULT_RE.search(message))
+
+
+def is_transient_link_error(message: str) -> bool:
+    """纯链路抖动（传输层失败且非站方源站故障）：静默容忍的环境噪声，不进健康档案。"""
+    return is_transport_error(message) and not is_origin_fault(message)
+
+
 def _merge_price_health(store: Store, config: MonitorConfig, site_status: dict[str, dict[str, Any]]) -> None:
     """价格采集的逐站异常进健康档案：采集失败红、需认证/无数据黄，正常或停用清除。"""
     entries: dict[str, dict[str, Any] | None] = {}
@@ -100,7 +117,7 @@ def _merge_price_health(store: Store, config: MonitorConfig, site_status: dict[s
             message = str(value.get("error") or "价格采集失败")
             entries[spec.id] = (
                 None
-                if is_transport_error(message)
+                if is_transient_link_error(message)
                 else {
                     "level": "error",
                     "message": message,
@@ -120,9 +137,9 @@ def _merge_price_health(store: Store, config: MonitorConfig, site_status: dict[s
 
 
 def _section_health_entries(config: MonitorConfig, scan: SectionScan, fallback: str) -> dict[str, dict[str, Any] | None]:
-    """渠道状态/公告采集共用的逐站异常条目：本轮业务报错的进档案，传输层抖动与其余（正常/停用/未配置接口）清除。"""
+    """渠道状态/公告采集共用的逐站异常条目：本轮业务报错与站方源站故障进档案，纯链路抖动与其余（正常/停用/未配置接口）清除。"""
     errored = {str(item.get("site_id")): str(item.get("error") or fallback) for item in scan.errors}
-    errored = {site_id: message for site_id, message in errored.items() if not is_transport_error(message)}
+    errored = {site_id: message for site_id, message in errored.items() if not is_transient_link_error(message)}
     return {
         spec.id: ({"level": "error", "message": errored[spec.id], "time": time.time()} if spec.id in errored else None)
         for spec in config.sites

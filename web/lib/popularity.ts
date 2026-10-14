@@ -98,20 +98,3 @@ export function popularityBadge(popularity?: SitePopularity | null): PopularityB
       : `排名 ${formatCompactCn(traffic.rank ?? 0)}`;
   return { text, title: parts.join("；") };
 }
-
-/** 人气明细文本（管理台图标悬停用）：逐行列出交流群、访问量与排名。 */
-export function popularityTip(popularity?: SitePopularity | null): string {
-  if (!popularity) return "";
-  const lines: string[] = [];
-  const groups = popularity.groups ?? [];
-  if (groups.length > 0) {
-    const text = groups
-      .map((group) => `${group.label}${group.members != null ? `（${formatCompactCn(group.members)} 人）` : ""}`)
-      .join("、");
-    lines.push(`交流群：${text}`);
-  }
-  const traffic = popularity.traffic ?? {};
-  if (traffic.monthly_visits != null) lines.push(`月访问量约 ${formatCompactCn(traffic.monthly_visits)}（第三方估算）`);
-  if (traffic.rank != null) lines.push(`全网排名约 ${formatCompactCn(traffic.rank)}（Tranco 榜）`);
-  return lines.length > 0 ? `站点人气（公开数据）\n${lines.join("\n")}` : "";
-}
