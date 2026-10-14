@@ -233,14 +233,16 @@ def _scan_prices(
                 removed_keys.add(key)
                 continue
             if not _has_price(current):
-                if previous is None or not _has_price(previous):
+                is_subscription = (current.get("metadata") or {}).get("pricing_kind") == "subscription"
+                if not is_subscription and (previous is None or not _has_price(previous)):
                     # 本次没拿到数据、上次也没有可用价：不新增占位记录，避免快照与历史重复膨胀
+                    # （订阅套餐行除外：行代表套餐本身而非 token 价格，无价不是采漏，照常入快照）
                     continue
-                if (previous.get("metadata") or {}).get("sanity_suspect"):
+                if previous is not None and (previous.get("metadata") or {}).get("sanity_suspect"):
                     # 上次价挂着待复核标记（异常首轮），本次作废说明异常复现：
                     # 可疑旧价不沿用（落库层会清掉无价行，等于该行下架待下一轮好数据）
                     pass
-                else:
+                elif previous is not None:
                     # 上次有价、本次没拿到：沿用上次价格并标"需认证"，但不写历史（价格没有新观测）
                     current = _carry_last_price(current, previous)
                 latest[key] = current

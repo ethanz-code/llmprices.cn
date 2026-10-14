@@ -1342,6 +1342,106 @@ def model_market_catalog_records(spec: SiteSpec, captured: list[dict[str, Any]])
     return records
 
 
+def looks_like_subscription_plans(payload: Any) -> bool:
+    """订阅套餐目录结构（套餐制站点价目）：data.subscription_plans[].{name, price, 配额字段}。
+
+    套餐制站（订阅额度售卖）没有逐模型 token 单价——卖的是「N 美元额度 × 有效期」的
+    通行证，价格口径与按量计费站不同，落为订阅行而非价格行。"""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return False
+    plans = payload["data"].get("subscription_plans")
+    return isinstance(plans, list) and any(
+        isinstance(plan, dict) and isinstance(plan.get("name"), str) and _plain_number(plan.get("price"))
+        for plan in plans
+    )
+
+
+def _plan_quota_usd(plan: dict[str, Any]) -> float | None:
+    """套餐配额（美元额度）：按日/周/月限额取有值的最小口径（额度即该周期内可烧的官价美元）。"""
+    for field in ("daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd"):
+        value = plan.get(field)
+        if _plain_number(value) and value > 0:
+            return float(value)
+    return None
+
+
+def _plan_validity(plan: dict[str, Any]) -> str | None:
+    """套餐有效期展示串：validity_days + validity_unit（"1 days"→"1天"）。"""
+    days = plan.get("validity_days")
+    if not _plain_number(days) or days <= 0:
+        return None
+    unit = str(plan.get("validity_unit") or "days").strip().lower()
+    label = {"day": "天", "days": "天", "week": "周", "weeks": "周", "month": "月", "months": "月"}.get(unit, unit)
+    return f"{days:g}{label}"
+
+
+def subscription_plan_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
+    """确定性解析订阅套餐目录：每套餐一行快照（model="订阅·<套餐名>"），价格列留空。
+
+    行不进按量价行情（无 token 单价），订阅基础信息整体放 metadata.plan 给前端跨列渲染：
+    套餐价/配额额度/折算每美元售价/有效期/所属分组/分组倍率/挂牌价与折扣因子。
+    payment catalog 的 price 已含 applied_discounts（list_price_usd 是未折价挂牌价）。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return []
+    records: list[PriceRecord] = []
+    for plan in data.get("subscription_plans") or []:
+        if not isinstance(plan, dict):
+            continue
+        name = str(plan.get("name") or "").strip()
+        price = plan.get("price")
+        if not name or not _plain_number(price):
+            continue
+        quota = _plan_quota_usd(plan)
+        validity = _plan_validity(plan)
+        rate = plan.get("subscription_rate_multiplier")
+        plan_meta = {
+            "price_usd": float(price),
+            "quota_usd": quota,
+            # 买 1 美元额度实付多少：0.03 = 1 美元额度卖 3 分钱 → 越低越便宜（价外口径，与 token 折扣不可直接比）
+            "per_quota_usd": round(float(price) / quota, 4) if quota else None,
+            "validity": validity,
+            "group": str(plan.get("group_name") or "") or None,
+            "group_ratio": rate if _plain_number(rate) else None,
+            "list_price_usd": plan.get("list_price_usd") if _plain_number(plan.get("list_price_usd")) else None,
+            "final_price_factor": plan.get("final_price_factor") if _plain_number(plan.get("final_price_factor")) else None,
+            "model_scopes": [str(s) for s in plan.get("supported_model_scopes") or []] or None,
+            "description": str(plan.get("description") or "") or None,
+        }
+        metadata = {
+            "adapter": "network",
+            "pricing_kind": "subscription",
+            "group": plan_meta["group"] or "订阅",
+            "group_ratio": plan_meta["group_ratio"],
+            "plan": plan_meta,
+            "network_evidence": [{
+                "source": "model_list",
+                "url": redact_url(str(captured[0].get("url", ""))),
+                "resource_type": captured[0].get("resource_type"),
+                "status": captured[0].get("status"),
+                "payload_sha256": payload_hash(payload),
+            }],
+            "page_evidence": [],
+            "notes": "订阅套餐目录直读：套餐制站无逐 token 单价，行代表套餐本身，订阅信息见 plan。",
+        }
+        records.append(
+            PriceRecord(
+                f"订阅·{name}",
+                None,
+                None,
+                "USD/套餐",
+                response_source_url,
+                time.time(),
+                metadata,
+                "confirmed",
+            )
+        )
+    return records
+
+
 def looks_like_rate_pair_pricing(payload: Any) -> bool:
     """模型价目 + 分组倍率表结构：价目清单与倍率映射成对出现。
 
@@ -1990,6 +2090,9 @@ class NetworkAdapter:
         if looks_like_model_market_catalog(payload):
             # model-market catalog（行价 $X/M tokens 字符串 + supported_groups 倍率）：确定性形状不落 AI
             return model_market_catalog_records(spec, [captured])
+        if looks_like_subscription_plans(payload):
+            # 订阅套餐目录（套餐制站点价目）：确定性形状不落 AI
+            return subscription_plan_records(spec, [captured])
         if looks_like_rate_pair_pricing(payload):
             # 价目+分组倍率二元组：确定性形状不落 AI
             return rate_pair_price_records(spec, [captured])

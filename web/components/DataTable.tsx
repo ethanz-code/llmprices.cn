@@ -70,6 +70,9 @@ export function DataTable<T extends object>({
   fit,
   dense,
   onRowClick,
+  /** 行级跨列：返回非空时该行从 startKey 列起合并 span 列（一个单元格渲染订阅摘要等整行信息），
+   *  被合并的列不再各自出 td；mobileHide 列在窄屏隐藏时按剩余可见列数收缩合并范围。 */
+  rowSpanOf,
 }: {
   columns: DColumn<T>[];
   rows: T[];
@@ -109,6 +112,7 @@ export function DataTable<T extends object>({
   dense?: boolean;
   /** 点击整行时的回调（如跳转详情页）；行内链接/按钮与行尾展开箭头不受影响 */
   onRowClick?: (row: T) => void;
+  rowSpanOf?: (row: T) => { startKey: string; span: number; render?: (row: T) => ReactNode } | null;
 }) {
   const getKey = typeof rowKey === "string" ? (row: T) => String(row[rowKey]) : rowKey;
   const narrow = useNarrow();
@@ -278,8 +282,58 @@ export function DataTable<T extends object>({
             const hasChildren = !!children && children.length > 0;
             const open = expanded.has(rowKeyValue);
             // 有子行的行：行首名称右侧浮一个 "+N" 徽标作展开入口（数字提示可展开几条），不占独立列
-            const renderCells = (record: T, toggle?: ReactNode) =>
-              columns.map((column, columnIndex) => {
+            const span = rowSpanOf?.(row) ?? null;
+            const renderCells = (record: T, toggle?: ReactNode) => {
+              // 跨列行：startKey 列起合并 span 列出一个单元格；窄屏 mobileHide 列隐藏后
+              // 合并范围按剩余可见列收缩，避免把隐藏列也数进 colSpan 撑破布局
+              if (span) {
+                const startIndex = columns.findIndex((c) => colKey(c) === span.startKey);
+                if (startIndex >= 0) {
+                  const visible = columns.filter((c) => !(narrow && c.mobileHide));
+                  const startVisibleIndex = visible.findIndex((c) => colKey(c) === span.startKey);
+                  const spanCount = Math.max(1, Math.min(span.span, visible.length - Math.max(0, startVisibleIndex)));
+                  return columns.flatMap((column, columnIndex) => {
+                    if (narrow && column.mobileHide) return [];
+                    if (columnIndex < startIndex) {
+                      return [
+                        <td
+                          key={colKey(column)}
+                          style={{ textAlign: column.align }}
+                          className={column.mobileHide ? "col-hide-m" : undefined}
+                        >
+                          {column.render ? column.render(record[column.dataIndex!], record) : ((record[column.dataIndex!] as ReactNode) ?? null)}
+                        </td>,
+                      ];
+                    }
+                    if (columnIndex === startIndex) {
+                      return [
+                        <td
+                          key={colKey(column)}
+                          colSpan={spanCount}
+                          style={{ textAlign: "left" }}
+                        >
+                          {span.render ? span.render(record) : null}
+                        </td>,
+                      ];
+                    }
+                    // 合并范围内其余列：不出 td（mobileHide 列本就不出）
+                    const beforeStart = columnIndex - startIndex;
+                    if (beforeStart < spanCount + (narrow ? 0 : span.span - spanCount)) {
+                      return [];
+                    }
+                    return [
+                      <td
+                        key={colKey(column)}
+                        style={{ textAlign: column.align }}
+                        className={column.mobileHide ? "col-hide-m" : undefined}
+                      >
+                        {column.render ? column.render(record[column.dataIndex!], record) : ((record[column.dataIndex!] as ReactNode) ?? null)}
+                      </td>,
+                    ];
+                  });
+                }
+              }
+              return columns.map((column, columnIndex) => {
                 const value = column.dataIndex ? record[column.dataIndex] : undefined;
                 const content = column.render ? column.render(value, record) : ((value as ReactNode) ?? null);
                 return (
@@ -293,6 +347,7 @@ export function DataTable<T extends object>({
                   </td>
                 );
               });
+            };
             const rowClass = [
               rowClassName?.(row),
               hasChildren ? "row-expandable" : null,

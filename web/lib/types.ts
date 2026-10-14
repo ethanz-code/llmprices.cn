@@ -24,6 +24,29 @@ export interface PriceMetadata {
   cache_read_price?: number | null;
   cache_create_price?: number | null;
   cache_create_1h_price?: number | null;
+  /** 订阅套餐行（pricing_kind=subscription）：套餐基础信息，定价页跨列渲染 */
+  plan?: {
+    /** 套餐售价（USD，已含站方折扣） */
+    price_usd?: number;
+    /** 配额额度（美元额度/周期） */
+    quota_usd?: number | null;
+    /** 买 1 美元额度实付（USD），越低越便宜 */
+    per_quota_usd?: number | null;
+    /** 有效期展示串（如 "1天"） */
+    validity?: string | null;
+    /** 所属分组名 */
+    group?: string | null;
+    /** 分组倍率 */
+    group_ratio?: number | null;
+    /** 未折价挂牌价（USD） */
+    list_price_usd?: number | null;
+    /** 站方折扣因子（如 0.9072 = 9.07 折） */
+    final_price_factor?: number | null;
+    /** 适用模型范围 */
+    model_scopes?: string[] | null;
+    /** 套餐描述 */
+    description?: string | null;
+  };
   [key: string]: unknown;
 }
 

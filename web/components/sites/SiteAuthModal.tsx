@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Btn, Input, Modal, Seg, Sel } from "../ui";
 import { IconChevronRight } from "../icons";
 import { dictToRows, originOf, rowsToText, type KvRow } from "./siteShared";
-import { SettingRow } from "../ui";
+import { SettingRow, Tip } from "../ui";
 import { HeadersEditor, SubModalFooter } from "./siteModalParts";
 import { ACCESS_VAR, INJECT_TARGETS, toVariableAuthRule, type AuthFields, type AuthMode, type InjectRule, type InjectTarget, type RefreshOverride, type RefreshTestResult } from "./siteAuth";
 
@@ -325,7 +325,20 @@ function AuthSubModal({
           <div style={{ display: "grid", gap: 14 }}>
             <div style={{ display: "grid", gap: 6 }}>
               <div style={{ display: "flex", alignItems: "center" }}>
-                <span style={{ fontSize: 13.5, flex: 1 }}>Refresh Token</span>
+                <span style={{ fontSize: 13.5, flex: 1, display: "inline-flex", alignItems: "center" }}>
+                  Refresh Token
+                  <span onClick={(event) => event.preventDefault()}>
+                    <Tip
+                      content={
+                        <span style={{ display: "grid", gap: 6 }}>
+                          <span>有效期各站不同：有的几小时就过期，有的能管 30 天。到期后采集会自动用它换新令牌接着用；轮换型（new-api 系用一次换一次）只要别闲置太久就一直活着，闲置约 20 小时会作废——本站正常采集就不会闲着。</span>
+                          <span>刷新令牌失效只能重新抓一次：登录站点网页版，按上面的步骤重新复制。</span>
+                        </span>
+                      }
+                      ariaLabel="Refresh Token 说明"
+                    />
+                  </span>
+                </span>
                 <Btn variant="text" size="sm" onClick={() => setShowHowTo(!showHowTo)}>
                   {showHowTo ? "收起" : "怎么获取？"}
                 </Btn>

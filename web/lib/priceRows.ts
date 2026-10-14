@@ -10,8 +10,12 @@ export { canonicalModel } from "./modelOrder";
 
 /** 有效价 = 顶层价格或阶梯档价任一可得；0/0 双零只有 confirmed（真免费档）算数——
  *  无数据占位行被 AI 照提示词模板抄成 0 时不得当免费价，否则首页"最低价"会选中 ¥0 行；
- *  其余无效行（需认证/无数据）在时间排序中沉底。 */
+ *  其余无效行（需认证/无数据）在时间排序中沉底。
+ *  订阅套餐行（套餐制站）行本身代表套餐、无 token 价，视作有效内容参与展示。 */
 export function hasUsablePrice(row: OverviewRecord): boolean {
+  if ((row.metadata as { pricing_kind?: string } | undefined)?.pricing_kind === "subscription") {
+    return true;
+  }
   if (row.input_price === 0 && row.output_price === 0 && row.price_status !== "confirmed") {
     return false;
   }

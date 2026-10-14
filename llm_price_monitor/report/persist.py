@@ -23,7 +23,12 @@ def _persist_latest(
     快照里残留的无价行都是旧版本（或旧库）留下的，保留只会在定价页造成同模型重复。
     touched_keys 限定本轮真正写过的 key：本轮开始时读到的其他站点行可能已被并行采集更新，
     拿旧值比对"内容变了"会把这些行回写覆盖，也可能把并发轮次刚摘除的分组复活。"""
-    stale_keys = [key for key, row in latest.items() if isinstance(row, dict) and not _has_price(row)]
+    # 订阅套餐行（套餐制站）本身无 token 价，不属于要清的占位行
+    stale_keys = [
+        key
+        for key, row in latest.items()
+        if isinstance(row, dict) and not _has_price(row) and (row.get("metadata") or {}).get("pricing_kind") != "subscription"
+    ]
     if stale_keys:
         for key in stale_keys:
             del latest[key]

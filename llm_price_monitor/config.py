@@ -175,7 +175,7 @@ def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[
 
 # 八类采集任务的定时间隔（分钟），存 settings.schedule；0 = 关闭该项定时、只保留手动触发。
 # screenshot 是 headless 截站点首页、popularity 要逐个查外部数据源，都是重活，默认一天一次
-DEFAULT_SCHEDULE_MINUTES = {"price": 60, "status": 5, "notice": 30, "catalog": 1440, "rankings": 1440, "discovery": 1440, "screenshot": 1440, "popularity": 1440}
+DEFAULT_SCHEDULE_MINUTES = {"price": 180, "status": 5, "notice": 30, "catalog": 1440, "rankings": 1440, "discovery": 1440, "screenshot": 1440, "popularity": 1440}
 SCHEDULE_KEYS = tuple(DEFAULT_SCHEDULE_MINUTES)
 
 

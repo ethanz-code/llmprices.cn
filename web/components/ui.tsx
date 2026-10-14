@@ -696,12 +696,21 @@ export function LoadingRows({ rows = 5, style }: { rows?: number; style?: React.
   );
 }
 
-/** 表单行：label 包裹控件（读屏软件能把字段名和输入框关联起来），hint 是下方辅助说明。 */
-export function SettingRow({ label, hint, children }: { label: string; hint?: ReactNode; children?: ReactNode }) {
+/** 表单行：label 包裹控件（读屏软件能把字段名和输入框关联起来），hint 是下方辅助说明；
+ *  tip 是名词/注意事项小图标，悬停弹出深色气泡，只放 hint 装不下的进阶说明（如有效期、边界情况），别复述 hint。 */
+export function SettingRow({ label, hint, tip, children }: { label: string; hint?: ReactNode; tip?: ReactNode; children?: ReactNode }) {
   return (
     <div style={{ display: "grid", gap: 4 }}>
       <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 13.5 }}>{label}</span>
+        <span style={{ fontSize: 13.5, display: "inline-flex", alignItems: "center" }}>
+          {label}
+          {/* 点图标别把焦点转给输入框：拦掉 label 的默认激活行为 */}
+          {tip && (
+            <span onClick={(event) => event.preventDefault()}>
+              <Tip content={tip} />
+            </span>
+          )}
+        </span>
         {children}
       </label>
       {hint && <span style={{ fontSize: 12, color: "var(--text-3)" }}>{hint}</span>}

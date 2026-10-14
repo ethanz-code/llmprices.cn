@@ -61,3 +61,49 @@ describe("DataTable 服务端分页", () => {
     expect(html).toContain("共");
   });
 });
+
+describe("DataTable 行级跨列（订阅套餐行）", () => {
+  const SPAN_COLUMNS: DColumn<Row>[] = [
+    { title: "编号", key: "site", dataIndex: "id", width: 80 },
+    { title: "名称", key: "name", dataIndex: "name" },
+    { title: "输入价", key: "input_price", dataIndex: "id" },
+    { title: "输出价", key: "output_price", dataIndex: "id" },
+  ];
+
+  it("span 行从 startKey 起合并指定列数，渲染自定义内容；其余行不受影响", () => {
+    const rows: Row[] = [
+      { id: "1", name: "普通行" },
+      { id: "2", name: "订阅行" },
+    ];
+    const html = renderToStaticMarkup(
+      <DataTable<Row>
+        rowKey="id"
+        columns={SPAN_COLUMNS}
+        rows={rows}
+        rowSpanOf={(row) =>
+          row.id === "2" ? { startKey: "input_price", span: 2, render: () => <span>套餐价 $1.54 · 50U · 1天</span> } : null
+        }
+      />,
+    );
+    expect(html).toContain("套餐价 $1.54 · 50U · 1天");
+    // 合并单元格的 colSpan 生效
+    expect(html).toContain('colSpan="2"');
+    // 订阅行不再单独出「输出价」td（被合并）；普通行四列齐全
+    const subRow = html.slice(html.indexOf("订阅行"));
+    expect(subRow).not.toContain(">2</td>"); // 简单佐证：合并段里没有再出第二格数值
+    expect(html).toContain("普通行");
+  });
+
+  it("rowSpanOf 返回 null 的行照常逐列渲染", () => {
+    const html = renderToStaticMarkup(
+      <DataTable<Row>
+        rowKey="id"
+        columns={SPAN_COLUMNS}
+        rows={[{ id: "1", name: "普通行" }]}
+        rowSpanOf={() => null}
+      />,
+    );
+    expect(html).not.toContain("colspan");
+    expect(html).toContain("普通行");
+  });
+});

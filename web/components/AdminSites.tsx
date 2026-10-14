@@ -385,7 +385,9 @@ export function AdminSites() {
         <div className="admin-setting-row">
           <div>
             <div style={{ fontSize: 13, fontWeight: 550 }}>检测模型</div>
-            <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>全部站点共用；列出要检测的模型名</div>
+            <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>
+              全部站点共用；各厂商新模型会自动加入。自己加的名字若连续几天没有任何站点在售，会被自动移出（任务日志会写明，随时可加回）
+            </div>
           </div>
           <div style={{ minWidth: 0 }}>
             {monitorModels === null ? <Skel w={130} h={13} /> : <ModelMultiSelect value={monitorModels} onChange={saveMonitorModels} />}

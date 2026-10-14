@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { DataTable, type DColumn } from "./DataTable";
@@ -26,6 +26,9 @@ import type { OverviewData, OverviewRecord } from "@/lib/types";
 /** 行唯一键：同站点同模型不再折叠，不同分组/单位各占一行。 */
 const rowKeyOf = (row: OverviewRecord) =>
   `${row.site_id}:${row.model}:${row.unit}:${row.metadata?.group ?? ""}`;
+
+/** 订阅套餐行（套餐制站）：行代表套餐本身，无 token 价，套餐信息跨列渲染。 */
+const planOf = (row: OverviewRecord) => row.metadata?.plan ?? null;
 
 /** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
 const ACTIVE_MODEL_KEY = "overview-active-model";
@@ -126,6 +129,54 @@ export function OverviewTable({
   }, [records, modelOrder]);
 
   const active = models.find((group) => group.key === activeModel) ?? models[0];
+
+  // 订阅套餐行跨列：从「输入价」列起合并 5 列（输入/输出/缓存/分组/折扣），一张卡讲清套餐；
+  // 站点/人气列与渠道/公告列照常。模型列（表头即套餐名）不重复，卡里放价与额度等关键信息。
+  const subscriptionSpan = useCallback(
+    (row: OverviewRecord) => {
+      const plan = planOf(row);
+      if (!plan) return null;
+      const fmtUsd = (value: number) => `$${value % 1 === 0 ? value.toFixed(0) : value.toFixed(2)}`;
+      const parts: string[] = [];
+      if (plan.quota_usd != null) parts.push(`${fmtUsd(plan.quota_usd)} 额度`);
+      if (plan.validity) parts.push(plan.validity);
+      const priceBit = plan.price_usd != null ? (
+        <strong style={{ fontWeight: 600 }}>{fmtUsd(plan.price_usd)}</strong>
+      ) : null;
+      const perQuota = plan.per_quota_usd != null ? ` ≈ ${fmtUsd(plan.per_quota_usd)}/1U` : null;
+      const scopes = plan.model_scopes?.length ? plan.model_scopes.join(" · ") : null;
+      const listPrice =
+        plan.list_price_usd != null && plan.price_usd != null && plan.list_price_usd > plan.price_usd
+          ? <s title="站方未折价挂牌价">{fmtUsd(plan.list_price_usd)}</s>
+          : null;
+      return {
+        startKey: "input_price",
+        span: 5,
+        render: () => (
+          <span
+            style={{ display: "inline-flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", fontSize: 13, lineHeight: 1.6 }}
+            title={[plan.description, scopes ? `适用：${scopes}` : null].filter(Boolean).join("\n") || undefined}
+          >
+            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, whiteSpace: "nowrap" }}>
+              {priceBit}
+              {listPrice}
+            </span>
+            {perQuota && (
+              <span className="mono" style={{ color: "var(--text-2)", whiteSpace: "nowrap" }}>{perQuota}</span>
+            )}
+            <span style={{ color: "var(--text-3)", whiteSpace: "nowrap" }}>
+              {parts.join(" · ")}
+            </span>
+            {scopes && (
+              <span style={{ color: "var(--text-3)", fontSize: 12, whiteSpace: "nowrap" }}>{scopes}</span>
+            )}
+            <TermTip term="subscription_plan" />
+          </span>
+        ),
+      };
+    },
+    [],
+  );
 
   // 记住选择：所选模型仍在列表里才写回本地；已下架（记忆里是旧模型名）就清掉坏键并回到默认，
   // 免得每次进来先跳到一个不存在的模型再回落
@@ -423,6 +474,7 @@ export function OverviewTable({
           scrollX={870}
           mobileScrollX={390}
           dense
+          rowSpanOf={subscriptionSpan}
           onRowClick={(row) => router.push(`/overview/status/${encodeURIComponent(row.site_id)}`)}
           empty={
             <Empty

@@ -19,11 +19,21 @@ import {
 import type { SettingsData, SiteConfig } from "@/lib/types";
 
 /** 八类采集任务的后台定时间隔（分钟），与后端 settings.schedule 默认值保持一致；0 = 关闭定时。 */
-const DEFAULT_SCHEDULE_MINUTES: Record<string, number> = { price: 60, status: 5, notice: 30, catalog: 1440, rankings: 1440, discovery: 1440, screenshot: 1440, popularity: 1440 };
+const DEFAULT_SCHEDULE_MINUTES: Record<string, number> = { price: 180, status: 5, notice: 30, catalog: 1440, rankings: 1440, discovery: 1440, screenshot: 1440, popularity: 1440 };
 
-const SCHEDULE_ITEMS: { key: string; label: string; hint: string }[] = [
-  { key: "price", label: "价格采集", hint: "定时去各站点看价格，有变化就记下来" },
-  { key: "status", label: "渠道状态", hint: "定时检查开了状态监测的站点，渠道有变化就记事件" },
+const SCHEDULE_ITEMS: { key: string; label: string; hint: string; tip?: React.ReactNode }[] = [
+  {
+    key: "price",
+    label: "价格采集",
+    hint: "定时去各站点看价格，有变化就记下来",
+    tip: (
+      <span style={{ display: "grid", gap: 6 }}>
+        <span>改短能更快发现站方调价，但每轮要对全部站点各发一次请求；间隔最长别超过 20 小时——登录站点的凭证靠采集顺带续签，间隔太长凭证会过期失效，续签不上就得重新登录。</span>
+        <span>现在除了价格，渠道状态和站点公告也会在各自采集前顺带续签，就算这里关掉定时（填 0），凭证链一般也断不了。</span>
+      </span>
+    ),
+  },
+  { key: "status", label: "渠道状态", hint: "定时检查开了状态监测的站点，渠道有变化就记事件", tip: "这是请求量最大的一项：每 5 分钟对所有站点各发一次请求，想给站点减压优先调它" },
   { key: "notice", label: "站点公告", hint: "定时看站点公告，内容有变化就记下来" },
   { key: "catalog", label: "厂商定价", hint: "定时更新厂商原价目录，并重新抓取所有已启用的厂商定价源（默认 24 小时一次）" },
   { key: "rankings", label: "模型榜单", hint: "定时更新第三方评测的模型智能指数榜单（默认 24 小时一次）" },
@@ -504,7 +514,7 @@ export function AdminSettings() {
             description="各项采集多久自动跑一次（分钟），保存后立即生效；填 0 表示关闭定时，只手动采集"
           >
             {SCHEDULE_ITEMS.map((item) => (
-              <SettingRow key={item.key} label={`${item.label}间隔（分钟）`} hint={item.hint}>
+              <SettingRow key={item.key} label={`${item.label}间隔（分钟）`} hint={item.hint} tip={item.tip}>
                 <Input
                   value={schedule[item.key] ?? ""}
                   onChange={(value) => setSchedule((prev) => ({ ...prev, [item.key]: value }))}
@@ -521,6 +531,7 @@ export function AdminSettings() {
           >
             <SettingRow
               label="备用代理地址"
+              tip="先直连后代理：直连失败（超时/被拒收）的站点这轮自动改走代理，恢复后自动切回，不用手动干预。无头浏览器截图跟随同一出口"
               hint="填 http(s) 代理地址：本机开发填 http://127.0.0.1:7899（Verge 的采集专线口，出口与浏览器自用完全分开）；Docker 部署填宿主机上代理客户端的地址，例如 http://172.17.0.1:7890；要认证就写成 http://user:pass@host:port。保存后从下一轮采集生效"
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -678,7 +689,10 @@ export function AdminSettings() {
             >
               <SecretInput value={aiApiKey} onChange={setAiApiKey} placeholder="sk-…" />
             </SettingRow>
-            <SettingRow label="AI 超时（秒）">
+            <SettingRow
+              label="AI 超时（秒）"
+              tip="超过这个秒数没回话就按失败处理，自动换列表里的下一个模型重试。15 秒左右就够大多数轻量模型出结果；填太小会把慢模型的正常回复也掐断"
+            >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <Input value={aiTimeout} onChange={setAiTimeout} style={{ width: 120, maxWidth: "100%" }} />
                 <Btn size="sm" loading={testing === "ai"} onClick={() => runTest("ai")}>
