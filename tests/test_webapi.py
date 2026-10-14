@@ -1621,6 +1621,82 @@ def test_task_error_stream_persisted_across_restart_and_archive(tmp_path: Path):
     assert any("已归档省略" in log["message"] for log in archived["logs"])  # 归档确实发生，卡片不受影响
 
 
+def test_task_error_stream_merges_repeated_failures(workspace: Path, monkeypatch):
+    """持续故障在卡片里只占一行：同站同类错误（轮数每轮在变）计数累计、时间取最新；
+    自愈动作的 warn（已改走代理重试）不进卡片。"""
+    import llm_price_monitor.webapi.routes.collect as collect_routes
+    from llm_price_monitor import tasklog
+    from llm_price_monitor.report import MonitorReport
+    from llm_price_monitor.webapi import tasks
+
+    def flaky(_config, **_kwargs):
+        for rounds in (79, 80, 81):
+            tasklog.emit(
+                f"[666ai] 渠道状态采集失败：渠道状态地址返回 HTTP 522（站点源站故障已连续 {rounds} 轮）",
+                "error",
+            )
+        tasklog.emit("[ai.711ev.com] 直连返回 HTTP 451，疑似出口 IP 被目标站拒收，改走备用代理重试", "warn")
+        tasklog.emit("[demo] 渠道状态被跳过：站点未开放", "warn")
+        return MonitorReport(0.0, 1.0, [], [], [])
+
+    monkeypatch.setattr(collect_routes, "run_once", flaky)
+    tasks.reset()
+    client = _admin_client(workspace)
+    task_id = client.post("/api/collect", json={}).json()["task_id"]
+    for _ in range(50):
+        if client.get(f"/api/tasks/{task_id}").json()["status"] != "running":
+            break
+        time.sleep(0.02)
+
+    entries = client.get("/api/tasks/errors").json()["entries"]
+    assert [entry["level"] for entry in entries] == ["warn", "error"]  # 自愈 warn 不占卡片
+    assert "站点未开放" in entries[0]["message"]
+    merged = entries[1]
+    assert merged["count"] == 3  # 三轮合并成一条，计数累计
+    assert "连续 81 轮" in merged["message"]  # 展示最近一次原文
+    assert merged["first_time"] <= merged["time"]
+
+
+def test_task_error_stream_merges_legacy_entries_on_load(tmp_path: Path):
+    """加载历史流水时归并老式堆积：同站同类错误缩成一条（计数累计、首见取最早、其余取最新），
+    自愈类 warn 的历史条目顺带清掉。"""
+    from llm_price_monitor.store import Store
+    from llm_price_monitor.webapi import tasks
+
+    store = Store(tmp_path / "monitor.db")
+    store.set_document("task_errors", {"entries": [
+        {"key": "old-1", "task_id": "t1", "kind": "collect-status", "time": 100.0, "level": "error",
+         "message": "[666ai] 渠道状态采集失败：HTTP 522（站点源站故障已连续 80 轮）"},
+        {"key": "old-2", "task_id": "t2", "kind": "collect-status", "time": 200.0, "level": "error",
+         "message": "[666ai] 渠道状态采集失败：HTTP 522（站点源站故障已连续 81 轮）"},
+        {"key": "old-3", "task_id": "t2", "kind": "collect-status", "time": 210.0, "level": "warn",
+         "message": "[ai.711ev.com] 直连返回 HTTP 451，疑似出口 IP 被目标站拒收，改走备用代理重试"},
+    ]})
+    tasks.reset()
+    tasks.attach_store(store)
+
+    entries = tasks.error_stream()
+    assert len(entries) == 1  # 两条堆积 + 一条自愈 warn 历史 → 只剩一条
+    only = entries[0]
+    assert only["count"] == 2 and only["time"] == 200.0 and only["first_time"] == 100.0
+    assert "连续 81 轮" in only["message"]
+
+    # 归并后的键稳定：新一轮同样错误（轮数继续变）仍命中同一条，不重复出现
+    from llm_price_monitor import tasklog
+
+    def emit_again() -> None:
+        tasklog.emit("[666ai] 渠道状态采集失败：HTTP 522（站点源站故障已连续 82 轮）", "error")
+
+    task_id = tasks.submit("collect-status", emit_again)
+    for _ in range(100):
+        task = tasks.get(task_id)
+        if task is not None and task["status"] != "running":
+            break
+        time.sleep(0.02)
+    entries = tasks.error_stream()
+    assert len(entries) == 1 and entries[0]["count"] == 3 and "连续 82 轮" in entries[0]["message"]
+
+
 def test_site_geo_endpoint_mocked(workspace: Path, monkeypatch):
     """站点 IP 定位端点：定位结果原样透传，网络定位函数被 mock，不真正联网。"""
     import llm_price_monitor.webapi.routes.geo as geo_route

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import threading
 import time
 import uuid
@@ -75,7 +76,7 @@ def attach_store(store: Any) -> None:
                 marked_failed = True
             entry.setdefault("logs", [])
             _tasks[entry["id"]] = entry
-        _journal[:] = [item for item in journal if isinstance(item, dict)][-_JOURNAL_KEEP:]
+        _journal[:] = _merge_journal([item for item in journal if isinstance(item, dict)])
     if marked_failed:
         _persist()
 
@@ -141,23 +142,15 @@ def _append_log(task_id: str, message: str, level: str) -> None:
         logs.append(log)
         while len(logs) > max_lines:
             logs.pop(0)
-        # 异常卡片抄送：warn/error 在写任务日志时同步记入持久化流水；
-        # 容忍窗口内的 warn（链路抖动、站方源站故障未达容忍轮数）是重试后仍待观察的噪声，
-        # 与健康档案同口径不收；达标后的 error 行照常进卡片
+        # 异常卡片抄送：warn/error 在写任务日志时同步记入持久化流水；三类不收——
+        # 容忍窗口内的 warn（链路抖动、站方源站故障未达容忍轮数）、自愈动作 warn
+        # （已改走代理/已换节点重试）都是环境噪声，与健康档案同口径；达标后的 error 照进。
+        # 同站同类问题按归一键合并计数，不逐轮追加（666ai 这类持续故障只占一行）
         if level in ("warn", "error") and not (
-            level == "warn" and (is_transport_error(message) or is_origin_fault(message))
+            level == "warn"
+            and (is_transport_error(message) or is_origin_fault(message) or _is_self_healed_warn(message))
         ):
-            _journal.append(
-                {
-                    "key": _error_key(task_id, log),
-                    "task_id": task_id,
-                    "kind": entry["kind"],
-                    "time": log["time"],
-                    "level": level,
-                    "message": message if len(message) <= _JOURNAL_MSG_MAX else message[:_JOURNAL_MSG_MAX] + "…",
-                }
-            )
-            del _journal[:-_JOURNAL_KEEP]
+            _journal_store_entry(task_id, str(entry["kind"]), log)
             journaled = True
     if journaled:
         _persist_journal()
@@ -291,9 +284,89 @@ def _dismiss_state() -> dict[str, Any]:
         return {}
 
 
-def _error_key(task_id: str, log: dict[str, Any]) -> str:
-    raw = f"{task_id}|{log.get('time')}|{log.get('level')}|{log.get('message')}"
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+# 持续故障的报错文本每轮只变「连续 N 轮」这个数字：归一后做归一键，同一站点的同类
+# 问题在卡片里只占一行、计数累计，而不是每轮追加一条（2026-10-14 实锤：666ai 一家
+# 把卡片刷到 1000 条上限，把真正的新问题挤了出去）。只归一这一处动态量，
+# 其余原文参与哈希——宁可少合并，不误合并。
+_STREAK_ROUNDS_RE = re.compile(r"连续第?\s*\d+\s*(?:/\s*\d+)?\s*轮")
+
+# 自愈动作的 warn（直连被拒收已改走备用代理、代理被拦已换节点重试）当轮即恢复，
+# 结果由后续采集的成/败日志兜底；进卡片只是每轮重复的噪声。
+_SELF_HEALED_WARN_RE = re.compile(r"改走备用代理重试|已切换节点")
+
+
+def _journal_fingerprint(message: str) -> str:
+    """异常条目的归一键：同站点同类持续故障得到同一个键。"""
+    normalized = _STREAK_ROUNDS_RE.sub("连续 N 轮", message)
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_self_healed_warn(message: str) -> bool:
+    """是否为「已自动处理」的警告（改走代理/换节点重试）。"""
+    return bool(_SELF_HEALED_WARN_RE.search(message))
+
+
+def _journal_store_entry(task_id: str, kind: str, log: dict[str, Any]) -> None:
+    """把一条 warn/error 日志并入异常流水：同归一键更新计数与时间，否则追加新条目。
+
+    调用方需持有 _lock（_append_log 的临界区）。
+    """
+    message = str(log.get("message") or "")
+    # 指纹用截断后的存储文本算：与 _merge_journal 加载历史时口径一致（文档里只有截断版），
+    # 否则超长消息重启后归并键漂移、会再重复出现一条
+    stored = message if len(message) <= _JOURNAL_MSG_MAX else message[:_JOURNAL_MSG_MAX] + "…"
+    key = _journal_fingerprint(stored)
+    for item in _journal:
+        if item.get("key") == key:
+            item.update(task_id=task_id, kind=kind, time=log["time"], level=log["level"], message=stored)
+            item["count"] = int(item.get("count") or 1) + 1
+            return
+    _journal.append({
+        "key": key,
+        "task_id": task_id,
+        "kind": kind,
+        "time": log["time"],
+        "level": log["level"],
+        "message": stored,
+        "count": 1,
+        "first_time": log["time"],
+    })
+    del _journal[:-_JOURNAL_KEEP]
+
+
+def _merge_journal(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """加载持久化流水时归并：同归一键合并成一条（计数累计、首见取最早、其余取最新）。
+
+    老式逐条 key 一并重算，历史堆积（每轮一条）缩回「每类问题一条」；与抄送口径一致，
+    自愈类/容忍窗口内的 warn 历史条目顺带清掉。
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    for item in entries:
+        message = str(item.get("message") or "")
+        level = str(item.get("level") or "")
+        if level == "warn" and (
+            is_transport_error(message) or is_origin_fault(message) or _is_self_healed_warn(message)
+        ):
+            continue
+        key = _journal_fingerprint(message)
+        time_value = float(item.get("time") or 0)
+        first_value = float(item.get("first_time") or time_value)
+        count = int(item.get("count") or 1)
+        current = merged.get(key)
+        if current is None:
+            merged[key] = {**item, "key": key, "count": count, "first_time": first_value}
+            continue
+        current["count"] = int(current.get("count") or 1) + count
+        current["first_time"] = min(float(current.get("first_time") or first_value), first_value)
+        if time_value >= float(current.get("time") or 0):
+            current.update(
+                task_id=item.get("task_id"),
+                kind=item.get("kind"),
+                time=item.get("time"),
+                level=item.get("level"),
+                message=item.get("message"),
+            )
+    return list(merged.values())[-_JOURNAL_KEEP:]
 
 
 def error_stream(limit: int = 200) -> list[dict[str, Any]]:

@@ -442,7 +442,8 @@ export interface TaskDetail extends TaskInfo {
   logs: TaskLog[];
 }
 
-/** 概览页「采集异常」卡片条目：跨任务汇总的警告/错误日志行（独立流水持久化，重启后仍在）。 */
+/** 概览页「采集异常」卡片条目：跨任务汇总的警告/错误日志行（独立流水持久化，重启后仍在）。
+ *  同站点同类问题按归一键合并为一条：time 为最近一次，count 为累计次数，first_time 为首见。 */
 export interface TaskErrorEntry {
   key: string;
   task_id: string;
@@ -450,6 +451,8 @@ export interface TaskErrorEntry {
   time: number | null;
   level: "warn" | "error";
   message: string;
+  count?: number;
+  first_time?: number | null;
 }
 
 export interface TaskErrorsData {

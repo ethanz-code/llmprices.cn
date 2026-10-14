@@ -19,6 +19,8 @@ const SITE_MAP: Record<string, SiteInfo> = {
   totokens: { name: "To-Tokens", homepage: "https://totokens.cc" },
   icodeeasy: { name: "I Code Easy", homepage: "https://icodeeasy.cc" },
   hao: { name: "HaoAI", homepage: "https://hao.ai" },
+  // 站点 id 保留历史值 aheapi：站方 2026-10-13 停用旧域迁到 heyroute.ai，历史价格/事件都挂原 id
+  aheapi: { name: "HeyRoute", homepage: "https://heyroute.ai" },
 };
 
 function originOf(url: string): string | null {

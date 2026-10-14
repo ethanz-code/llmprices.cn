@@ -118,6 +118,15 @@ export function CollectErrorsCard() {
                     {entry.message}
                   </span>
                 </span>
+                {(entry.count ?? 1) > 1 && (
+                  <span
+                    className="mono"
+                    style={{ color: "var(--text-3)", flexShrink: 0, fontSize: 12, whiteSpace: "nowrap" }}
+                    title={entry.first_time ? `首次出现：${formatTime(entry.first_time)}` : undefined}
+                  >
+                    ×{entry.count}
+                  </span>
+                )}
                 <span className="mono" style={{ color: "var(--text-3)", flexShrink: 0, fontSize: 12, whiteSpace: "nowrap" }}>
                   {formatTime(entry.time)}
                 </span>

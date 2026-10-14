@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
-from llm_price_monitor import tasklog
+from llm_price_monitor import egress, proxy_switch, tasklog
 from llm_price_monitor.config import SiteSpec
 from llm_price_monitor.http_retry import build_client
 from llm_price_monitor.screenshot import site_homepage
@@ -67,6 +67,13 @@ _TG_ONLINE = re.compile(r"([\d][\d\s\u00a0,]*?)\s*online\b", re.I)
 # hypestat 月访问量："Monthly Visits 134.7K"（数字后可能带 K/M/B 量级后缀）
 _VISITS = re.compile(r"Monthly Visits[^0-9]{0,160}?([\d.,]+)\s*([KMB]?)", re.I | re.S)
 _VISITS_SCALE = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+
+# SimilarWeb 站内 JSON API（免登录）：空 aws-waf-token cookie 免 WAF 质询（omkarcloud/
+# similarweb-scraper 验证的规律，本地实测复现），但同一出口 IP 只有约 6 次额度，超了回
+# 202（质询）/403（拉黑数小时）。出口用系统设置里配的备用代理（与采集兜底同一条线）；
+# 没配代理的直连环境额度打完只能等下一轮（24h 周期天然错开额度窗口，数据月更不敏感）。
+SIMILARWEB_API = "https://www.similarweb.com/api/website/{domain}"
+_SIMILARWEB_BLOCKED = frozenset({202, 403, 405})
 
 
 def _origin(url: str) -> str:
@@ -256,7 +263,96 @@ def fetch_visits_estimate(host: str, client: httpx.Client) -> int | None:
     return int(value) if 0 < value < 1e12 else None
 
 
-def collect_site(spec: SiteSpec, client: httpx.Client, *, notice_text: str = "") -> dict[str, Any] | None:
+class SimilarWebClient:
+    """SimilarWeb 站内 JSON API 的轻客户端：请求走独立 httpx 客户端（直连 + 空质询 cookie）。
+
+    WAF 对单出口 IP 只放约 6 次请求：碰壁（202/403/405）后经 proxy_switch 换一个对该站
+    可达的节点再试（与采集链路同一条切换线）；换不了就放弃本轮，下轮（24h 后）额度已重置。
+    SimilarWeb 的 CloudFront 只认数据中心/住宅出口，本机直连 IP 常态被 403（实测），所以
+    首选请求就带系统设置的备用代理出口（effective_proxy，与采集兜底同一条线），直连仅作
+    代理缺失时的兜底。
+    """
+
+    def __init__(self, user_agent: str, timeout: float = 25.0) -> None:
+        self._timeout = timeout
+        self._headers = {
+            "User-Agent": user_agent,
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.similarweb.com/",
+        }
+
+    def fetch(self, domain: str) -> dict[str, Any] | None:
+        """域名 → {monthly_visits, global_rank}；无数据/被拦/网络失败返回 None（上游语义不区分）。"""
+        # 采集始终「直连优先、被墙兜底」，但 SimilarWeb 恰好相反：本机/数据中心直连 IP 被它
+        # 的 CloudFront 常态拒收，住宅出口才放行——所以这里代理优先、直连兜底，与采集链路镜像
+        proxies = egress.effective_proxy()
+        attempts: tuple[dict | None, ...] = ({"proxy": proxies} if proxies else None, None)
+        for kwargs in attempts:
+            try:
+                response = httpx.get(
+                    SIMILARWEB_API.format(domain=domain),
+                    headers=self._headers,
+                    cookies={"aws-waf-token": ""},
+                    timeout=self._timeout,
+                    **(kwargs or {}),
+                )
+            except httpx.HTTPError:
+                continue
+            if response.status_code in _SIMILARWEB_BLOCKED:
+                continue  # 这个出口被拉黑，换下一个出口
+            if response.status_code != 200:
+                return None  # 204 = SimilarWeb 没有该域数据（本地实测）
+            return self._parse(response)
+        return None
+
+    @staticmethod
+    def _parse(response: httpx.Response) -> dict[str, Any] | None:
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        overview = payload.get("overview") if isinstance(payload, dict) else None
+        visits = overview.get("visitsTotalCount") if isinstance(overview, dict) else None
+        ranking = payload.get("ranking") if isinstance(payload, dict) else None
+        history = ranking.get("globalRankHistory") if isinstance(ranking, dict) else None
+        rank = None
+        if isinstance(history, list):
+            for point in reversed(history):
+                if isinstance(point, dict) and point.get("rank"):
+                    rank = int(point["rank"])
+                    break
+        result: dict[str, Any] = {}
+        if isinstance(visits, (int, float)) and 0 < visits < 1e12:
+            result["monthly_visits"] = int(visits)
+        if rank:
+            result["global_rank"] = rank
+        return result or None
+
+    def visits_with_retry(self, domain: str, host_label: str) -> int | None:
+        """拿月访问量：先直连一次，被 WAF 拦下且系统配置了节点切换就换节点再试一次。"""
+        result = self.fetch(domain)
+        if result is not None and result.get("monthly_visits"):
+            return int(result["monthly_visits"])
+        if result is not None:
+            return None  # 上游明确没数据（204），换出口也不会有
+        switched = proxy_switch.auto_switch_for(f"similarweb:{host_label}", SIMILARWEB_API.format(domain=domain))
+        if switched is None:
+            return None
+        tasklog.emit(f"[{host_label}] SimilarWeb 出口被 WAF 拦下，已切换节点 → {switched}，重试访问量查询")
+        retried = self.fetch(domain)
+        if retried and retried.get("monthly_visits"):
+            return int(retried["monthly_visits"])
+        return None
+
+
+def collect_site(
+    spec: SiteSpec,
+    client: httpx.Client,
+    *,
+    notice_text: str = "",
+    similarweb: "SimilarWebClient | None" = None,
+) -> dict[str, Any] | None:
     """采集单站人气；站点接口、首页、已存公告三个来源全空时返回 None（保留旧数据）。
 
     notice_text 是 store 里该站最近一条公告正文：公告是群号的高产来源（"加入 QQ 群 …"），
@@ -303,9 +399,18 @@ def collect_site(spec: SiteSpec, client: httpx.Client, *, notice_text: str = "")
         rank = fetch_tranco_rank(host, client)
         if rank is not None:
             traffic.update({"rank": rank, "rank_source": "tranco"})
-        visits = fetch_visits_estimate(host, client)
-        if visits is not None:
-            traffic.update({"monthly_visits": visits, "visits_source": "hypestat"})
+        # 月访问量：SimilarWeb 站内 API 是主源（覆盖面广、真实统计），WAF 拦下自动换节点；
+        # 拿不到再退 hypestat 公开页估算（覆盖面小）
+        visits: int | None = None
+        visits_source = ""
+        if similarweb is not None:
+            visits = similarweb.visits_with_retry(host, spec.id)
+            visits_source = "similarweb" if visits else ""
+        if visits is None:
+            visits = fetch_visits_estimate(host, client)
+            visits_source = "hypestat" if visits else ""
+        if visits:
+            traffic.update({"monthly_visits": visits, "visits_source": visits_source})
     return {"groups": groups, "traffic": traffic, "checked_at": time.time()}
 
 
@@ -375,13 +480,16 @@ def scan_popularity(config, store, *, client: httpx.Client | None = None, user_a
         )
     stats = {"sites": 0, "groups": 0, "visits": 0, "ranked": 0, "failed": 0}
     tasklog.emit("开始站点人气采集")
+    # SimilarWeb 站内 API 的 WAF 按出口 IP 计额度：整轮共用一个轻客户端（独立于采集 client，
+    # 不走退避重试——它没有"换出口"逻辑），碰壁时经 proxy_switch 换节点续命
+    similarweb = SimilarWebClient(user_agent or DEFAULT_BROWSER_USER_AGENT)
     try:
         for spec in config.sites:
             stats["sites"] += 1
             notice = store.latest_notice(spec.id) or {}
             notice_text = str(notice.get("content") or "")
             try:
-                payload = collect_site(spec, client, notice_text=notice_text)
+                payload = collect_site(spec, client, notice_text=notice_text, similarweb=similarweb)
             except Exception as exc:  # noqa: BLE001 —— 单站异常不拖垮整轮，但必须留痕
                 stats["failed"] += 1
                 tasklog.emit(f"[{spec.id}] 人气采集失败：{exc}", "warn")

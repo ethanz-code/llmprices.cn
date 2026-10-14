@@ -156,6 +156,102 @@ def test_fetch_visits_estimate_parses_scale_and_handles_missing():
         assert fetch_visits_estimate("cun.ai", client) is None
 
 
+# ---------- SimilarWeb 站内 API 客户端 ----------
+
+
+def test_similarweb_client_parses_visits_and_rank(monkeypatch):
+    payload = {
+        "overview": {"visitsTotalCount": 66918.0},
+        "ranking": {"globalRankHistory": [
+            {"date": "2026-07-01T00:00:00+00:00", "rank": 0},
+            {"date": "2026-09-01T00:00:00+00:00", "rank": 760479},
+        ]},
+    }
+    sw = pop.SimilarWebClient("test/1.0")
+    import llm_price_monitor.popularity as popularity
+
+    monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: None)
+
+    def fake_get(url, **kwargs):
+        assert "similarweb.com/api/website/302.ai" in url
+        assert kwargs["cookies"] == {"aws-waf-token": ""}
+        return httpx.Response(200, json=payload)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(popularity.httpx, "get", fake_get)
+        result = sw.fetch("302.ai")
+    assert result == {"monthly_visits": 66918, "global_rank": 760479}
+
+
+def test_similarweb_client_maps_blocked_and_nodata_to_none(monkeypatch):
+    """出口状态码语义：202/403=被拦（试下一个出口）、204=上游没数据、0 访问量不算数。"""
+    import llm_price_monitor.popularity as popularity
+
+    # 测试环境没有代理配置：代理腿被跳过，只有直连腿
+    monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: None)
+    sw = pop.SimilarWebClient("test/1.0")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(popularity.httpx, "get", lambda url, **kw: httpx.Response(202, text=""))
+        assert sw.fetch("a.test") is None  # WAF 质询 → None（可换出口重试）
+        mp.setattr(popularity.httpx, "get", lambda url, **kw: httpx.Response(403, text="blocked"))
+        assert sw.fetch("a.test") is None
+        mp.setattr(popularity.httpx, "get", lambda url, **kw: httpx.Response(204, text=""))
+        assert sw.fetch("a.test") is None  # 上游明确没数据
+        # visits=0 或缺失：返回 None 而不是把 0 当数据
+        mp.setattr(popularity.httpx, "get", lambda url, **kw: httpx.Response(200, json={"overview": {"visitsTotalCount": 0.0}}))
+        assert sw.fetch("a.test") is None
+
+
+def test_similarweb_client_prefers_proxy_then_direct(monkeypatch):
+    """出口顺序：SimilarWeb 拒数据中心/本机 IP，代理腿优先、直连兜底（与采集链路镜像）。"""
+    import llm_price_monitor.popularity as popularity
+
+    monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: "http://proxy:9090")
+    sw = pop.SimilarWebClient("test/1.0")
+    legs: list[str] = []
+
+    def fake_get(url, **kwargs):
+        legs.append(kwargs.get("proxy") or "direct")
+        if kwargs.get("proxy"):
+            return httpx.Response(403, text="blocked")  # 代理腿被拉黑
+        return httpx.Response(200, json={"overview": {"visitsTotalCount": 12.0}})
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(popularity.httpx, "get", fake_get)
+        assert sw.fetch("a.test") == {"monthly_visits": 12}
+    assert legs == ["http://proxy:9090", "direct"]
+
+
+def test_similarweb_visits_with_retry_switches_node(monkeypatch):
+    """首击被 WAF 拦下：配了节点切换就换节点重试一次；明确无数据不重试。"""
+    import llm_price_monitor.popularity as popularity
+
+    sw = pop.SimilarWebClient("test/1.0")
+    calls: list[str] = []
+
+    def fake_fetch(domain):
+        calls.append(domain)
+        return None if len(calls) == 1 else {"monthly_visits": 137980}
+
+    monkeypatch.setattr(sw, "fetch", fake_fetch)
+    monkeypatch.setattr(popularity.proxy_switch, "auto_switch_for", lambda host, url: "🇭🇰香港高速03")
+    assert sw.visits_with_retry("cun.ai", "cun") == 137980
+    assert len(calls) == 2
+
+    # 无数据（fetch 返回 {}）不换节点
+    calls.clear()
+    monkeypatch.setattr(sw, "fetch", lambda domain: calls.append(domain) or {})
+    assert sw.visits_with_retry("tokenage.ai", "tokenage") is None
+    assert len(calls) == 1
+
+    # 没配节点切换：一次失败即放弃
+    calls.clear()
+    monkeypatch.setattr(popularity.proxy_switch, "auto_switch_for", lambda host, url: None)
+    monkeypatch.setattr(sw, "fetch", lambda domain: calls.append(domain) or None)
+    assert sw.visits_with_retry("cun.ai", "cun") is None
+    assert len(calls) == 1
+
+
 # ---------- collect_site 来源与容错 ----------
 
 
