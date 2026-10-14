@@ -1,13 +1,14 @@
 /**
  * 站点综合分：模型数据页（/overview）每个站点行的排序依据。
  *
- * 综合分 = 价格 50% + 渠道稳定 20% + 配置完整 15% + 公告新鲜 15%（各分项 0–1，权重写死在此），
- * 再减去「数据滞后扣分」（价格沿用旧快照时最多扣 10 分，见 stalenessPenalty）。
+ * 综合分 = 价格 40% + 渠道稳定 20% + 人气 15% + 配置完整 15% + 公告新鲜 10%（各分项 0–1，
+ * 权重写死在此），再减去「数据滞后扣分」（价格沿用旧快照时最多扣 10 分，见 stalenessPenalty）。
  * 目标是「价格越低越靠前，同时看配置/公告/渠道的配比」。
  *
  * 关键口径：**价格在当前这张表（当前模型）里比**——同一模型下各站的实付成本横向归一，
  * 谁最便宜谁价格分最高；不拿站点跨模型的中位数，否则会出现「本模型里最便宜的站却排在后面」。
- * 其余三项是站点级的：渠道稳定（近 7 天可用率/成功率）、配置完整（六项清单）、公告新鲜（距今分档）。
+ * 其余四项是站点级的：渠道稳定（近 7 天可用率/成功率）、人气（交流群人数 + 月访问量 +
+ * 全网排名，公开数据）、配置完整（六项清单）、公告新鲜（距今分档）。
  *
  * 价格一项按**缓存加权实付成本**算：固定按一套「重缓存 Agent 用量」（输入里约 96% 从缓存读取、
  * 输出占 0.4%，见 RANKING_* 常量）折算，缓存读写价直接决定成本——没给缓存读取价的站点按
@@ -23,13 +24,15 @@ import { canonicalModel } from "./modelOrder";
 import { hasUsablePrice } from "./priceRows";
 import type { SiteStats } from "./channelStatus";
 import type { OverviewRecord, SiteFlags } from "./types";
+import type { SitePopularityMap } from "./popularity";
 
-/** 四项权重（写死；改口径改这里）。价格占一半，其余三项共一半。 */
+/** 五项权重（写死；改口径改这里）。价格仍占最大头，人气作为平台规模的独立信号占 15%。 */
 export const SITE_RANK_WEIGHTS = {
-  price: 50,
+  price: 40,
   stability: 20,
+  popularity: 15,
   completeness: 15,
-  notice: 15,
+  notice: 10,
 } as const;
 
 /** 价格项折算成本的用量口径（与花费计算器的默认值无关，见文件头）：输入 96% 命中缓存、
@@ -68,6 +71,8 @@ export interface SiteScore {
   price: number;
   /** 渠道稳定项 0–1 */
   stability: number;
+  /** 人气项 0–1（群人数 + 月访问量 + 排名） */
+  popularity: number;
   /** 配置完整项 0–1 */
   completeness: number;
   /** 公告新鲜项 0–1 */
@@ -76,8 +81,8 @@ export interface SiteScore {
   stale: number;
 }
 
-/** 站点级的三项（价格随模型变，不进这里）。 */
-export type SiteSideScore = Pick<SiteScore, "stability" | "completeness" | "notice">;
+/** 站点级的四项（价格随模型变，不进这里）。 */
+export type SiteSideScore = Pick<SiteScore, "stability" | "popularity" | "completeness" | "notice">;
 
 export interface SiteRankInput {
   records: OverviewRecord[];
@@ -89,6 +94,8 @@ export interface SiteRankInput {
   siteFlags?: Record<string, SiteFlags> | null;
   /** 各站最新公告时间（秒级时间戳）；缺省 = 无公告 */
   noticeAt?: Record<string, number | null | undefined> | null;
+  /** 各站人气（交流群人数、月访问量、全网排名，/api/sites/popularity）；缺省该项取中性分 */
+  sitePopularity?: SitePopularityMap | null;
   /** 当前时间（秒级）；单测注入用，缺省取 now */
   now?: number;
 }
@@ -193,6 +200,25 @@ function completenessOf(flags: SiteFlags | undefined): number | null {
   return hit / SITE_RANK_CHECKLIST.length;
 }
 
+/** 人气项的分档锚点：月访问量 5 万/月、Telegram 群 500 人、Tranco 排名 100 万为「达标」（1 分），
+ *  线性封顶；三个信号取最优，一个都没有 = 0（确实查无公开人气），缺失的信号不奖不罚。
+ *  排名是「越小越热」，与访问量/群人数方向相反，单独归一。 */
+const POPULARITY_VISITS_ANCHOR = 50_000;
+const POPULARITY_MEMBERS_ANCHOR = 500;
+const POPULARITY_RANK_ANCHOR = 1_000_000;
+
+export function popularityScoreOf(popularity: SitePopularityMap[string] | undefined): number {
+  if (!popularity) return 0;
+  const traffic = popularity.traffic ?? {};
+  const telegram = (popularity.groups ?? []).find((group) => group.type === "telegram" && group.members);
+  const signals: number[] = [];
+  if (traffic.monthly_visits) signals.push(traffic.monthly_visits / POPULARITY_VISITS_ANCHOR);
+  if (telegram?.members) signals.push(telegram.members / POPULARITY_MEMBERS_ANCHOR);
+  if (traffic.rank) signals.push(POPULARITY_RANK_ANCHOR / traffic.rank);
+  if (signals.length === 0) return 0;
+  return clamp01(Math.max(...signals));
+}
+
 /** 公告新鲜项：距今天数分档（≤7 天 1、≥60 天 0，中间线性）；无公告 0。 */
 function noticeFreshness(at: number | null | undefined, now: number): number {
   if (at == null) return 0;
@@ -221,6 +247,7 @@ export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   for (const siteId of siteIds) {
     site[siteId] = {
       stability: stabilityOf(input.views, siteId) ?? NEUTRAL,
+      popularity: popularityScoreOf(input.sitePopularity?.[siteId]),
       completeness: completenessOf(input.siteFlags?.[siteId]) ?? NEUTRAL,
       notice: noticeFreshness(input.noticeAt?.[siteId], now),
     };
@@ -228,19 +255,17 @@ export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   return { site, priceByModel: priceByModel(input.records, input.rate) };
 }
 
-/** 单行综合分（0–100）：价格取「当前模型内」的归一值，另外三项取站点级，数据滞后另扣。
+/** 单行综合分（0–100）：价格取「当前模型内」的归一值，另外四项取站点级，数据滞后另扣。
  *  传整行而不是 (站点, 模型)：滞后扣分要看这一行自己的 last_price_at。 */
 export function rowScore(ranking: SiteRanking, row: OverviewRecord): SiteScore {
-  const side = ranking.site[row.site_id] ?? { stability: NEUTRAL, completeness: NEUTRAL, notice: 0 };
+  const side =
+    ranking.site[row.site_id] ?? { stability: NEUTRAL, popularity: 0, completeness: NEUTRAL, notice: 0 };
   const price = ranking.priceByModel[canonicalModel(row.model)]?.[row.site_id] ?? 0;
-  const weightSum =
-    SITE_RANK_WEIGHTS.price +
-    SITE_RANK_WEIGHTS.stability +
-    SITE_RANK_WEIGHTS.completeness +
-    SITE_RANK_WEIGHTS.notice;
+  const weightSum = Object.values(SITE_RANK_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
   const weighted =
     (SITE_RANK_WEIGHTS.price * price +
       SITE_RANK_WEIGHTS.stability * side.stability +
+      SITE_RANK_WEIGHTS.popularity * side.popularity +
       SITE_RANK_WEIGHTS.completeness * side.completeness +
       SITE_RANK_WEIGHTS.notice * side.notice) /
     weightSum;

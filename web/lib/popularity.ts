@@ -74,27 +74,42 @@ export function groupKindLabel(group: SiteGroup): string {
 }
 
 export interface PopularityBadge {
-  /** 徽标短文案（总览表站点列用） */
+  /** 徽标短文案（总览表人气列用）：三段固定格式，有哪段显示哪段，不挑最强 */
   text: string;
   /** 悬停明细 */
   title: string;
 }
 
-/** 人气摘要徽标：优先月访问量，其次 Telegram 群/频道人数，最后全网排名；都没有返回 null。 */
+/** 人气摘要徽标：固定「访问量 / 群人数 / 排名」三段，有哪段显示哪段——同一列内格式统一，
+ *  不做"挑最强信号"的取舍（那会让不同行显示不同字段，用户没法横向对齐）。全空返回 null。 */
 export function popularityBadge(popularity?: SitePopularity | null): PopularityBadge | null {
   if (!popularity) return null;
   const traffic = popularity.traffic ?? {};
   const telegram = (popularity.groups ?? []).find((group) => group.type === "telegram" && group.members);
   const kind = telegram ? groupKindLabel(telegram) : "";
-  const parts: string[] = [];
-  if (traffic.monthly_visits) parts.push(`月访问量约 ${formatCompactCn(traffic.monthly_visits)}（第三方估算）`);
-  if (telegram?.members) parts.push(`Telegram ${kind} ${formatCompactCn(telegram.members)} 人`);
-  if (traffic.rank) parts.push(`全网排名约 ${formatCompactCn(traffic.rank)}`);
-  if (parts.length === 0) return null;
-  const text = traffic.monthly_visits
-    ? `${formatCompactCn(traffic.monthly_visits)}/月`
-    : telegram?.members
-      ? `${kind} ${formatCompactCn(telegram.members)} 人`
-      : `排名 ${formatCompactCn(traffic.rank ?? 0)}`;
-  return { text, title: parts.join("；") };
+  const segments = [
+    traffic.monthly_visits ? `${formatCompactCn(traffic.monthly_visits)}/月` : null,
+    telegram?.members ? `TG${kind} ${formatCompactCn(telegram.members)} 人` : null,
+    traffic.rank ? `排名 ${formatCompactCn(traffic.rank)}` : null,
+  ].filter(Boolean);
+  if (segments.length === 0) return null;
+  const parts = [
+    traffic.monthly_visits ? `月访问量约 ${formatCompactCn(traffic.monthly_visits)}（SimilarWeb/第三方估算，月更）` : null,
+    telegram?.members ? `Telegram ${kind} ${formatCompactCn(telegram.members)} 人` : null,
+    traffic.rank ? `全网排名约 ${formatCompactCn(traffic.rank)}（Tranco 榜）` : null,
+  ].filter(Boolean);
+  return { text: segments.join(" · "), title: parts.join("；") };
+}
+
+/** 人气列的排序值：与 siteRanking 的 popularity 分项同口径（月访问量/群人数/排名取最优，0–1），
+ *  让表格的列排序与综合分排序一致。 */
+export function popularitySortValue(popularity?: SitePopularity | null): number {
+  if (!popularity) return 0;
+  const traffic = popularity.traffic ?? {};
+  const telegram = (popularity.groups ?? []).find((group) => group.type === "telegram" && group.members);
+  const signals: number[] = [];
+  if (traffic.monthly_visits) signals.push(traffic.monthly_visits / 50_000);
+  if (telegram?.members) signals.push(telegram.members / 500);
+  if (traffic.rank) signals.push(1_000_000 / traffic.rank);
+  return signals.length === 0 ? 0 : Math.min(1, Math.max(...signals));
 }

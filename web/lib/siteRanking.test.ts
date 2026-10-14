@@ -1,12 +1,14 @@
-/** 站点评分口径：价格在「当前模型内」归一、其余三项站点级、数据滞后另扣、缺数据中性、排序主键。 */
+/** 站点评分口径：价格在「当前模型内」归一、其余四项站点级、数据滞后另扣、缺数据中性、排序主键。 */
 import { describe, expect, it } from "vitest";
 
 import type { SiteStats } from "@/lib/channelStatus";
 import { smartOrderRows } from "@/lib/priceRows";
+import type { SitePopularity } from "@/lib/popularity";
 import {
   STALE_PENALTY_MAX,
   buildSiteRanking,
   effectiveCostCny,
+  popularityScoreOf,
   rowRankScore,
   rowScore,
 } from "@/lib/siteRanking";
@@ -177,6 +179,52 @@ describe("其余三项：渠道稳定 / 配置完整 / 公告新鲜", () => {
     });
     expect(rowScore(ranking, cheap).price).toBe(1); // 它确实最便宜
     expect(rowScore(ranking, good).score).toBeGreaterThan(rowScore(ranking, cheap).score); // 但综合分被反超
+  });
+});
+
+describe("人气分项", () => {
+  const popular: SitePopularity = {
+    groups: [{ type: "telegram", url: "https://t.me/a", label: "@a", members: 2500, members_kind: "members" }],
+    traffic: { monthly_visits: 120_000 },
+  };
+  const tiny: SitePopularity = {
+    groups: [{ type: "telegram", url: "https://t.me/b", label: "@b", members: 120, members_kind: "members" }],
+    traffic: {},
+  };
+
+  it("popularityScoreOf：多信号取最优、线性封顶、无数据为 0", () => {
+    // 12 万访问量 = 2.4 倍锚点、2500 人 = 5 倍锚点 → 取最优封顶 1
+    expect(popularityScoreOf(popular)).toBe(1);
+    // 120 人 = 0.24 倍锚点
+    expect(popularityScoreOf(tiny)).toBeCloseTo(0.24, 6);
+    // 排名 50 万 = 100万/50万 = 2 倍锚点 → 1；排名 200 万 = 0.5
+    expect(popularityScoreOf({ groups: [], traffic: { rank: 500_000 } })).toBe(1);
+    expect(popularityScoreOf({ groups: [], traffic: { rank: 2_000_000 } })).toBe(0.5);
+    expect(popularityScoreOf(undefined)).toBe(0);
+    expect(popularityScoreOf({ groups: [], traffic: {} })).toBe(0);
+  });
+
+  it("人气高的站综合分更高（同价同配置时人气分出高下）", () => {
+    const a = row({ site_id: "a", model: "m", input_price: 1, output_price: 4 });
+    const b = row({ site_id: "b", model: "m", input_price: 1, output_price: 4 });
+    const ranking = buildSiteRanking({
+      records: [a, b],
+      rate: null,
+      sitePopularity: { a: popular, b: tiny },
+    });
+    const scores = { a: rowScore(ranking, a), b: rowScore(ranking, b) };
+    expect(scores.a.popularity).toBe(1);
+    expect(scores.b.popularity).toBeCloseTo(0.24, 6);
+    expect(scores.a.score).toBeGreaterThan(scores.b.score);
+  });
+
+  it("没人气数据的站该项记 0（不是中性），有群且人多的站在默认排序里更靠前", () => {
+    const a = row({ site_id: "a", model: "m", input_price: 1, output_price: 4 });
+    const c = row({ site_id: "c", model: "m", input_price: 1, output_price: 4 });
+    const ranking = buildSiteRanking({ records: [a, c], rate: null, sitePopularity: { a: popular } });
+    expect(rowScore(ranking, a).popularity).toBe(1);
+    expect(rowScore(ranking, c).popularity).toBe(0);
+    expect(rowScore(ranking, a).score).toBeGreaterThan(rowScore(ranking, c).score);
   });
 });
 

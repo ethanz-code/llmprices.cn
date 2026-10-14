@@ -63,6 +63,7 @@ export default async function OverviewPage() {
       rate: overview.catalog.usd_cny_rate ?? null,
       views: statusViews,
       siteFlags: overview.site_flags,
+      sitePopularity: sitePopularity,
       noticeAt: Object.fromEntries(
         Object.entries(overview.notices ?? {}).map(([id, notice]) => [id, notice.captured_at ?? null]),
       ),

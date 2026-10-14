@@ -14,7 +14,7 @@ import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMinute, formatTime, noticeExcerpt, recordStatusKey, rowReason, statusMeta } from "@/lib/format";
 import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
 import { rowRankScore, rowScore, type SiteRanking, type SiteScore } from "@/lib/siteRanking";
-import { popularityBadge, type SitePopularityMap } from "@/lib/popularity";
+import { popularityBadge, popularitySortValue, type SitePopularityMap } from "@/lib/popularity";
 import { modelOrderCompare, type ModelOrderEntry } from "@/lib/modelOrder";
 import { rankingHit, type RankingHit } from "@/lib/rankings";
 import { CollectAlerts } from "./CollectAlerts";
@@ -30,14 +30,14 @@ const rowKeyOf = (row: OverviewRecord) =>
 /** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
 const ACTIVE_MODEL_KEY = "overview-active-model";
 
-/** 行综合分悬停明细：总分 + 四项分项（0–100）+ 数据滞后扣分。 */
+/** 行综合分悬停明细：总分 + 五项分项（0–100）+ 数据滞后扣分。 */
 function siteScoreTitle(score: SiteScore): string {
   const pct = (value: number) => Math.round(value * 100);
   return [
     `行综合分 ${score.score.toFixed(1)} / 100`,
-    `价格 ${pct(score.price)} · 渠道稳定 ${pct(score.stability)} · 配置完整 ${pct(score.completeness)} · 公告新鲜 ${pct(score.notice)}`,
+    `价格 ${pct(score.price)} · 渠道稳定 ${pct(score.stability)} · 人气 ${pct(score.popularity)} · 配置完整 ${pct(score.completeness)} · 公告新鲜 ${pct(score.notice)}`,
     ...(score.stale > 0 ? [`数据滞后扣 ${score.stale.toFixed(1)} 分（价格是沿用旧快照的）`] : []),
-    "价格在本模型内比（越低分越高），分项越接近 100 越好。",
+    "价格在本模型内比（越低分越高），分项越接近 100 越好；人气看交流群人数、月访问量与全网排名。",
   ].join("\n");
 }
 
@@ -198,8 +198,6 @@ export function OverviewTable({
         // 逐行重复是噪音（与公告列同口径）
         const score =
           siteRanking && firstRowKeys.has(rowKeyOf(row)) ? rowScore(siteRanking, row) : null;
-        // 人气徽标同口径：只挂每站首行，悬停看明细（月访问量/群人数/排名来自公开数据，见 TermTip）
-        const badge = firstRowKeys.has(rowKeyOf(row)) ? popularityBadge(sitePopularity?.[v]) : null;
         return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, maxWidth: "100%", flexWrap: "wrap" }}>
             <RiskLink href={site.homepage || row.source_url} variant="site" title={site.name}>
@@ -216,11 +214,6 @@ export function OverviewTable({
                 {score.score.toFixed(1)}
               </span>
             )}
-            {badge && (
-              <span className="mono" title={badge.title} style={{ fontSize: 11, color: "var(--text-3)" }}>
-                {badge.text}
-              </span>
-            )}
             {showTag && (
               <span title={tip}>
                 <ToneTag tone={meta.tone}>{meta.label}</ToneTag>
@@ -230,6 +223,29 @@ export function OverviewTable({
         );
       },
       sorter: (a, b) => a.site_id.localeCompare(b.site_id),
+    },
+    {
+      title: (
+        <>
+          人气<TermTip term="site_popularity" />
+        </>
+      ),
+      dataIndex: "site_id",
+      // 三段并存允许自然换行（用户 2026-10-14 定：可以换行，但不要单行被压缩截断）——
+      // 不设死宽，给个合适的最小宽让多余空间给公告列
+      width: 150,
+      mobileHide: true,
+      // 每行都显示（用户 2026-10-14 定：同站各分组行也要有，不要只挂首行）；排序键 = 人气摘要值
+      sorter: (a, b) => popularitySortValue(sitePopularity?.[a.site_id]) - popularitySortValue(sitePopularity?.[b.site_id]),
+      render: (v: string) => {
+        const badge = popularityBadge(sitePopularity?.[v]);
+        if (!badge) return <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>—</span>;
+        return (
+          <span className="mono" title={badge.title} style={{ fontSize: 12.5, lineHeight: 1.5, whiteSpace: "normal", wordBreak: "break-word" }}>
+            {badge.text}
+          </span>
+        );
+      },
     },
     {
       title: (
