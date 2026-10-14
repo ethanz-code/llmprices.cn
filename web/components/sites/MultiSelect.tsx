@@ -36,6 +36,7 @@ function TagMultiSelect({
   failedText,
   noMatchText,
   queryHint,
+  chipMark,
   width = "min(420px, 100%)",
 }: {
   value: string[];
@@ -54,6 +55,8 @@ function TagMultiSelect({
   noMatchText: string;
   /** 按当前输入给一行提示；返回 null 不显示 */
   queryHint?: (query: string) => string | null;
+  /** 给不在候选里的已选项加角标：label 是短标记、title 是悬停解释 */
+  chipMark?: (id: string) => { label: string; title: string } | undefined;
   width?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -113,37 +116,57 @@ function TagMultiSelect({
         }}
       >
         {value.length === 0 && <span style={{ color: "var(--text-3)", fontSize: 13 }}>{fieldPlaceholder}</span>}
-        {value.map((id) => (
-          <span
-            key={id}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 2,
-              padding: "1px 2px 1px 8px",
-              background: "var(--panel)",
-              borderRadius: 999,
-              fontSize: 12,
-              maxWidth: "100%",
-            }}
-          >
-            <span className="mono" style={{ overflowWrap: "anywhere" }}>
-              {id}
-            </span>
+        {value.map((id) => {
+          const mark = chipMark?.(id);
+          return (
             <span
-              title="移除"
-              role="button"
-              aria-label={`移除 ${id}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onChange(value.filter((item) => item !== id));
+              key={id}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 2,
+                padding: "1px 2px 1px 8px",
+                background: "var(--panel)",
+                borderRadius: 999,
+                fontSize: 12,
+                maxWidth: "100%",
               }}
-              style={{ cursor: "pointer", color: "var(--text-3)", padding: "2px 6px", borderRadius: 999 }}
             >
-              ×
+              {mark && (
+                <span
+                  title={mark.title}
+                  style={{
+                    fontSize: 10,
+                    lineHeight: "14px",
+                    color: "var(--text-3)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 999,
+                    padding: "0 5px",
+                    marginRight: 3,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {mark.label}
+                </span>
+              )}
+              <span className="mono" style={{ overflowWrap: "anywhere" }}>
+                {id}
+              </span>
+              <span
+                title="移除"
+                role="button"
+                aria-label={`移除 ${id}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onChange(value.filter((item) => item !== id));
+                }}
+                style={{ cursor: "pointer", color: "var(--text-3)", padding: "2px 6px", borderRadius: 999 }}
+              >
+                ×
+              </span>
             </span>
-          </span>
-        ))}
+          );
+        })}
       </div>
       {open && (
         <>
@@ -314,6 +337,12 @@ function ModelMultiSelect({ value, onChange }: { value: string[]; onChange: (nex
       emptyText="目录是空的，直接输入模型名回车添加"
       failedText="模型目录还没同步好，直接输入模型名回车添加"
       noMatchText="没有匹配的模型；回车把当前输入添加为自定义模型"
+      // 不在官方目录的条目（手工加的）打上角标：这类名字要有站点在售，否则会被自动移出
+      chipMark={(id) =>
+        orderById && !orderById.has(canonicalModel(id))
+          ? { label: "自定义", title: "不在厂商官方目录里：需要有站点在售，连续几天没有站点卖会被自动移出" }
+          : undefined
+      }
     />
   );
 }

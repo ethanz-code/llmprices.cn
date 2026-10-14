@@ -74,31 +74,31 @@ export function groupKindLabel(group: SiteGroup): string {
 }
 
 export interface PopularityBadge {
-  /** 徽标短文案（总览表人气列用）：三段固定格式，有哪段显示哪段，不挑最强 */
-  text: string;
+  /** 人气列显示段（每段一行，不拼接）：访问量 / TG群(TG频道)人数 / 排名 */
+  lines: string[];
   /** 悬停明细 */
   title: string;
 }
 
-/** 人气摘要徽标：固定「访问量 / 群人数 / 排名」三段，有哪段显示哪段——同一列内格式统一，
- *  不做"挑最强信号"的取舍（那会让不同行显示不同字段，用户没法横向对齐）。全空返回 null。 */
+/** 人气摘要：固定「访问量 / TG群(TG频道)人数 / 排名」三段，有哪段显示哪段，每段一行——
+ *  同一列内格式统一，不做"挑最强信号"的取舍。全空返回 null。 */
 export function popularityBadge(popularity?: SitePopularity | null): PopularityBadge | null {
   if (!popularity) return null;
   const traffic = popularity.traffic ?? {};
   const telegram = (popularity.groups ?? []).find((group) => group.type === "telegram" && group.members);
   const kind = telegram ? groupKindLabel(telegram) : "";
-  const segments = [
-    traffic.monthly_visits ? `访问 ${formatCompactCn(traffic.monthly_visits)}/月` : null,
-    telegram?.members ? `TG${kind} ${formatCompactCn(telegram.members)} 人` : null,
-    traffic.rank ? `排名 ${formatCompactCn(traffic.rank)}` : null,
-  ].filter(Boolean);
-  if (segments.length === 0) return null;
+  const lines = [
+    traffic.monthly_visits ? `访问量：${formatCompactCn(traffic.monthly_visits)}/月` : null,
+    telegram?.members ? `TG${kind}：${formatCompactCn(telegram.members)} 人` : null,
+    traffic.rank ? `排名：${formatCompactCn(traffic.rank)}` : null,
+  ].filter((line): line is string => line !== null);
+  if (lines.length === 0) return null;
   const parts = [
-    traffic.monthly_visits ? `月访问量约 ${formatCompactCn(traffic.monthly_visits)}（SimilarWeb/第三方估算，月更）` : null,
-    telegram?.members ? `Telegram ${kind} ${formatCompactCn(telegram.members)} 人` : null,
-    traffic.rank ? `全网排名约 ${formatCompactCn(traffic.rank)}（Tranco 榜）` : null,
-  ].filter(Boolean);
-  return { text: segments.join(" · "), title: parts.join("；") };
+    traffic.monthly_visits ? `访问量：每月约 ${formatCompactCn(traffic.monthly_visits)}（SimilarWeb 公开数据估算，每月更新）` : null,
+    telegram?.members ? `Telegram ${kind}：${formatCompactCn(telegram.members)} 人（公开页面统计）` : null,
+    traffic.rank ? `全网排名：约第 ${formatCompactCn(traffic.rank)} 名（Tranco 榜）` : null,
+  ].filter((part): part is string => part !== null);
+  return { lines, title: parts.join("\n") };
 }
 
 /** 人气列的排序值：与 siteRanking 的 popularity 分项同口径（月访问量/群人数/排名取最优，0–1），

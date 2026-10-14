@@ -177,16 +177,22 @@ def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[
 # screenshot 是 headless 截站点首页、popularity 要逐个查外部数据源，都是重活，默认一天一次
 DEFAULT_SCHEDULE_MINUTES = {"price": 180, "status": 5, "notice": 30, "catalog": 1440, "rankings": 1440, "discovery": 1440, "screenshot": 1440, "popularity": 1440}
 SCHEDULE_KEYS = tuple(DEFAULT_SCHEDULE_MINUTES)
+# 会打站点接口的三项设硬上限 12 小时：部分站点续签接口的凭据时效只有 24 小时甚至更短，
+# 间隔一旦超过续签窗口，凭证会在两次采集之间过期作废，续签链死掉只能人工重登
+SCHEDULE_MAX_MINUTES = {"price": 720, "status": 720, "notice": 720}
 
 
 def schedule_from_raw(raw: Any) -> dict[str, float]:
-    """校验 settings.schedule：每项必须是不小于 0 的数字（分钟）；缺失项回默认值。"""
+    """校验 settings.schedule：每项必须是不小于 0 的数字（分钟）；缺失项回默认值；打站三项上限 12 小时。"""
     raw = raw if isinstance(raw, dict) else {}
     schedule: dict[str, float] = {}
     for key in SCHEDULE_KEYS:
         value = raw.get(key, DEFAULT_SCHEDULE_MINUTES[key])
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"settings.schedule.{key} 必须是不小于 0 的数字（分钟，0 表示关闭定时）")
+        cap = SCHEDULE_MAX_MINUTES.get(key)
+        if cap is not None and value > cap:
+            raise ValueError(f"settings.schedule.{key} 最长 {cap} 分钟（12 小时）：间隔再长，续签接口时效短的站点凭证会过期失效")
         schedule[key] = float(value)
     return schedule
 

@@ -13,12 +13,14 @@ import {
   IconNodes,
   IconSettings,
   IconAim,
+  IconUsers,
 } from "@/components/icons";
 import { EgressStatus } from "@/components/EgressStatus";
 
 const RAIL = [
   { href: "/admin", label: "概览", icon: <IconDashboard size={15} />, exact: true },
   { href: "/admin/sites", label: "站点管理", icon: <IconAppstore size={15} /> },
+  { href: "/admin/popularity", label: "站点人气", icon: <IconUsers size={15} /> },
   { href: "/admin/pricing-sources", label: "厂商定价源", icon: <IconNodes size={15} /> },
   { href: "/admin/tasks", label: "采集任务", icon: <IconBolt size={15} /> },
   { href: "/admin/ai-logs", label: "AI 日志", icon: <IconAim size={15} /> },

@@ -1229,13 +1229,19 @@ def test_collect_section_endpoints_submit_split_tasks(workspace: Path, monkeypat
 
 
 def test_settings_validates_schedule(workspace: Path):
-    """schedule 间隔必须是 >= 0 的数字；合法值保存后可读回。"""
+    """schedule 间隔必须是 >= 0 的数字；打站三项（price/status/notice）上限 12 小时；合法值保存后可读回。"""
     client = _admin_client(workspace)
     assert client.put("/api/settings", json={"settings": {"schedule": {"price": -5}}}).status_code == 400
     assert client.put("/api/settings", json={"settings": {"schedule": {"price": True}}}).status_code == 400
-    ok = client.put("/api/settings", json={"settings": {"schedule": {"price": 30, "status": 0, "notice": 10, "catalog": 720, "rankings": 0, "discovery": 0}}})
+    # 超上限 400：续签接口时效短（部分站仅 24h），间隔超过 12 小时凭证会在两轮采集之间过期
+    assert client.put("/api/settings", json={"settings": {"schedule": {"price": 721}}}).status_code == 400
+    assert client.put("/api/settings", json={"settings": {"schedule": {"status": 1440}}}).status_code == 400
+    assert client.put("/api/settings", json={"settings": {"schedule": {"notice": 721}}}).status_code == 400
+    # 不打站接口的项不受上限约束（catalog 等本地/低频源）
+    assert client.put("/api/settings", json={"settings": {"schedule": {"catalog": 2880}}}).status_code == 200
+    ok = client.put("/api/settings", json={"settings": {"schedule": {"price": 720, "status": 0, "notice": 10, "catalog": 720, "rankings": 0, "discovery": 0}}})
     assert ok.status_code == 200
-    assert ok.json()["settings"]["schedule"] == {"price": 30, "status": 0, "notice": 10, "catalog": 720, "rankings": 0, "discovery": 0}
+    assert ok.json()["settings"]["schedule"] == {"price": 720, "status": 0, "notice": 10, "catalog": 720, "rankings": 0, "discovery": 0}
 
 
 def test_settings_schedule_defaults_backfill_per_key(tmp_path: Path):

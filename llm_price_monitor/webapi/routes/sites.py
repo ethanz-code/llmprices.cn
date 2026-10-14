@@ -186,6 +186,40 @@ def build_router(store: Store) -> APIRouter:
         doc = store.get_document(POPULARITY_DOC) or {}
         return {"popularity": {key: value for key, value in doc.items() if isinstance(value, dict)}}
 
+    @router.get("/api/sites/popularity/admin")
+    def site_popularity_admin() -> dict[str, Any]:
+        """人气管理页数据：全部站点（含未启用）的人气与采集状态一览。
+
+        每行带：群链接/人数、访问量、排名、最近一次采集时间（checked_at）、是否待补
+        （needs_query：访问量或排名缺失，或数据超 7 天没刷新）。列表按「待补在前 +
+        采集时间新在前」排好，管理页直接渲染。
+        """
+        from llm_price_monitor.popularity import POPULARITY_DOC, needs_query
+
+        config = config_from_store(store)
+        doc = store.get_document(POPULARITY_DOC) or {}
+        rows = []
+        for site in config.sites:
+            entry = doc.get(site.id) if isinstance(doc.get(site.id), dict) else {}
+            traffic = entry.get("traffic") if isinstance(entry.get("traffic"), dict) else {}
+            groups = entry.get("groups") if isinstance(entry.get("groups"), list) else []
+            rows.append(
+                {
+                    "site_id": site.id,
+                    "enabled": site.enabled,
+                    "groups": groups,
+                    "monthly_visits": traffic.get("monthly_visits"),
+                    "visits_source": traffic.get("visits_source"),
+                    "rank": traffic.get("rank"),
+                    "rank_source": traffic.get("rank_source"),
+                    "checked_at": entry.get("checked_at"),
+                    "needs_query": needs_query(entry),
+                }
+            )
+        rows.sort(key=lambda row: (row["needs_query"], -(row["checked_at"] or 0), row["site_id"]))
+        pending = sum(1 for row in rows if row["needs_query"])
+        return {"rows": rows, "pending": pending, "total": len(rows)}
+
     @router.get("/api/sites/{site_id}/screenshot")
     def site_screenshot(site_id: str) -> FileResponse:
         """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。"""

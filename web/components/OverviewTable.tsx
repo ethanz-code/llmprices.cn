@@ -30,6 +30,10 @@ const rowKeyOf = (row: OverviewRecord) =>
 /** 订阅套餐行（套餐制站）：行代表套餐本身，无 token 价，套餐信息跨列渲染。 */
 const planOf = (row: OverviewRecord) => row.metadata?.plan ?? null;
 
+/** 订阅套餐统一入口的模型分组键与展示名：所有套餐行归并到这一个下拉项里。 */
+const SUBSCRIPTION_GROUP_KEY = "__subscription__";
+const SUBSCRIPTION_LABEL = "订阅套餐";
+
 /** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
 const ACTIVE_MODEL_KEY = "overview-active-model";
 
@@ -99,7 +103,14 @@ export function OverviewTable({
 
   const models = useMemo<ModelGroup[]>(() => {
     const byModel = new Map<string, { rows: OverviewRecord[]; names: Map<string, number> }>();
+    // 订阅套餐行统一归并成一个「订阅套餐」条目：套餐名（几十个）不进模型下拉刷屏，
+    // 点进这一项后的表里才逐行展开各套餐
+    let subscriptionRows: OverviewRecord[] | null = null;
     for (const row of records) {
+      if (planOf(row)) {
+        subscriptionRows = [...(subscriptionRows ?? []), row];
+        continue;
+      }
       const key = canonicalModel(row.model);
       let entry = byModel.get(key);
       if (!entry) {
@@ -121,10 +132,22 @@ export function OverviewTable({
         priced: entry.rows.some(hasUsablePrice),
       };
     });
+    if (subscriptionRows) {
+      groups.push({
+        key: SUBSCRIPTION_GROUP_KEY,
+        model: SUBSCRIPTION_LABEL,
+        aliases: [],
+        rows: subscriptionRows,
+        sites: new Set(subscriptionRows.map((row) => row.site_id)).size,
+        priced: true,
+      });
+    }
     // 目录口径排序（厂商分块+发布倒序，与站点管理监控模型多选同一套）：同厂商的模型
-    // 挨在一起，目录没收录的模型（站点自有命名）垫底按名称；页面没传目录索引时退化为纯名称序
+    // 挨在一起，目录没收录的模型（站点自有命名）垫底按名称；页面没传目录索引时退化为纯名称序。
+    // 订阅套餐统一项固定垫底（不是某个模型，入口性质）
     const compare = modelOrderCompare(modelOrder);
     groups.sort((a, b) => compare({ key: a.key, name: a.model }, { key: b.key, name: b.model }));
+    groups.sort((a, b) => Number(a.key === SUBSCRIPTION_GROUP_KEY) - Number(b.key === SUBSCRIPTION_GROUP_KEY));
     return groups;
   }, [records, modelOrder]);
 
@@ -282,18 +305,19 @@ export function OverviewTable({
         </>
       ),
       dataIndex: "site_id",
-      // 三段并存允许自然换行（用户 2026-10-14 定：可以换行，但不要单行被压缩截断）——
-      // 不设死宽，给个合适的最小宽让多余空间给公告列
-      width: 150,
+      // 每段一行竖排（用户 2026-10-14 定：不用 · 分隔，换行显示）——列宽只按最长一段给
+      width: 130,
       mobileHide: true,
-      // 每行都显示（用户 2026-10-14 定：同站各分组行也要有，不要只挂首行）；排序键 = 人气摘要值
+      // 每行都显示；排序键 = 人气摘要值
       sorter: (a, b) => popularitySortValue(sitePopularity?.[a.site_id]) - popularitySortValue(sitePopularity?.[b.site_id]),
       render: (v: string) => {
         const badge = popularityBadge(sitePopularity?.[v]);
         if (!badge) return <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>—</span>;
         return (
-          <span className="mono" title={badge.title} style={{ fontSize: 12.5, lineHeight: 1.5, whiteSpace: "normal", wordBreak: "break-word" }}>
-            {badge.text}
+          <span className="mono" title={badge.title} style={{ display: "grid", gap: 2, fontSize: 12.5, whiteSpace: "nowrap" }}>
+            {badge.lines.map((line) => (
+              <span key={line}>{line}</span>
+            ))}
           </span>
         );
       },

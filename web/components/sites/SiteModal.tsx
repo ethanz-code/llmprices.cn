@@ -5,7 +5,7 @@ import { toast, Btn, Input, Modal } from "../ui";
 import { apiSend } from "@/lib/api";
 import { GroupMultiSelect } from "./MultiSelect";
 import { advancedJsonError, originOf, textToDict } from "./siteShared";
-import { SettingRow } from "../ui";
+import { SettingRow, Tip } from "../ui";
 import { errorText } from "@/lib/api";
 import { INJECT_TARGETS, type AuthFields, type InjectRule, type InjectTarget, type RefreshOverride, type RefreshTestResult } from "./siteAuth";
 import { EntryCard, JsonSubModal, NoticeSubModal, PriceSubModal, StatusSubModal, type HeadlessForm, type PriceFields } from "./siteModalParts";
@@ -883,7 +883,7 @@ function SiteModal({
           </SettingRow>
           <SettingRow
             label="站点首页"
-            hint="选填：截站点截图时打开这个页面；留空按采集地址自动推。采集地址是接口、本身没有能看的页面时，在这里填站点首页"
+            tip="截站点截图时打开这个页面；留空按采集地址自动推。采集地址是接口、本身没有能看的页面时，在这里填站点首页"
           >
             <Input
               value={homepage}
@@ -896,14 +896,14 @@ function SiteModal({
                   return next;
                 });
               }}
-              placeholder="如 https://example.com"
+              placeholder="选填，如 https://example.com"
               style={{ width: "min(360px, 100%)" }}
             />
           </SettingRow>
           {/* 认证方式收在「认证与续签」弹窗里，和它控制的输入区在一起；入口卡片标注已配置状态 */}
           <SettingRow
             label="分组白名单"
-            hint="选填：只采这些分组的价格，渠道状态也只查这些分组；从已采集的分组里勾选，也可以直接输入回车添加；留空就全部采集"
+            tip="只采这些分组的价格，渠道状态也只查这些分组；从已采集的分组里勾选，也可以直接输入回车添加；留空就全部采集"
           >
             <GroupMultiSelect
               siteId={originalId}
@@ -952,7 +952,12 @@ function SiteModal({
           </div>
           {jsonOnlyEntries.length > 0 && (
             <div style={{ display: "grid", gap: 4 }}>
-              <span style={{ fontSize: 13.5 }}>仅在 JSON 里维护</span>
+              <span style={{ fontSize: 13.5, display: "inline-flex", alignItems: "center" }}>
+                仅在 JSON 里维护
+                <span onClick={(event) => event.preventDefault()}>
+                  <Tip text="这些配置没有表单输入框，点「高级 JSON」卡片查看与编辑；表单保存不会动它们" />
+                </span>
+              </span>
               {jsonOnlyEntries.map(([key, value]) => (
                 <div key={key} style={{ fontSize: 12.5 }}>
                   <span className="mono" style={{ fontWeight: 550 }}>
@@ -961,9 +966,6 @@ function SiteModal({
                   <span style={{ color: "var(--text-3)" }}>：{jsonOnlySummary(value)}</span>
                 </div>
               ))}
-              <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-                这些配置没有表单输入框，点「高级 JSON」卡片查看与编辑；表单保存不会动它们。
-              </span>
             </div>
           )}
           {advancedError && (

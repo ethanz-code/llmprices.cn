@@ -21,18 +21,11 @@ import type { SettingsData, SiteConfig } from "@/lib/types";
 /** 八类采集任务的后台定时间隔（分钟），与后端 settings.schedule 默认值保持一致；0 = 关闭定时。 */
 const DEFAULT_SCHEDULE_MINUTES: Record<string, number> = { price: 180, status: 5, notice: 30, catalog: 1440, rankings: 1440, discovery: 1440, screenshot: 1440, popularity: 1440 };
 
+/** 打站点接口的三项与后端 SCHEDULE_MAX_MINUTES 对齐：间隔超过 12 小时，续签接口时效短（部分站仅 24h）的站点凭证会过期失效 */
+const SCHEDULE_MAX_MINUTES: Record<string, number> = { price: 720, status: 720, notice: 720 };
+
 const SCHEDULE_ITEMS: { key: string; label: string; hint: string; tip?: React.ReactNode }[] = [
-  {
-    key: "price",
-    label: "价格采集",
-    hint: "定时去各站点看价格，有变化就记下来",
-    tip: (
-      <span style={{ display: "grid", gap: 6 }}>
-        <span>改短能更快发现站方调价，但每轮要对全部站点各发一次请求；间隔最长别超过 20 小时——登录站点的凭证靠采集顺带续签，间隔太长凭证会过期失效，续签不上就得重新登录。</span>
-        <span>现在除了价格，渠道状态和站点公告也会在各自采集前顺带续签，就算这里关掉定时（填 0），凭证链一般也断不了。</span>
-      </span>
-    ),
-  },
+  { key: "price", label: "价格采集", hint: "定时去各站点看价格，有变化就记下来", tip: "部分站点续签接口时效极短（甚至 24h），间隔最长 12 小时，不然凭证会过期失效" },
   { key: "status", label: "渠道状态", hint: "定时检查开了状态监测的站点，渠道有变化就记事件", tip: "这是请求量最大的一项：每 5 分钟对所有站点各发一次请求，想给站点减压优先调它" },
   { key: "notice", label: "站点公告", hint: "定时看站点公告，内容有变化就记下来" },
   { key: "catalog", label: "厂商定价", hint: "定时更新厂商原价目录，并重新抓取所有已启用的厂商定价源（默认 24 小时一次）" },
@@ -277,6 +270,11 @@ export function AdminSettings() {
       const value = text ? Number.parseFloat(text) : DEFAULT_SCHEDULE_MINUTES[item.key];
       if (!Number.isFinite(value) || value < 0) {
         toast(`${item.label}间隔需是不小于 0 的数字（分钟，0 为关闭）`);
+        return;
+      }
+      const cap = SCHEDULE_MAX_MINUTES[item.key];
+      if (cap !== undefined && value > cap) {
+        toast(`${item.label}间隔最长 ${cap} 分钟（12 小时）：部分站点续签接口时效极短，间隔再长凭证会过期失效`);
         return;
       }
       scheduleOut[item.key] = value;

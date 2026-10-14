@@ -24,17 +24,21 @@ describe("groupPlatformLabel", () => {
 });
 
 describe("popularityBadge", () => {
-  it("固定三段格式：有哪段显示哪段，用 · 分隔（同一列内格式统一，不挑最强）", () => {
+  it("固定三段、每段一行（换行显示不用 · 分隔），带「访问量/TG群/排名：」主语", () => {
     const full: SitePopularity = {
       groups: [{ type: "telegram", url: "https://t.me/a", label: "@a", members: 705, members_kind: "members" }],
       traffic: { monthly_visits: 134_700, rank: 461_591 },
     };
-    expect(popularityBadge(full)?.text).toBe("访问 13.5万/月 · TG群 705 人 · 排名 46.2万");
-    expect(popularityBadge(full)?.title).toContain("Telegram 群 705 人");
+    expect(popularityBadge(full)?.lines).toEqual([
+      "访问量：13.5万/月",
+      "TG群：705 人",
+      "排名：46.2万",
+    ]);
+    expect(popularityBadge(full)?.title).toContain("Telegram 群：705 人");
     // 缺访问量：剩下的段照常显示，位置不变
-    expect(popularityBadge({ groups: full.groups, traffic: {} })?.text).toBe("TG群 705 人");
-    expect(popularityBadge({ groups: [], traffic: { rank: 969_713 } })?.text).toBe("排名 97万");
-    expect(popularityBadge({ groups: [], traffic: { monthly_visits: 134_700 } })?.text).toBe("访问 13.5万/月");
+    expect(popularityBadge({ groups: full.groups, traffic: {} })?.lines).toEqual(["TG群：705 人"]);
+    expect(popularityBadge({ groups: [], traffic: { rank: 969_713 } })?.lines).toEqual(["排名：97万"]);
+    expect(popularityBadge({ groups: [], traffic: { monthly_visits: 134_700 } })?.lines).toEqual(["访问量：13.5万/月"]);
   });
 
   it("Telegram 频道（subscribers）文案叫「TG频道」不是「群」", () => {
@@ -42,8 +46,8 @@ describe("popularityBadge", () => {
       groups: [{ type: "telegram", url: "https://t.me/a", label: "@a", members: 705, members_kind: "subscribers" }],
       traffic: {},
     };
-    expect(popularityBadge(channel)?.text).toBe("TG频道 705 人");
-    expect(popularityBadge(channel)?.title).toContain("Telegram 频道 705 人");
+    expect(popularityBadge(channel)?.lines).toEqual(["TG频道：705 人"]);
+    expect(popularityBadge(channel)?.title).toContain("Telegram 频道：705 人");
   });
 
   it("没有任何数据返回 null（不挂空徽标）", () => {

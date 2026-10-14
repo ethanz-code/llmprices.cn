@@ -264,13 +264,13 @@ def fetch_visits_estimate(host: str, client: httpx.Client) -> int | None:
 
 
 class SimilarWebClient:
-    """SimilarWeb 站内 JSON API 的轻客户端：请求走独立 httpx 客户端（直连 + 空质询 cookie）。
+    """SimilarWeb 站内 JSON API 的轻客户端（独立 httpx、空质询 cookie、代理出口优先）。
 
-    WAF 对单出口 IP 只放约 6 次请求：碰壁（202/403/405）后经 proxy_switch 换一个对该站
-    可达的节点再试（与采集链路同一条切换线）；换不了就放弃本轮，下轮（24h 后）额度已重置。
-    SimilarWeb 的 CloudFront 只认数据中心/住宅出口，本机直连 IP 常态被 403（实测），所以
-    首选请求就带系统设置的备用代理出口（effective_proxy，与采集兜底同一条线），直连仅作
-    代理缺失时的兜底。
+    WAF 对单出口 IP 只放约 6 次请求，超了 202/403（冻结一段时间）。限流策略（2026-10-14 定）：
+    ① 到限额就换一个代理地址接着用——每站被拦都尝试 proxy_switch 切换组里的下一个节点，
+    切换后立刻重试，额度从一个出口挪到另一个出口继续烧；
+    ② 没配代理（切换组不可用）就不换，老老实实等冻结时间过了下轮再自动查——
+    缺数据的站每轮都会轮到，冻结期一过自然补上。
     """
 
     def __init__(self, user_agent: str, timeout: float = 25.0) -> None:
@@ -281,11 +281,13 @@ class SimilarWebClient:
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://www.similarweb.com/",
         }
+        # 出口被冻结的累计计数：日志里给一句"本轮已换 N 次出口"，方便对账额度
+        self._switches = 0
 
     def fetch(self, domain: str) -> dict[str, Any] | None:
         """域名 → {monthly_visits, global_rank}；无数据/被拦/网络失败返回 None（上游语义不区分）。"""
-        # 采集始终「直连优先、被墙兜底」，但 SimilarWeb 恰好相反：本机/数据中心直连 IP 被它
-        # 的 CloudFront 常态拒收，住宅出口才放行——所以这里代理优先、直连兜底，与采集链路镜像
+        # SimilarWeb 的 CloudFront 拒数据中心/本机直连 IP，住宅代理出口才放行——
+        # 代理优先、直连兜底，与采集链路「直连优先」正好镜像
         proxies = egress.effective_proxy()
         attempts: tuple[dict | None, ...] = ({"proxy": proxies} if proxies else None, None)
         for kwargs in attempts:
@@ -330,7 +332,10 @@ class SimilarWebClient:
         return result or None
 
     def visits_with_retry(self, domain: str, host_label: str) -> int | None:
-        """拿月访问量：先直连一次，被 WAF 拦下且系统配置了节点切换就换节点再试一次。"""
+        """拿月访问量：被 WAF 拦下就换代理出口接着查（每站一次切换机会）。
+
+        切换组不可用（未配代理）时不换，等下轮冻结期过了自动补——缺数据的站每轮都轮到。
+        """
         result = self.fetch(domain)
         if result is not None and result.get("monthly_visits"):
             return int(result["monthly_visits"])
@@ -338,8 +343,12 @@ class SimilarWebClient:
             return None  # 上游明确没数据（204），换出口也不会有
         switched = proxy_switch.auto_switch_for(f"similarweb:{host_label}", SIMILARWEB_API.format(domain=domain))
         if switched is None:
-            return None
-        tasklog.emit(f"[{host_label}] SimilarWeb 出口被 WAF 拦下，已切换节点 → {switched}，重试访问量查询")
+            return None  # 没配代理/没有可达节点：老实等冻结期过，下轮自动补
+        self._switches += 1
+        tasklog.emit(
+            f"[{host_label}] SimilarWeb 出口额度用完，已换代理出口 → {switched}，接着查"
+            f"（本轮已换 {self._switches} 次）"
+        )
         retried = self.fetch(domain)
         if retried and retried.get("monthly_visits"):
             return int(retried["monthly_visits"])

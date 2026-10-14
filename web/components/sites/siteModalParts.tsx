@@ -173,7 +173,7 @@ function StatusSubModal({
       }
     >
       <div style={{ display: "grid", gap: 14 }}>
-        <SettingRow label="渠道状态 URL" hint="填站点的渠道状态接口地址，每次采集会顺带检查各渠道是否正常，有变化会记成事件">
+        <SettingRow label="渠道状态 URL" tip="填站点的渠道状态接口地址，每次采集会顺带检查各渠道是否正常，有变化会记成事件">
           <Input
             value={url}
             onChange={setUrl}
@@ -218,7 +218,7 @@ function NoticeSubModal({
       <div style={{ display: "grid", gap: 14 }}>
         <SettingRow
           label="站点公告 URL"
-          hint="留空会自动抓站点的 /api/notice（new-api/one-api 都是这个地址）；公告内容有变化时会记成事件。公告请求会自动带上站点认证，不用重复填"
+          tip="留空会自动抓站点的 /api/notice（new-api/one-api 都是这个地址）；公告内容有变化时会记成事件。公告请求会自动带上站点认证，不用重复填"
         >
           <Input
             value={url}
@@ -427,7 +427,7 @@ function HeadlessSection({
           </>
         )}
       </div>
-      <SettingRow label="等待时间（秒）" hint="页面加载后等多久再读价格，页面慢就调大">
+      <SettingRow label="等待时间（秒）" tip="页面加载后等多久再读价格，页面慢就调大">
         <Input
           value={value.waitSeconds}
           type="number"
@@ -504,7 +504,7 @@ function PriceSubModal({
         {/* 采集方式只作用于价格采集，模式定了才知道下面该展示接口请求头还是浏览器登录态 */}
         <SettingRow
           label="采集方式"
-          hint={
+          tip={
             headless.enabled
               ? "页面要在浏览器里跑 JS 才能显示价格（直接抓是空壳，常见于单页应用）时选它：每次都用真浏览器打开并渲染，Cookie、localStorage 登录态一并注入"
               : "先当接口请求（Cookie 等登录态照常随请求头带上）；抓到空壳页（常见于单页应用）就采不到价格，换成「网页模式（Headless）」就好，一般站点选这个就够"
@@ -523,7 +523,7 @@ function PriceSubModal({
         <div style={{ display: "grid", gap: 14 }}>
           <SettingRow
             label="价格接口 URL"
-            hint="填价格接口地址或网页地址都行；要带参数就直接拼在地址后面，如 ?page=1&lang=zh"
+            tip="填价格接口地址或网页地址都行；要带参数就直接拼在地址后面，如 ?page=1&lang=zh"
           >
             <Input
               value={url}
@@ -544,7 +544,7 @@ function PriceSubModal({
         <div style={{ display: "grid", gap: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
           <SettingRow
             label="倍率接口 URL"
-            hint="填站点的倍率查询地址，采集时按倍率把厂商基准价换算成实售价；留空就直接用基准价。接口要专用请求头时，在「高级 JSON」里给 ratio_url 配 headers"
+            tip="填站点的倍率查询地址，采集时按倍率把厂商基准价换算成实售价；留空就直接用基准价。接口要专用请求头时，在「高级 JSON」里给 ratio_url 配 headers"
           >
             <Input
               value={ratioUrl}

@@ -292,9 +292,9 @@ function AuthSubModal({
         {/* 三种方式互斥，选中才显示对应输入区；被切走方式的配置在点确定时清掉 */}
         <SettingRow
           label="认证方式"
-          hint={
+          tip={
             mode === "session"
-              ? "站点登录 token 短效时，配一个续签接口：token 快到期提前自动换新，真被拒时也自动换新重试，价格、渠道状态、公告三处通用"
+              ? "站点登录 token 短效时，配一个续签接口：token 快到期提前自动换新，真被拒时也自动换新重试，价格、渠道状态、公告三处通用。部分站点续签接口的凭据时效极短（甚至 24h），失效了要重新抓一次"
               : mode === "token"
                 ? "填站点级的 API Key，价格、渠道状态、公告采集自动带上认证头"
                 : "公开接口不用认证；之后要认证了随时回来切"
@@ -313,10 +313,11 @@ function AuthSubModal({
         )}
         {mode === "token" && (
           <div style={{ display: "grid", gap: 8 }}>
-            <span style={{ fontSize: 13.5 }}>站点令牌</span>
-            <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-              会自动加到价格、渠道状态、公告所有采集请求的认证头（默认 Authorization: Bearer …）；
-              保存后各接口请求头里手写的 Authorization 会自动移除，认证只走这一处
+            <span style={{ fontSize: 13.5, display: "inline-flex", alignItems: "center" }}>
+              站点令牌
+              <span onClick={(event) => event.preventDefault()}>
+                <Tip text="会自动加到价格、渠道状态、公告所有采集请求的认证头（默认 Authorization: Bearer …）；保存后各接口请求头里手写的 Authorization 会自动移除，认证只走这一处" />
+              </span>
             </span>
             <Input value={authToken} onChange={setAuthToken} placeholder="sk-… 或令牌原文" style={{ width: "100%" }} />
           </div>
@@ -325,20 +326,7 @@ function AuthSubModal({
           <div style={{ display: "grid", gap: 14 }}>
             <div style={{ display: "grid", gap: 6 }}>
               <div style={{ display: "flex", alignItems: "center" }}>
-                <span style={{ fontSize: 13.5, flex: 1, display: "inline-flex", alignItems: "center" }}>
-                  Refresh Token
-                  <span onClick={(event) => event.preventDefault()}>
-                    <Tip
-                      content={
-                        <span style={{ display: "grid", gap: 6 }}>
-                          <span>有效期各站不同：有的几小时就过期，有的能管 30 天。到期后采集会自动用它换新令牌接着用；轮换型（new-api 系用一次换一次）只要别闲置太久就一直活着，闲置约 20 小时会作废——本站正常采集就不会闲着。</span>
-                          <span>刷新令牌失效只能重新抓一次：登录站点网页版，按上面的步骤重新复制。</span>
-                        </span>
-                      }
-                      ariaLabel="Refresh Token 说明"
-                    />
-                  </span>
-                </span>
+                <span style={{ fontSize: 13.5, flex: 1 }}>Refresh Token</span>
                 <Btn variant="text" size="sm" onClick={() => setShowHowTo(!showHowTo)}>
                   {showHowTo ? "收起" : "怎么获取？"}
                 </Btn>
@@ -370,7 +358,12 @@ function AuthSubModal({
               )}
             </div>
             <div style={{ display: "grid", gap: 6 }}>
-              <span style={{ fontSize: 13.5 }}>Access Token</span>
+              <span style={{ fontSize: 13.5, display: "inline-flex", alignItems: "center" }}>
+                Access Token
+                <span onClick={(event) => event.preventDefault()}>
+                  <Tip text="采集价格、渠道状态、公告时带的登录凭证就是它（Authorization: Bearer …）；填了立刻能用，留空也行——第一次采集被拒时会自动续签补上，之后每次续签也会自动换成新的" />
+                </span>
+              </span>
               <Input
                 value={authToken}
                 onChange={(value) => {
@@ -380,10 +373,6 @@ function AuthSubModal({
                 placeholder="选填：F12 → 网络 → 任一接口请求头里 Authorization 的 Bearer 后面那段"
                 style={{ width: "100%" }}
               />
-              <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-                采集价格、渠道状态、公告时带的登录凭证就是它（Authorization: Bearer …）；填了立刻能用，留空也行——
-                第一次采集被拒时会自动续签补上，之后每次续签也会自动换成新的
-              </span>
             </div>
             <button type="button" className="disclosure-row" aria-expanded={showAdvanced} onClick={() => setAdvancedOverride(!showAdvanced)}>
               <span className="caret" aria-hidden>

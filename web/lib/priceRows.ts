@@ -112,6 +112,12 @@ export function smartOrderRows(
       const discountB = b.discount?.input ?? 9;
       if (discountA !== discountB) return discountA - discountB;
     }
+    // 订阅套餐行无 token 价：按「每美元额度实付」升序破平（越便宜越前）
+    const planA = (a.metadata as { plan?: { per_quota_usd?: number | null } } | undefined)?.plan;
+    const planB = (b.metadata as { plan?: { per_quota_usd?: number | null } } | undefined)?.plan;
+    if (planA?.per_quota_usd != null && planB?.per_quota_usd != null && planA.per_quota_usd !== planB.per_quota_usd) {
+      return planA.per_quota_usd - planB.per_quota_usd;
+    }
     return b.captured_at - a.captured_at || a.site_id.localeCompare(b.site_id);
   });
 }
