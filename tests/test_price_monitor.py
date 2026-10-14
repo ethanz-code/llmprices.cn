@@ -4680,6 +4680,50 @@ def test_marketplace_groups_pricing_effective_per_token():
     assert ds.metadata["cache_create_1h_price"] == pytest.approx(0.5)
 
 
+def test_model_market_catalog_records_with_group_rates():
+    """sub2api model-market catalog（行价 "$X/M tokens" 字符串 + supported_groups 倍率）：
+    实付 = 行价 × 组级 price_multiplier × 分组 effective_rate_multiplier，按 (模型 × 分组) 展开；
+    非 token 行（¥/秒）与未命中监控池的模型跳过。"""
+    from llm_price_monitor.adapters import looks_like_model_market_catalog, model_market_catalog_records
+
+    payload = {"code": 0, "message": "success", "data": {"version": 11, "groups": [
+        {"id": "chatgpt", "title": "ChatGPT", "price_multiplier": 1, "rows": [
+            {"id": "r1", "model": "gpt-6.1-sol", "input_price": "$2/M tokens", "output_price": "$10/M tokens",
+             "our_price": "¥2/M 输入 · ¥10/M 输出", "sort_order": 100, "enabled": True},
+            {"id": "r2", "spec": "1K", "our_price": "¥0.05", "sort_order": 100, "enabled": True},
+        ],
+         "supported_groups": [
+             {"id": 11, "name": "官方Pro分组[稳定]", "effective_rate_multiplier": 0.2},
+             {"id": 14, "name": "特价GPT分组[动态定价]", "effective_rate_multiplier": 0.08},
+         ]},
+        {"id": "image", "title": "生图", "price_multiplier": 1, "rows": [
+            {"id": "r3", "model": "gpt-image-2", "input_price": "$0/M tokens", "output_price": "$0/M tokens",
+             "our_price": "¥0.151", "spec": "4k", "sort_order": 100, "enabled": True},
+        ],
+         "supported_groups": [{"id": 20, "name": "生图分组", "effective_rate_multiplier": 1}],
+         "rows_disabled": None},
+    ]}}
+    assert looks_like_model_market_catalog(payload)
+    spec = SiteSpec(
+        id="lab",
+        models=[ModelTarget("gpt-6.1-sol"), ModelTarget("gpt-image-2")],
+        network={"url": "https://lab.test/api/v1/model-market/catalog"},
+    )
+    records = model_market_catalog_records(spec, [{"url": "https://lab.test/api/v1/model-market/catalog", "status": 200, "resource_type": "fetch", "payload": payload}])
+    # gpt-6.1-sol 两个分组各一条；gpt-image-2 行 our_price 是 ¥/秒 型（input "$0/M tokens" 虽命中但输出/输入全零价行保留——
+    # $0/M 是 token 计价零价，实付 $0；真实站点此行是图片按张计费伪装，靠 our_price 非零价无法表达 → 跳过规则同 _has_price 双零）
+    sol = {r.metadata["group"]: r for r in records if r.model == "gpt-6.1-sol"}
+    assert set(sol) == {"官方Pro分组[稳定]", "特价GPT分组[动态定价]"}
+    pro = sol["官方Pro分组[稳定]"]
+    assert pro.input_price == pytest.approx(0.4)
+    assert pro.output_price == pytest.approx(2.0)
+    special = sol["特价GPT分组[动态定价]"]
+    assert special.input_price == pytest.approx(0.16)
+    assert special.output_price == pytest.approx(0.8)
+    assert all(r.price_status == "candidate" and r.unit == "USD/1M tokens" for r in records)
+    assert all("effective_rate_multiplier" in r.metadata["notes"] for r in records)
+
+
 def test_billing_rate_items_records_micro_usd():
     """billing 费率清单：per_1m 微美元 ÷1e6 归一 USD/1M tokens；unit 按次行与缺价行跳过。"""
     from llm_price_monitor.adapters import looks_like_billing_rate_items, billing_rate_item_records

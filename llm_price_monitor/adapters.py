@@ -1237,6 +1237,111 @@ def marketplace_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) ->
     return list(records.values())
 
 
+def looks_like_model_market_catalog(payload: Any) -> bool:
+    """sub2api model-market catalog 结构：data.groups[].rows[]，行价是 "$X/M tokens" 字符串，
+    同组 supported_groups[] 给各分组的 effective_rate_multiplier（前台按 行价×组倍率 渲染实付）。"""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return False
+    groups = payload["data"].get("groups")
+    if not isinstance(groups, list):
+        return False
+    return any(
+        isinstance(group, dict)
+        and any(
+            isinstance(row, dict) and isinstance(row.get("model"), str) and isinstance(row.get("input_price"), str)
+            for row in group.get("rows") or []
+        )
+        for group in groups
+    )
+
+
+_PRICE_PER_M_RE = re.compile(r"^[$¥￥]?\s*(\d+(?:\.\d+)?)\s*/\s*M(?:\s*tokens)?$", re.IGNORECASE)
+
+
+def _model_market_row_price(value: Any) -> float | None:
+    """catalog 行价字符串（"$2/M tokens"）→ USD/1M tokens 数值；非 token 计价（¥/秒 等）返回 None。"""
+    if not isinstance(value, str):
+        return None
+    match = _PRICE_PER_M_RE.match(value.strip())
+    return float(match.group(1)) if match else None
+
+
+def model_market_catalog_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
+    """确定性解析 model-market catalog：行价（$X/M tokens）为基准价，实付 = 行价 × 分组倍率。
+
+    前台渲染实证（3zapi ModelPlazaView）：input/output 列直显 $ 行价，实付列 = our_price ×
+    price_multiplier × 所选分组 effective_rate_multiplier。行价与官方价同数（倍率另乘），
+    故每 (模型 × 分组) 展开一条实付价；price_multiplier 组级系数（缺省 1）一并计入。
+    非 token 计价行（生图 ¥/秒 档）与禁用行跳过。
+    """
+    response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
+    payload = captured[0].get("payload") if captured else None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return []
+    records: list[PriceRecord] = []
+    for group in data.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        catalog_multiplier = group.get("price_multiplier")
+        catalog_multiplier = catalog_multiplier if _plain_number(catalog_multiplier) else 1
+        for sub in group.get("supported_groups") or []:
+            if not isinstance(sub, dict):
+                continue
+            group_name = str(sub.get("name") or "default")
+            rate = sub.get("effective_rate_multiplier")
+            rate = rate if _plain_number(rate) else 1
+            for row in group.get("rows") or []:
+                if not isinstance(row, dict) or not row.get("enabled"):
+                    continue
+                model_name = str(row.get("model") or "")
+                target = next(
+                    (t for t in spec.models if t.name.casefold() == model_name.casefold()),
+                    None,
+                )
+                if target is None:
+                    continue
+                base_input = _model_market_row_price(row.get("input_price"))
+                base_output = _model_market_row_price(row.get("output_price"))
+                if base_input is None and base_output is None:
+                    continue
+                factor = catalog_multiplier * rate
+                metadata = {
+                    "adapter": "network",
+                    "pricing_kind": "explicit_price",
+                    "group": group_name,
+                    "group_ratio": rate if _plain_number(rate) else None,
+                    "cache_read_price": None,
+                    "cache_create_price": None,
+                    "currency": "USD",
+                    "network_evidence": [{
+                        "source": "model_list",
+                        "url": redact_url(str(captured[0].get("url", ""))),
+                        "resource_type": captured[0].get("resource_type"),
+                        "status": captured[0].get("status"),
+                        "payload_sha256": payload_hash(payload),
+                    }],
+                    "page_evidence": [],
+                    "notes": (
+                        "model-market catalog 直读：行价为 $/M 基准价，实付 = 行价 × 组级 price_multiplier "
+                        f"× 分组 effective_rate_multiplier（前台实付列公式对照）；本分组倍率 {rate}。"
+                    ),
+                }
+                records.append(
+                    PriceRecord(
+                        target.name,
+                        base_input * factor if base_input is not None else None,
+                        base_output * factor if base_output is not None else None,
+                        "USD/1M tokens",
+                        response_source_url,
+                        time.time(),
+                        metadata,
+                        "candidate",
+                    )
+                )
+    return records
+
+
 def looks_like_rate_pair_pricing(payload: Any) -> bool:
     """模型价目 + 分组倍率表结构：价目清单与倍率映射成对出现。
 
@@ -1882,6 +1987,9 @@ class NetworkAdapter:
         if looks_like_marketplace_pricing(payload):
             # 模型广场牌价（items[].pricing / models[].cost_per_token）：确定性形状不落 AI
             return marketplace_price_records(spec, [captured])
+        if looks_like_model_market_catalog(payload):
+            # model-market catalog（行价 $X/M tokens 字符串 + supported_groups 倍率）：确定性形状不落 AI
+            return model_market_catalog_records(spec, [captured])
         if looks_like_rate_pair_pricing(payload):
             # 价目+分组倍率二元组：确定性形状不落 AI
             return rate_pair_price_records(spec, [captured])
