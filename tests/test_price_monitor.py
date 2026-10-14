@@ -690,6 +690,44 @@ def test_network_adapter_uses_ai_alias_before_newapi_calculation(monkeypatch):
     assert records[0].metadata["observed_model"] == "openai/gpt-5.6-sol"
 
 
+def test_network_adapter_keeps_direct_prices_when_aliases_cause_ambiguity(monkeypatch):
+    """别名把精确命中撞成多命中歧义（宁缺勿猜）时，别名的退化结果不得顶掉直采的确认价。
+
+    bytonsec 实锤：站上「裸名 + zen/ 前缀变体」并存，AI 别名把两者都列为候选后
+    精确命中变歧义，带别名的结果整站无价、只剩 rule_only 占位——旧守卫见到
+    rule_only 就认作"解析成功"，把直采算出的 16 条确认价整轮丢掉。
+    """
+    def fake_extract_aliases(self, spec, responses, **kwargs):
+        return {"claude-opus-5-5": {"observed_model": "zen/claude-opus-5-5", "aliases": ["zen/claude-opus-5-5"]}}
+
+    monkeypatch.setattr("llm_price_monitor.ai.AIPriceExtractor.extract_aliases", fake_extract_aliases)
+    spec = SiteSpec(
+        id="demo",
+        models=(ModelTarget("claude-opus-5-5"), ModelTarget("grok-4.6")),
+        network={"url": "https://demo.test/api/pricing"},
+    )
+    ai = AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="key")
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+        "group_ratio": {"default": 1},
+        "data": [
+            {"model_name": "claude-opus-5-5", "enable_groups": ["default"], "model_ratio": 2.5, "completion_ratio": 5},
+            {"model_name": "zen/claude-opus-5-5", "enable_groups": ["default"], "model_ratio": 2.5, "completion_ratio": 5},
+            {"model_name": "grok-4.6", "enable_groups": ["default"], "model_ratio": 37.5, "model_price": 0,
+             "billing_mode": "tiered_expr", "billing_expr": 'tier("base", p * 2 + c * 6)'},
+        ],
+    })))
+    records = NetworkAdapter().collect(spec, client, 5, DEFAULT_BROWSER_USER_AGENT, ai)
+    by_model = {}
+    for record in records:
+        by_model.setdefault(record.model, []).append(record)
+    # 歧义目标必须保留直采确认价（别名路径整站无价时不得顶掉）
+    assert by_model["claude-opus-5-5"][0].price_status == "confirmed"
+    assert by_model["claude-opus-5-5"][0].input_price == 5.0
+    assert by_model["claude-opus-5-5"][0].output_price == 25.0
+    # rule_only（只有分档规则、无单一实付价）不是"解析成功"，不能当作别名胜出的理由
+    assert by_model["grok-4.6"][0].price_status == "rule_only"
+
+
 def test_browser_adapter_requires_ai_for_non_newapi_json():
     requests = []
 
@@ -5630,3 +5668,27 @@ def test_refresh_revoked_error_message_is_actionable(tmp_path: Path):
     assert "已被站方作废" in message
     assert "REFRESH_TOKEN_INVALID" in message
     assert "重新登录" in message
+
+
+def test_refresh_session_binding_mismatch_also_fuses(tmp_path: Path):
+    """会话指纹失配（2btocken 型）同样触发熔断：出口漂移重试只会连环吊销会话家族。"""
+    from llm_price_monitor import token_refresh
+
+    store = _dead_store(tmp_path)
+    (spec,) = sites_from_raw([{
+        "id": "rt",
+        "models": ["m"],
+        "network": {"url": "https://rt.test/api/pricing"},
+        "token_refresh": {"url": "https://rt.test/auth/refresh", "refresh_token": "rt_old"},
+    }])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"code": "SESSION_BINDING_MISMATCH", "message": "Session network fingerprint changed, please login again"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    collected, errors = token_refresh.refresh_and_recollect(
+        spec, [], collect=lambda _s: ([], []), client=client, timeout=5, user_agent="ua", store=store,
+    )
+    assert errors and "会话指纹失配" in errors[0]
+    config = store.get_site_config("rt")
+    assert config["token_refresh"]["dead_since"] > 0

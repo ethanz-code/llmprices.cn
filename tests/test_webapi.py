@@ -507,21 +507,37 @@ def test_login_rate_limit_blocks_after_repeated_failures(workspace: Path):
     assert client.post("/api/auth/login", json={"username": "admin", "password": "s3cret"}).status_code == 429
 
 
-def test_collect_status_admin_only_and_tasks_gated(workspace: Path):
-    """collect_status（需要关注的站点）仅随管理员会话返回；任务读取接口仅管理员可用。"""
+def test_collect_alerts_public_and_sanitized(workspace: Path):
+    """采集异常站点清单对访客公开但脱敏（只给站点与状态，不给原始报错）；任务读取接口仅管理员可用。"""
     from llm_price_monitor.store import Store
 
+    (workspace / "var" / "latest.json").write_text(json.dumps({
+        "demo:demo-model:default": _latest_record(),
+        "needs-auth:demo-model:default": {**_latest_record(), "site_id": "needs-auth"},
+    }), encoding="utf-8")
     Store(workspace / "var" / "monitor.db").set_document(
-        "collect_status", {"demo": {"status": "error", "error": "boom"}}
+        "collect_status",
+        {
+            "demo": {"status": "error", "error": "boom：请求 https://内网地址/pricing", "checked_at": 1800.0},
+            "needs-auth": {"status": "auth_required", "error": "401", "checked_at": 1810.0},
+            "off-table": {"status": "error", "error": "boom"},  # 没上表（没有可对照的价格）→ 不进清单
+            "fresh": {"status": "ok", "error": None},           # 正常态 → 不进清单
+        },
     )
     guest = TestClient(create_app(_config(workspace)))
-    assert guest.get("/api/overview").json()["collect_status"] == {}
+    overview = guest.get("/api/overview")
+    # 只挑「上表且本轮没更新」的站点，顺序按严重度：先采集失败、后需认证
+    assert overview.json()["collect_alerts"] == [
+        {"site_id": "demo", "status": "error", "checked_at": 1800.0},
+        {"site_id": "needs-auth", "status": "auth_required", "checked_at": 1810.0},
+    ]
+    # 原始报错（含内网地址/认证细节）不外泄给访客
+    assert "boom" not in overview.text and "内网地址" not in overview.text
     assert guest.get("/api/tasks").status_code == 401
     assert guest.get("/api/tasks/abc").status_code == 401
 
     admin = _admin_client(workspace)
-    status = admin.get("/api/overview").json()["collect_status"]
-    assert status["demo"]["error"] == "boom"
+    assert admin.get("/api/overview").json()["collect_alerts"] == overview.json()["collect_alerts"]
     assert admin.get("/api/tasks").status_code == 200
 
 
@@ -1275,7 +1291,7 @@ def test_scheduler_run_due_disabled_all_and_invalid_config(tmp_path: Path):
 
     tasks.reset()
     store = Store(tmp_path / "monitor.db")
-    store.set_document("settings", {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0, "screenshot": 0}})
+    store.set_document("settings", {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, "rankings": 0, "discovery": 0, "screenshot": 0, "popularity": 0}})
     scheduler_mod._run_due(store)
     assert tasks.recent(100) == []
 
@@ -2165,8 +2181,9 @@ def test_admin_get_routes_denied_to_anonymous_by_default(workspace: Path, monkey
         # 单条公告正文（事件流只下发摘要，详情弹窗按需取全文）：与 /api/notice 同为公开读
         "/api/notice/event",
         "/api/rankings", "/api/catalog", "/api/catalog/all", "/api/geo", "/api/discovery",
-        # 站点截图与首页覆盖表是公开页面的公共内容：匿名可读
+        # 站点截图与首页覆盖表是公开页面的公共内容：匿名可读；站点人气同理（详情页展示）
         "/api/sites/screenshots", "/api/sites/{site_id}/screenshot", "/api/sites/homepages",
+        "/api/sites/popularity",
     }
 
     def all_api_routes() -> list[APIRoute]:

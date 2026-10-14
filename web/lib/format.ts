@@ -42,7 +42,8 @@ export function noticePlainText(content: string): string {
 
 export function formatPrice(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
-  const digits = value >= 100 ? 1 : value >= 1 ? 2 : 3;
+  // 小于 0.01 的单价（如 0.000647/1M）3 位小数会失真成 0.001，放开到 6 位
+  const digits = value >= 100 ? 1 : value >= 1 ? 2 : value >= 0.01 ? 3 : 6;
   let text = value.toFixed(digits);
   if (text.includes(".")) text = text.replace(/0+$/, "").replace(/\.$/, "");
   return text;
@@ -384,6 +385,7 @@ const TASK_KIND_LABELS: Record<string, string> = {
   "collect-status": "渠道状态采集",
   "collect-notice": "站点公告采集",
   "collect-screenshot": "站点截图",
+  "collect-popularity": "站点人气",
   "catalog-refresh": "厂商定价刷新",
   "vendor-source-refresh": "厂商定价源抓取",
   "rankings-refresh": "模型榜单刷新",

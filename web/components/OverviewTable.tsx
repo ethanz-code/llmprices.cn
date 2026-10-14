@@ -14,12 +14,14 @@ import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMinute, formatTime, noticeExcerpt, recordStatusKey, rowReason, statusMeta } from "@/lib/format";
 import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
 import { rowRankScore, rowScore, type SiteRanking, type SiteScore } from "@/lib/siteRanking";
+import { popularityBadge, type SitePopularityMap } from "@/lib/popularity";
 import { modelOrderCompare, type ModelOrderEntry } from "@/lib/modelOrder";
 import { rankingHit, type RankingHit } from "@/lib/rankings";
+import { CollectAlerts } from "./CollectAlerts";
 import { DiscountBars } from "./DiscountBars";
 import { LazyChannelDots } from "./LazyChannelDots";
 import { PriceCell, CachePriceCell } from "./PriceCell";
-import type { OverviewData, OverviewRecord, SiteStatus } from "@/lib/types";
+import type { OverviewData, OverviewRecord } from "@/lib/types";
 
 /** 行唯一键：同站点同模型不再折叠，不同分组/单位各占一行。 */
 const rowKeyOf = (row: OverviewRecord) =>
@@ -57,6 +59,7 @@ export function OverviewTable({
   modelOrder = {},
   siteHomepages,
   siteRanking,
+  sitePopularity,
 }: {
   data: OverviewData;
   /** AA 榜单匹配索引：给当前选中模型挂排名徽标；榜单未生成时缺省不显示 */
@@ -69,6 +72,8 @@ export function OverviewTable({
   siteHomepages?: SiteHomepages;
   /** 站点评分（服务端算好，见 lib/siteRanking）：行排序主键，缺省退回按价格排 */
   siteRanking?: SiteRanking;
+  /** 站点人气（服务端读好，见 lib/popularity）：站点列挂月访问量/群人数徽标，缺省不显示 */
+  sitePopularity?: SitePopularityMap;
 }) {
   const records = data.records;
   const router = useRouter();
@@ -153,12 +158,6 @@ export function OverviewTable({
     [active, rate, siteRanking],
   );
 
-  const attentionSites = useMemo(() => {
-    return Object.entries(data.collect_status ?? {})
-      .filter(([, status]) => status.status === "error" || status.status === "auth_required")
-      .map(([siteId, status]) => ({ siteId, ...status }) satisfies { siteId: string } & SiteStatus);
-  }, [data.collect_status]);
-
   // 每站首行的行键：站点综合分与公告都只在首行展示——同站点多分组行贴的是同一个分/同一份公告，
   // 逐行重复只会制造噪音
   const firstRowKeys = useMemo(() => {
@@ -199,6 +198,8 @@ export function OverviewTable({
         // 逐行重复是噪音（与公告列同口径）
         const score =
           siteRanking && firstRowKeys.has(rowKeyOf(row)) ? rowScore(siteRanking, row) : null;
+        // 人气徽标同口径：只挂每站首行，悬停看明细（月访问量/群人数/排名来自公开数据，见 TermTip）
+        const badge = firstRowKeys.has(rowKeyOf(row)) ? popularityBadge(sitePopularity?.[v]) : null;
         return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, maxWidth: "100%", flexWrap: "wrap" }}>
             <RiskLink href={site.homepage || row.source_url} variant="site" title={site.name}>
@@ -213,6 +214,11 @@ export function OverviewTable({
             {score && (
               <span className="mono" title={siteScoreTitle(score)} style={{ fontSize: 11, color: "var(--text-3)" }}>
                 {score.score.toFixed(1)}
+              </span>
+            )}
+            {badge && (
+              <span className="mono" title={badge.title} style={{ fontSize: 11, color: "var(--text-3)" }}>
+                {badge.text}
               </span>
             )}
             {showTag && (
@@ -354,25 +360,7 @@ export function OverviewTable({
 
   return (
     <>
-      {attentionSites.length > 0 && (
-        <div
-          className="alert alert-warn alert-band rise-in"
-          style={{ marginBottom: 24, display: "flex", flexWrap: "wrap", gap: "8px 18px", alignItems: "center" }}
-        >
-          <span style={{ fontSize: 13.5, fontWeight: 550 }}>需要关注的站点：</span>
-          {attentionSites.map((site) => {
-            const meta = statusMeta(site.status);
-            return (
-              <span key={site.siteId} title={site.error ?? undefined} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                <ToneTag tone={meta.tone}>{getSiteInfo(site.siteId).name || site.siteId}</ToneTag>
-                <span className="mono" style={{ color: "var(--text-2)", fontSize: 12.5 }}>
-                  {meta.label}
-                </span>
-              </span>
-            );
-          })}
-        </div>
-      )}
+      <CollectAlerts alerts={data.collect_alerts ?? []} />
       {models.length > 0 && <ModelPicker models={models} activeKey={active?.key} onSelect={setActiveModel} />}
       <div className="panel rise-in" style={{ overflow: "hidden" }}>
         <div

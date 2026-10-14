@@ -18,8 +18,8 @@ import {
 } from "@/lib/proxyGroups";
 import type { SettingsData, SiteConfig } from "@/lib/types";
 
-/** 七类采集任务的后台定时间隔（分钟），与后端 settings.schedule 默认值保持一致；0 = 关闭定时。 */
-const DEFAULT_SCHEDULE_MINUTES: Record<string, number> = { price: 60, status: 5, notice: 30, catalog: 1440, rankings: 1440, discovery: 1440, screenshot: 1440 };
+/** 八类采集任务的后台定时间隔（分钟），与后端 settings.schedule 默认值保持一致；0 = 关闭定时。 */
+const DEFAULT_SCHEDULE_MINUTES: Record<string, number> = { price: 60, status: 5, notice: 30, catalog: 1440, rankings: 1440, discovery: 1440, screenshot: 1440, popularity: 1440 };
 
 const SCHEDULE_ITEMS: { key: string; label: string; hint: string }[] = [
   { key: "price", label: "价格采集", hint: "定时去各站点看价格，有变化就记下来" },
@@ -29,6 +29,7 @@ const SCHEDULE_ITEMS: { key: string; label: string; hint: string }[] = [
   { key: "rankings", label: "模型榜单", hint: "定时更新第三方评测的模型智能指数榜单（默认 24 小时一次）" },
   { key: "discovery", label: "新站发现", hint: "定时更新站点清单与简介（秒级，不探测）；结果进「从新站发现导入」弹窗（默认 24 小时一次）" },
   { key: "screenshot", label: "站点截图", hint: "定时拍下各站点首页的样子，展示在站点详情页（默认 24 小时一次）" },
+  { key: "popularity", label: "站点人气", hint: "定时查看各站点的交流群、访问量与全网排名，展示在站点详情页与列表（默认 24 小时一次）" },
 ];
 
 /** 数据保留天数配置项：与后端 settings 的 retention_*_days 字段一一对应；价格/状态事件与公告永不清理。 */

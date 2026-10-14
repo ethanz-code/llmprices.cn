@@ -416,6 +416,17 @@ def screenshot_scan_job(config: MonitorConfig, store: Store) -> Callable[[], dic
     return _run
 
 
+def popularity_scan_job(config: MonitorConfig, store: Store) -> Callable[[], dict[str, Any]]:
+    """站点人气任务体：逐站采交流群链接/群人数与公开访问量、排名，落 documents.site_popularity。"""
+    from llm_price_monitor.popularity import scan_popularity
+    from llm_price_monitor.useragent import choose_user_agent
+
+    def _run() -> dict[str, Any]:
+        return scan_popularity(config, store, user_agent=choose_user_agent(config))
+
+    return _run
+
+
 def discovery_refresh_job(store: Store) -> Callable[[], dict[str, Any]]:
     """新站发现任务体：拉默认聚合源合并进候选池，只拿站点与简介，不探测（秒级）。"""
     def _run() -> dict[str, Any]:

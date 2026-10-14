@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
+from llm_price_monitor import egress
 from llm_price_monitor.store import Store
 from llm_price_monitor.useragent import DEFAULT_BROWSER_USER_AGENT
 
@@ -61,6 +62,10 @@ AUTH_INJECT_TARGETS = ("price", "status", "notice")
 # 注入值里可引用的凭证变量：续签换新后自动展开成新值
 ACCESS_TOKEN_VAR = "${access_token}"
 REFRESH_TOKEN_VAR = "${refresh_token}"
+# 请求头里可引用的出口 IP 变量：采集时展开为当前实际出口（代理）IP。
+# 会话绑定站的 X-Forwarded-For 必须等于请求对端 IP，而代理出口会漂移（节点切换），
+# 写死必然失效；用占位符每次采集现查，漂移自动跟随。
+EGRESS_IP_VAR = "${egress_ip}"
 
 # 站点级字段的默认值：与默认相同就不落库，读取时由 SiteSpec 默认值兜底
 SITE_FIELD_DEFAULTS: dict[str, Any] = {
@@ -168,9 +173,9 @@ def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[
             notes.append("已有站点级 auth_token，手写的 Authorization 一律以它为准移除")
     return config, notes
 
-# 七类采集任务的定时间隔（分钟），存 settings.schedule；0 = 关闭该项定时、只保留手动触发。
-# screenshot 是 headless 截站点首页，重活，默认一天一次
-DEFAULT_SCHEDULE_MINUTES = {"price": 60, "status": 5, "notice": 30, "catalog": 1440, "rankings": 1440, "discovery": 1440, "screenshot": 1440}
+# 八类采集任务的定时间隔（分钟），存 settings.schedule；0 = 关闭该项定时、只保留手动触发。
+# screenshot 是 headless 截站点首页、popularity 要逐个查外部数据源，都是重活，默认一天一次
+DEFAULT_SCHEDULE_MINUTES = {"price": 60, "status": 5, "notice": 30, "catalog": 1440, "rankings": 1440, "discovery": 1440, "screenshot": 1440, "popularity": 1440}
 SCHEDULE_KEYS = tuple(DEFAULT_SCHEDULE_MINUTES)
 
 
@@ -202,6 +207,10 @@ class SiteSpec:
     notice: dict[str, Any] = field(default_factory=dict)  # 公告地址：默认从 network.url 推导 /api/notice
     token_refresh: dict[str, Any] = field(default_factory=dict)  # 认证续签请求配置：url/method/params/headers/body/refresh_token
     auth_inject: dict[str, Any] = field(default_factory=dict)  # 凭证注入规则：{价格/状态/公告目标: {header, value}}
+    # 会话绑定站（站方校验「请求对端 IP == X-Forwarded-For」）：request_headers 里伪装的 XFF
+    # 是登录出口（代理）IP，采集器直连的国内出口与之必然不一致 → 401。true 时该站全部采集
+    # 域名跳过直连优先，强制与 XFF 同路走备用代理（egress 按域名登记）。
+    force_proxy: bool = False
 
 class AIResultCache(Protocol):
     """AI 抽取结果缓存后端：由存储层实现（document 表），文件缓存已退役。"""
@@ -579,7 +588,24 @@ def sites_from_raw(values: list[Any], *, models: tuple[ModelTarget, ...] = ()) -
         if placeholder:
             site_values["enabled"] = False
         sites.append(SiteSpec(**site_values))
+    _register_forced_proxy_hosts(sites)
     return tuple(sites)
+
+
+def _register_forced_proxy_hosts(sites: list[SiteSpec]) -> None:
+    """会话绑定站的采集域名登记进 egress：这些站请求必须与 XFF 同路（强制走备用代理）。"""
+    hosts: list[str] = []
+    for spec in sites:
+        if not spec.force_proxy:
+            continue
+        for endpoint in (spec.network, spec.status, spec.notice, *spec.networks):
+            url = endpoint.get("url") if isinstance(endpoint, dict) else None
+            if isinstance(url, str) and url.strip():
+                host = urlsplit(url).hostname
+                if host:
+                    hosts.append(host)
+    if hosts:
+        egress.register_forced_proxy_hosts(hosts)
 
 
 def config_from_raw(

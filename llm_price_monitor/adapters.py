@@ -19,9 +19,11 @@ import httpx
 
 from llm_price_monitor import tasklog
 from llm_price_monitor.ai import AIExtractionError, AIPriceExtractor
+from llm_price_monitor import egress
 from llm_price_monitor.config import (
     ACCESS_TOKEN_VAR,
     AIConfig,
+    EGRESS_IP_VAR,
     REFRESH_TOKEN_VAR,
     PriceMonitorError,
     SiteSpec,
@@ -66,6 +68,18 @@ def headers(spec: SiteSpec, user_agent: str) -> dict[str, str]:
         for key in [key for key in merged if key.casefold() == "user-agent"]:
             del merged[key]
         merged["user-agent"] = bound_ua
+    # ${egress_ip} → 当前实际出口（代理）IP：会话绑定站的 XFF 必须与请求对端一致，
+    # 代理节点漂移时写死的 IP 立即失效；查询失败保留原文并留痕（请求会 401，错误可见）。
+    for key, value in list(merged.items()):
+        if isinstance(value, str) and EGRESS_IP_VAR in value:
+            ip = egress.current_egress_ip()
+            if ip:
+                merged[key] = value.replace(EGRESS_IP_VAR, ip)
+            else:
+                tasklog.emit(
+                    f"[{spec.id}] 出口 IP 查询失败，{EGRESS_IP_VAR} 保留配置原值（会话绑定站可能指纹失配）",
+                    "warn",
+                )
     return merged
 
 
@@ -1707,6 +1721,16 @@ class _BrowserPageResponse:
         return None
 
 
+def _priced_record_count(records: list[PriceRecord]) -> int:
+    """真正拿到可用价的记录数（confirmed/candidate）；rule_only/unavailable 都是无价占位。
+
+    AI 别名扩展在「裸名与带前缀变体并存」的站上会把精确命中撞成多命中歧义（宁缺勿猜），
+    带别名的结果反而可能比不带别名的直采更差（bytonsec 实锤：直采的 16 条确认价被
+    rule_only 占位挤掉整轮无价）。两份结果按可用价条数取优，别名只在真多解析出价时才生效。
+    """
+    return sum(1 for record in records if record.price_status in {"confirmed", "candidate"})
+
+
 class NetworkAdapter:
     def collect(
         self,
@@ -1835,7 +1859,9 @@ class NetworkAdapter:
                         resolved.metadata = merged
                     if aliases:
                         tasklog.emit(f"[{spec.id}] AI 模型名对照：命中 {len(aliases)} 个标准名")
-                    if any(record.price_status != "unavailable" for record in resolved_records):
+                    # 别名把精确命中撞成多命中歧义时结果会比直采更差（见 _priced_record_count）：
+                    # 按可用价条数取优，别名结果里的 rule_only 占位不算"解析成功"
+                    if _priced_record_count(resolved_records) >= _priced_record_count(direct_records):
                         return resolved_records
                 except AIExtractionError as exc:
                     # 回落确定性直采定价是既定设计，但回落原因必须留痕——

@@ -83,7 +83,12 @@ def _stored_tokens(store: Any, site_id: str) -> tuple[str, str] | None:
 # 站方响应里"凭据已作废、换再多也不会好"的判别词（大小写不敏感）。命中即触发熔断：
 # 这类失效不是时序问题，继续每轮打续签接口只会反复撞墙（且部分站方会把反复使用已作废
 # 凭据判为滥用，连带吊销整个会话家族），必须等人工重新登录接管。
-REFRESH_DEAD_MARKERS = ("refresh_token_invalid", "invalid refresh token", "token revoked")
+REFRESH_DEAD_MARKERS = (
+    "refresh_token_invalid",
+    "invalid refresh token",
+    "token revoked",
+    "session_binding_mismatch",
+)
 # 熔断标记落库用的键：token_refresh.dead_since 有值 = 链已判死，采集侧跳过续签。
 # 重新接管（更新 refresh_token / 重建 token_refresh）时管理台保存会换掉该对象，标记自然清除。
 REFRESH_DEAD_FIELD = "dead_since"
@@ -133,7 +138,9 @@ def _mark_refresh_dead(store: Any, site_id: str, reason: str) -> None:
 
 
 def _is_refresh_dead_response(response: httpx.Response) -> bool:
-    """站方是否明确说了"refresh_token 已作废"：优先看 body 里的 reason/message，401 状态兜底看语义。"""
+    """站方是否明确说了"续签救不了"：凭据作废，或会话指纹失配（2btocken 型——
+    绑定登录出口 IP，出口漂移即失配，且一次失配连带吊销会话家族，重试只会更糟）。
+    401/403 状态 + 响应体语义判定。"""
     if response.status_code not in {401, 403}:
         return False
     try:
@@ -241,10 +248,17 @@ def refresh_site_token(spec: SiteSpec, client: httpx.Client, timeout: float, use
             kwargs["headers"] = {**extra_headers, "content-type": "application/json"}
     response = client.request(method, url, **kwargs)
     if response.status_code in {401, 403}:
+        detail = _revoked_detail(response)
+        if "session_binding" in detail.casefold() or "fingerprint" in detail.casefold():
+            raise RefreshTokenRevokedError(
+                f"续签接口返回 HTTP {response.status_code}：会话指纹失配"
+                f"（{detail}）——站方校验登录出口 IP 与请求出口一致，采集出口漂移即失配且连带吊销会话；"
+                f"请重新登录接管，并保持采集出口与登录时同一节点（force_proxy + 固定 Clash 节点）"
+            )
         if _is_refresh_dead_response(response):
             raise RefreshTokenRevokedError(
                 f"续签接口返回 HTTP {response.status_code}：refresh_token 已被站方作废"
-                f"（{_revoked_detail(response)}），续签无法自愈，需重新登录接管"
+                f"（{detail}），续签无法自愈，需重新登录接管"
             )
         raise PriceMonitorError(f"续签接口返回 HTTP {response.status_code}，refresh_token 可能已失效")
     response.raise_for_status()

@@ -194,9 +194,10 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         """
         # 站点截图与首页覆盖表是公开页面的公共内容：截图元数据、单张图片、站名链接用的
         # 首页地址都对访客开放（图片走浏览器 <img> 直链、链接地址进服务端渲染，生产封锁
-        # 下匿名请求拿不到内网令牌，不放行这些会 401/断图）
+        # 下匿名请求拿不到内网令牌，不放行这些会 401/断图）；站点人气同理，
+        # 交流群/访问量/排名是站点详情页要展示的公开数据
         public_site_meta = request.method == "GET" and (
-            request.url.path in {"/api/sites/screenshots", "/api/sites/homepages"}
+            request.url.path in {"/api/sites/screenshots", "/api/sites/homepages", "/api/sites/popularity"}
             or request.url.path.endswith("/screenshot")
         )
         needs_admin = (

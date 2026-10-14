@@ -121,7 +121,7 @@ def _config(tmp_path: Path) -> Path:
     config_path = tmp_path / "config.json"
     config_path.write_text(
         '{"settings": {"schedule": {"price": 0, "status": 0, "notice": 0, "catalog": 0, '
-        '"rankings": 0, "discovery": 0, "screenshot": 0}, "monitor_models": ["demo-model"]}, '
+        '"rankings": 0, "discovery": 0, "screenshot": 0, "popularity": 0}, "monitor_models": ["demo-model"]}, '
         '"ai": {}, "sites": [{"id": "demo", "network": {"url": "https://demo.test/api/pricing"}}]}',
         encoding="utf-8",
     )

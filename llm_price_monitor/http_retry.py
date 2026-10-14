@@ -5,8 +5,8 @@
 价格/状态/公告三类采集与其适配器无感知。重试只对幂等的 GET/HEAD 生效：
 token 续签、AI 兜底等 POST 不盲重试，避免续签凭证被消费两次。
 
-兜底代理地址按优先级取一处：标准代理环境变量（HTTPS_PROXY 等）优先，其次是
-系统设置里的 settings.fallback_proxy；配了哪个语义都一样——采集始终「直连优先、
+兜底代理地址按优先级取一处：系统设置里的 settings.fallback_proxy（面板「采集出口」）
+优先，其次标准代理环境变量（HTTPS_PROXY 等）；配了哪个语义都一样——采集始终「直连优先、
 被墙兜底」：直连失败（连接类错误或 403/451）的域名记入失败记忆（egress.py），
 TTL 内直接走代理，TTL 过期放行一次直连重探。直连腿统一压短建连超时（国内站
 建连是亚秒级，8 秒还建不起来基本就是黑洞式被墙），发现直连不通不必耗满整个
@@ -15,7 +15,6 @@ TTL 内直接走代理，TTL 过期放行一次直连重探。直连腿统一压
 """
 from __future__ import annotations
 
-import os
 import time
 from urllib.parse import urlsplit
 
@@ -28,9 +27,6 @@ from llm_price_monitor import egress, proxy_switch, tasklog
 RETRY_ATTEMPTS = 3
 # 指数退避间隔（秒）；第 N 次重试取 RETRY_BACKOFF[min(N-1, 末位)]，超长自动取末位
 RETRY_BACKOFF: tuple[float, ...] = (1.0, 3.0, 6.0)
-
-# 代理环境变量，按 https > all > http 取第一个非空值（大小写都认，与 httpx 约定一致）
-_PROXY_ENV_KEYS = ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy")
 
 # 直连返回这些状态码视为「出口 IP 被目标站拒收」，同样切备用代理重试
 _FALLBACK_STATUS_CODES = frozenset({403, 451})
@@ -51,15 +47,6 @@ def _is_waf_block(response: httpx.Response) -> bool:
 DIRECT_CONNECT_TIMEOUT_SECONDS = 8.0
 # 本地构造的请求错误 / 连接池耗尽 / 无效 URL 与出口线路无关，切代理救不了
 _NO_FALLBACK_ERRORS = (httpx.LocalProtocolError, httpx.PoolTimeout, httpx.UnsupportedProtocol)
-
-
-def _env_proxy() -> str | None:
-    """采集目标全是外部站点，读标准代理环境变量即可，不处理 NO_PROXY 例外。"""
-    for key in _PROXY_ENV_KEYS:
-        value = os.environ.get(key, "").strip()
-        if value:
-            return value
-    return None
 
 
 class _DirectConnectCapTransport(httpx.BaseTransport):
@@ -191,9 +178,11 @@ def build_client(
             follow_redirects=follow_redirects,
             transport=transport,
         )
-    # 环境变量代理与面板备用代理同走兜底位，环境变量优先：本机 shell 常驻代理时
-    # 不吞掉直连优先逻辑，国内可直连站点不会被代理出口的抖动连累
-    fallback_proxy = _env_proxy() or egress.fallback_proxy()
+    # 面板备用代理优先、环境变量兜底：面板的「备用代理 + 节点自动切换」是同一条
+    # 出口链路的整体配置，环境变量只带得走代理地址、切换功能对它无从生效；
+    # 两处都不配则纯直连。直连优先的语义与顺序无关，本机 shell 常驻代理时
+    # 国内可直连站点不会被代理出口的抖动连累
+    fallback_proxy = egress.effective_proxy()
     if not fallback_proxy:
         return httpx.Client(
             timeout=timeout,

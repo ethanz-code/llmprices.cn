@@ -16,6 +16,37 @@ from llm_price_monitor.webapi import auth
 from llm_price_monitor.webapi.deps import catalog_models, is_admin, load_config, require_catalog_rate
 
 
+# 采集异常状态：只有这两种会让页面上的价格"停在上一轮"，需要主动告诉访客；
+# 其余状态（ok/rule_only/candidate/unavailable/disabled）不构成"价格没更新"，不进提示清单
+ALERT_STATUSES = ("error", "auth_required")
+
+
+def collect_alerts(store: Store, site_ids: set[str]) -> list[dict[str, Any]]:
+    """本轮价格采集异常的站点清单，只保留当前展示中的站点。
+
+    公开接口下发，所以**只带站点 id、状态与检查时间**：原始 error 文案里有内网地址、
+    认证细节甚至 token 提示，只留给管理台的「采集异常」卡片，不随公开响应外泄。
+    站点只挑「表里有价可看、但这轮没更新」的——没上表的站点没有可对照的价格，
+    挂出来只会刷屏成噪音。顺序按严重度（先采集失败、后需认证）再按站点 id，保证渲染稳定。
+    """
+    status_doc = store.get_document("collect_status")
+    if not isinstance(status_doc, dict):
+        return []
+    alerts = [
+        {
+            "site_id": site_id,
+            "status": str(entry.get("status")),
+            "checked_at": entry.get("checked_at"),
+        }
+        for site_id, entry in status_doc.items()
+        if site_id in site_ids
+        and isinstance(entry, dict)
+        and entry.get("status") in ALERT_STATUSES
+    ]
+    alerts.sort(key=lambda alert: (ALERT_STATUSES.index(alert["status"]), alert["site_id"]))
+    return alerts
+
+
 def site_config_flags(sites: Iterable[Any]) -> dict[str, dict[str, bool]]:
     """各站采集配置的布尔标志：前端「站点综合分·配置完整」一项的输入，逐项表示是否已配置。
 
@@ -39,8 +70,8 @@ def build_router(store: Store) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/overview")
-    def overview(request: Request, site_id: str | None = None) -> dict[str, Any]:
-        """首页数据：最新快照逐条附加官方价折扣；collect_status 仅管理员会话可见。
+    def overview(site_id: str | None = None) -> dict[str, Any]:
+        """首页数据：最新快照逐条附加官方价折扣；采集异常站点清单对访客同样公开。
 
         site_id 可选：只保留该站的记录（站点检测详情页用它取本站在售监测集，省全量序列化）。"""
         report = store.get_document("catalog")
@@ -75,9 +106,11 @@ def build_router(store: Store) -> APIRouter:
             ):
                 continue
             records.append({**row, "discount": discount})
+        # 本轮表里真正展示的站点：公告与采集异常清单都只认这一批
+        shown_sites = {str(row.get("site_id")) for row in records if isinstance(row, dict)}
         # 各站点最新公告（每站一条，原样带给前端做单行摘要；没采集到公告的站点无键）
         notices: dict[str, dict[str, Any]] = {}
-        for site_id in {str(row.get("site_id")) for row in records if isinstance(row, dict)}:
+        for site_id in shown_sites:
             notice = store.latest_notice(site_id)
             if isinstance(notice, dict) and notice.get("content"):
                 notices[site_id] = {"content": str(notice["content"]), "captured_at": notice.get("captured_at")}
@@ -106,7 +139,8 @@ def build_router(store: Store) -> APIRouter:
                 **live_rate,
                 "enabled": bool(models),
             },
-            "collect_status": (store.get_document("collect_status") or {}) if is_admin(store, request) else {},
+            # 本轮采集异常的站点（脱敏，公开）：前端在价格表上方提示「这些站的价格可能不是最新的」
+            "collect_alerts": collect_alerts(store, shown_sites),
         }
 
     @router.get("/api/latest")

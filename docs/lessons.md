@@ -7,8 +7,9 @@
 | 途中见到这些词 | 先看 |
 | --- | --- |
 | 401 / 403 / WAF / Cookie / Cloudflare / 认证 / 登录态 / 续签 / refresh_token 失效 | 本页 §1 + Serena 记忆 `dom_url_auth_constraint` |
+| 人气 / 访问量 / 交流群 / 群人数 / 群号 / Tranco / SimilarWeb / t.me | 本页 §1 |
 | 访客统计 / visit_logs / IP 全一样 / XFF / client_ip | 本页 §1 |
-| 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 | 本页 §1 |
+| 代理 / 出口 / Clash / 境外站 / 超时 / TLS 掐断 / 拉黑 / 风控拦截页 / 环境变量代理 / 自动切换没生效 | 本页 §1 |
 | AI 输出截断 / max_tokens / 助手 token 爆炸 | 本页 §2 |
 | 模型下架 / 下线公告 / 模型池清理 / 官方目录残留旧模型 | 本页 §2 + §3 |
 | 价格 / 基准价 / 充值汇率 / 币种 / CNY / USD / 官方目录 / 排序 / 变更事件 / 假变更 / ¥0 / 假免费 / 最低价 / 旧价不更新 / 异常卡片刷屏 / 站点行感叹号 / 健康标记误报 / 价格异常作废循环 / 张冠李戴 / 别名歧义 / 双列价格 / 删除线 / 官方价X% / display_prices / 自定义计费 / 高于官价 / 折扣>100% / 比官价还贵 / group_prices / 逐分组显式价 / 供应报价 | 本页 §3 |
@@ -60,6 +61,8 @@
 | 自动换节点的三种静默失效：mihomo 默认**不开** external-controller（配置里不写就永远连不上）、控制口绑 127.0.0.1 时 api 容器连不进来、组名随手填（Clash Verge 存多份订阅，只有当前那份的组存在，其余 GET/PUT 静默 404 只剩一条 warn） | 容器模板显式 `external-controller: 0.0.0.0:9090` + `secret`（端口不发布，容器网络外摸不到）；组名必须填当前内核里真实存在的组（先 `GET /proxies` 核对）；Clash Verge 的 external controller 改的是**全局选择**——想让采集与自用上网互不干扰，就加一个只监听 `127.0.0.1` 的 listener 绑采集专用组（组用 `include-all + filter` 按关键词自动筛）；mihomo 的 url-test 组接受手动选择并记成 `fixed`，节点活着就一直生效、不会被测速覆盖 | pricing.md；docker-compose.md「采集兜底代理」 |
 | Clash Verge 的「全局扩展组/规则/代理」其实**按订阅档案各自绑定**（`profiles.yaml` 里每个档案 `option.groups/rules/proxies` 指向自己的文件），改了不在当前档案链里的文件等于白改——listener 生效、组缺失就是两边文件没走同一条链；跨档案生效只有全局 Merge/Script，且 Merge 深合并对数组是**整组替换**（往里塞组会清掉订阅全部组） | 跨档案要加的组放全局 `Script.js`（main 里判断同名后 push，每份订阅都生效、切订阅不丢）；listener 引用不存在的组不会弄挂内核，只是那条口不工作——排「专线不通」先 `GET /proxies` 核对组在不在 | Serena 记忆 `proxy-switch-endpoint-facts` |
 | 自动换节点两处静默失效叠加（2026-10-12 排查 cun.ai 时实锤）：settings 里组名是旧值「宝可梦」（当前内核无此组 → 切换 PUT/GET 全 404），且代理腿收到 403 **风控拦截页**时根本不在切换触发条件里（此前只有连接失败才换）——功能「配了」却从未生效过，全程只有任务日志一条 warn | ① 组名以当前内核 `GET /proxies` 实存为准（现已校回「采集出口」、切换范围留空；该组只被 7899 专线口引用，浏览流量与其他组的选点互不影响）；② 代理腿 403/451 且是风控页（`cf-mitigated` 头或 HTML content-type）才换节点，API 层 403 JSON（认证/权限错误）原样交回不换；③ 验证专线隔离用 `/connections` 看 chains（实测 7899→采集出口、7897→良心云，两口完全独立） | http_retry.py `_via_proxy`/`_is_waf_block`；proxy_switch.py |
+| 自动换节点第三种静默失效：兜底代理地址被 **shell 环境变量遮蔽**（2026-10-14 cun.ai 复查实锤）。旧逻辑环境变量（https_proxy 等）优先于面板 fallback_proxy——本机 .zshrc 常驻 `https_proxy=127.0.0.1:7897`，采集兜底流量实际走 7897 的规则路由（良心云组），而节点自动切换改的是面板配置那条链路上的「采集出口」组 → 切换照常执行、采集流量纹丝不动，mihomo 日志实证 cun.ai 一直 `match Match using 良心云[...]` | 面板「备用代理 + 控制口 + 切换组」是同一条出口链路的整体，必须整体赢：`egress.effective_proxy()` 统一「面板 fallback_proxy 优先、环境变量兜底」，http_retry 与 current_egress_ip（会话绑定站 XFF）共用；排这类问题用 mihomo `/logs` 流式抓一段，看采集域名实际 `using` 哪个组——`/connections` 只看得到瞬时链路，日志流才是轮次级证据（提交 ab71bc4） | egress.py `effective_proxy`；http_retry.py `build_client` |
+| 「站点人气」数据源实测（2026-10-14）：月访问量没有覆盖小站的免费源——SimilarWeb 公共端点 `data.similarweb.com` 被 CloudFront 直接 403（直连与专线代理都拒），Cloudflare Radar 域名榜只给排名档位（68 个监控站全部 `>200000` 无数值），hypestat 只覆盖大站（302.ai 134.7K/月，小站整页无数据），Tranco 只有排名（19/68 站有）且间隔 1.1s 就偶发 429；QQ 群人数无公开接口（join.html 跳 SPA），只有 Telegram 公开群/频道能从 t.me 预览页拿到真实人数（`tgme_page_extra` 如 "1 183 members, 53 online"，私邀 `+hash`/joinchat 无数据） | 「月访问量」按能力分层：有第三方估算就存数字并标来源，没有退回 Tranco 排名当热度信号，都没有就不显示（不编数字）；群链接主源是站点 `/api/status` 的 `chat_link` + 全载荷扫描 + 首页 HTML，**已存公告正文（notice_records）是群号高产来源**（68 站里 14 站命中）——公告里的裸 QQ 群号必须带上下文词（QQ群/交流群/群号）才收，无公开加群网页只存群号文本；t.me 保留路径段（joinchat/s/share）不是用户名，抓预览页前先排除 | popularity.py；docs/sites.md「选站口径」 |
 
 ## 2. AI 抽取与助手
 
@@ -175,7 +178,7 @@
 - 提交信息中文讲清"改了什么、为什么"，不写 `fix`/`update` 空话。
 - 测试用 HTTPX mock transport / 进程内替身，不请求真实站点；改口径前先跑全量。
 - 测试里经 create_app 放行任何 >0 的调度间隔（含按键回填补出来的新键）会被调度线程首轮 `_run_due` 真提交并执行——真实外网请求（discovery 实测打了 zuiquanapi 4339 条，还泄漏进后续测试的断言）；这类场景直测纯函数（如 `_ensure_schedule_defaults`），别拉起整个应用。
-- 新增一类定时任务（settings.schedule 补新键）上线即跑一轮：_ensure_schedule_defaults 回填后 schedule_state 里没有该键，首轮 _run_due 视为到期当场提交——dev 热加载站点截图代码时全站真拍了一轮（2026-10-12），随后代码再热重载又把它打断（「服务重启，任务中断」，已知坑）。上线新调度项前想清楚首轮全量采集的影响；被打断的截图任务直接重跑即可，无副作用。
+- 新增一类定时任务（settings.schedule 补新键）上线即跑一轮：_ensure_schedule_defaults 回填后 schedule_state 里没有该键，首轮 _run_due 视为到期当场提交——dev 热加载站点截图代码时全站真拍了一轮（2026-10-12），随后代码再热重载又把它打断（「服务重启，任务中断」，已知坑）。上线新调度项前想清楚首轮全量采集的影响；被打断的截图任务直接重跑即可，无副作用。站点人气同款（2026-10-14）：热加载后首轮当场提交、再改码又被打断；注意被打断的任务 `schedule_state` 已记提交时间，定时要等一个完整间隔才会再来，验证/补数据直接手动跑一轮任务体。
 - 文案说人话、给下一步动作，不出现"接口/字段/渲染"这类实现词；提示/告示类别写成书面腔（"建议…""请自行判断""不构成…"），≤ 3 句、每句给动作或判断，写法样本见 `web/lib/copy.ts` 的 `risk` 块（2026-10-13 用户两轮纠正后定稿）。
 - 并行会话同仓干活时，共享大文件（如 globals.css）的未提交改动会被对方的主题提交卷走：主题无关的布局改动改完即小步提交，别攒。
 - 密钥回显方案终局是明文（2026-10-08）：设置接口 GET/PUT 直接回明文，前端 SecretInput 普通 password+眼睛本地显隐。此前的掩码/reveal/保长掩码机制全部拆除——给单管理员自托管后台加「完整密钥不出后端」这类安全硬化前先过问用户，交互摩擦会把它顶回来（连续三轮返工：掩码→按需 reveal→保长掩码→明文）。仍然有效的一条：新加管理类 GET 端点必须同步加进 app.py 的 admin_get_paths 白名单，漏加就是匿名可读。

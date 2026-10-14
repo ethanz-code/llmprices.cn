@@ -1,4 +1,4 @@
-"""统一后台调度器：价格 / 渠道状态 / 站点公告 / 厂商定价 / 模型榜单 / 新站发现 / 站点截图七项定时采集。
+"""统一后台调度器：价格 / 渠道状态 / 站点公告 / 厂商定价 / 模型榜单 / 新站发现 / 站点截图 / 站点人气八项定时采集。
 
 间隔读自设置文档 settings.schedule（分钟，0 = 关闭该项定时），常驻线程每
 CHECK_INTERVAL_SECONDS 检查一轮：改配置下一轮即生效；到点且对应任务无运行中
@@ -19,6 +19,7 @@ from llm_price_monitor.webapi.jobs import (
     catalog_refresh_job,
     discovery_refresh_job,
     notice_scan_job,
+    popularity_scan_job,
     price_scan_job,
     rankings_refresh_job,
     screenshot_scan_job,
@@ -44,6 +45,7 @@ _KIND_BY_KEY = {
     "rankings": "rankings-refresh",
     "discovery": "discovery-refresh",
     "screenshot": "collect-screenshot",
+    "popularity": "collect-popularity",
 }
 
 
@@ -60,6 +62,8 @@ def _job_for(key: str, store: Store):
         return discovery_refresh_job(store)
     if key == "screenshot":
         return screenshot_scan_job(load_config(store), store)
+    if key == "popularity":
+        return popularity_scan_job(load_config(store), store)
     return catalog_refresh_job(store)
 
 

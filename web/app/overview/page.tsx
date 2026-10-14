@@ -1,15 +1,16 @@
-import { cookies } from "next/headers";
 import { apiGet } from "@/lib/api";
 import { buildRankingIndex, type RankingHit } from "@/lib/rankings";
 import { buildSiteRanking, type SiteRanking } from "@/lib/siteRanking";
 import { loadStatusViews } from "@/lib/statusData";
 import { loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
+import { loadSitePopularity, type SitePopularityMap } from "@/lib/popularity";
 import { catalogModelOrderIndex, type ModelOrderEntry } from "@/lib/modelOrder";
 import type { CatalogData, OverviewData, RankingsData } from "@/lib/types";
-import { alerts } from "@/lib/copy";
+import { alerts, risk } from "@/lib/copy";
 import { formatCount } from "@/lib/format";
 import { PageDigest } from "@/components/PageDigest";
 import { OverviewTable } from "@/components/OverviewTable";
+import { RiskNotice } from "@/components/RiskNotice";
 import { SiteAlert } from "@/components/SiteAlert";
 import { pageMetadata } from "@/lib/seo";
 
@@ -21,15 +22,11 @@ export const metadata = pageMetadata(
   "/overview",
 );
 
-// collect_status（需要关注的站点）仅管理员可见：服务端请求必须带上会话 cookie。
-// 因此本页取数带会话 cookie 且保持 no-store——管理员与匿名访客的取数结果不能共享
-const SESSION_COOKIE = "ppm_session";
-
 // 本页只取「列表本身」：价格行 + 排序/徽标索引。渠道点阵不再随列表下发（整轮 40MB+），
 // 改由每行的懒加载组件进入视口后按需向后端要（见 app/api/channel-dots）。
+// 取数不带会话 cookie：/api/overview 对管理员与访客返回同一份数据（采集异常清单公开脱敏下发），
+// 页面不随登录态分叉。
 export default async function OverviewPage() {
-  const session = (await cookies()).get(SESSION_COOKIE)?.value;
-  const headers = session ? { Cookie: `${SESSION_COOKIE}=${session}` } : undefined;
   let data: OverviewData | null = null;
   // 站点综合分：服务端算好（各模型内的价格 + 站点级渠道稳定/配置完整/公告新鲜），只把评分下发给表，
   // 不把渠道原始数据塞进列表（点阵仍是逐行懒加载）
@@ -41,22 +38,26 @@ export default async function OverviewPage() {
   let modelOrder: Record<string, ModelOrderEntry> = {};
   // 站点首页覆盖表：站名外链用；拉取失败退回内置映射/来源域名兜底（loadSiteHomepages 自带兜底）
   let siteHomepages: SiteHomepages = {};
+  // 站点人气：站点列的月访问量/群人数徽标用；拉取失败整体不挂徽标（loadSitePopularity 自带兜底）
+  let sitePopularity: SitePopularityMap = {};
   let error: string | null = null;
   try {
     // 在售监测集与站点综合分共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求；
     // 渠道视图（每站可用率/成功率）SWR 缓存，只服务排序，失败只让「渠道稳定」一项取中性分
-    const overviewPromise = apiGet<OverviewData>("/api/overview", headers);
-    const [overview, rankings, catalog, homepages, statusViews] = await Promise.all([
+    const overviewPromise = apiGet<OverviewData>("/api/overview");
+    const [overview, rankings, catalog, homepages, statusViews, popularity] = await Promise.all([
       overviewPromise,
       apiGet<RankingsData>("/api/rankings").catch(() => null),
       apiGet<CatalogData>("/api/catalog").catch(() => null),
       loadSiteHomepages(),
-      loadStatusViews(headers, overviewPromise).catch(() => null),
+      loadStatusViews(undefined, overviewPromise).catch(() => null),
+      loadSitePopularity(),
     ]);
     data = overview;
     rankingsIndex = buildRankingIndex(rankings);
     modelOrder = catalogModelOrderIndex(catalog?.models ?? {});
     siteHomepages = homepages;
+    sitePopularity = popularity;
     siteRanking = buildSiteRanking({
       records: overview.records,
       rate: overview.catalog.usd_cny_rate ?? null,
@@ -84,6 +85,14 @@ export default async function OverviewPage() {
           ]}
         />
       )}
+      {/* 风险提示只放这一页（用户 2026-10-13 定）：试水建议 + 榜单口径 + 消费免责，表前一段说清 */}
+      {data && (
+        <RiskNotice title={risk.title}>
+          {risk.lines.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </RiskNotice>
+      )}
       {data && (
         <OverviewTable
           data={data}
@@ -91,6 +100,7 @@ export default async function OverviewPage() {
           modelOrder={modelOrder}
           siteHomepages={siteHomepages}
           siteRanking={siteRanking}
+          sitePopularity={sitePopularity}
         />
       )}
     </div>

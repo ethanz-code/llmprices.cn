@@ -178,6 +178,14 @@ def build_router(store: Store) -> APIRouter:
         config = config_from_store(store)
         return {"homepages": {site.id: site.homepage for site in config.sites if site.homepage}}
 
+    @router.get("/api/sites/popularity")
+    def site_popularity() -> dict[str, Any]:
+        """站点人气（交流群链接/群人数、月访问量估算、全网排名）：站点详情页与总览页展示用。"""
+        from llm_price_monitor.popularity import POPULARITY_DOC
+
+        doc = store.get_document(POPULARITY_DOC) or {}
+        return {"popularity": {key: value for key, value in doc.items() if isinstance(value, dict)}}
+
     @router.get("/api/sites/{site_id}/screenshot")
     def site_screenshot(site_id: str) -> FileResponse:
         """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。"""
@@ -205,6 +213,9 @@ def build_router(store: Store) -> APIRouter:
             from llm_price_monitor.screenshot import remove_screenshot
 
             remove_screenshot(store, site_id)
+            from llm_price_monitor.popularity import remove_popularity
+
+            remove_popularity(store, site_id)
         return {"deleted": site_id, "purged": purge}
 
     return router

@@ -49,7 +49,7 @@ class SiteStoreMixin(StoreBase):
                 conn.execute("DELETE FROM latest WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
                 conn.execute("DELETE FROM documents WHERE name = ?", (f"status_ref:{site_id}",))
                 # collect_status 与 site_collect_health 都是 site_id → 状态 的文档，删站点时同步摘除
-                for doc_name in ("collect_status", "site_collect_health"):
+                for doc_name in ("collect_status", "site_collect_health", "site_popularity"):
                     row = conn.execute("SELECT content FROM documents WHERE name = ?", (doc_name,)).fetchone()
                     if row:
                         merged = {k: v for k, v in (json.loads(row[0]) or {}).items() if k != site_id}
@@ -74,7 +74,7 @@ class SiteStoreMixin(StoreBase):
                 )
                 conn.execute("UPDATE documents SET name = ? WHERE name = ?", (f"status_ref:{new_id}", f"status_ref:{old_id}"))
                 # collect_status 与 site_collect_health 都是 site_id → 状态 的文档，改名同步搬迁（与 delete_site 对齐）
-                for doc_name in ("collect_status", "site_collect_health", "site_screenshots"):
+                for doc_name in ("collect_status", "site_collect_health", "site_screenshots", "site_popularity"):
                     row = conn.execute("SELECT content FROM documents WHERE name = ?", (doc_name,)).fetchone()
                     if row:
                         merged = json.loads(row[0]) or {}

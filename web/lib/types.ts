@@ -59,7 +59,8 @@ interface CatalogMeta {
 export interface OverviewData {
   records: OverviewRecord[];
   catalog: CatalogMeta;
-  collect_status?: Record<string, SiteStatus>;
+  /** 本轮价格采集异常的站点（公开下发，只含站点与状态）：价格表上方的提示条用它 */
+  collect_alerts?: CollectAlert[];
   /** 各站点最新公告（每站一条；没采集到公告的站点无键） */
   notices?: Record<string, { content: string; captured_at?: number | null }>;
   /** 各站点配置信息完整度（0–3）：监控模型、认证凭证、附加采集地址各 1 分；兼容用途，站点综合分走 site_flags */
@@ -86,10 +87,13 @@ export interface SiteFlags {
   enabled: boolean;
 }
 
-/** 单站点最近一次采集状态（后端 documents.collect_status，与 run_once/site_status_from_records 对齐）。 */
-export interface SiteStatus {
-  status: "ok" | "inferred" | "auth_required" | "no_data" | "unavailable" | "error" | "disabled";
-  error: string | null;
+/** 本轮价格采集异常的站点（后端 /api/overview 的 collect_alerts）。
+ *  后端库里那份逐站状态文档带原始错误文案，公开响应只透出站点与状态两类信息。 */
+export interface CollectAlert {
+  site_id: string;
+  /** error = 本轮没抓到价，价格停在上一轮；auth_required = 需要登录授权才拿得到价 */
+  status: "error" | "auth_required";
+  /** 本轮检查时间（epoch 秒），没有就为 null */
   checked_at: number | null;
 }
 

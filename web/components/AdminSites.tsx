@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { toast, Btn, Check, Empty, Modal, Switch, Skel, LoadingRows } from "./ui";
-import { IconActivity, IconMegaphone, IconPercent, IconTag } from "./icons";
+import { IconActivity, IconMegaphone, IconPercent, IconTag, IconUsers } from "./icons";
 import { DajuSit } from "./DajuArt";
 import { DataTable, type DColumn } from "./DataTable";
 import { apiSend } from "@/lib/api";
@@ -17,6 +17,7 @@ import { errorText } from "@/lib/api";
 import { SiteModal } from "./sites/SiteModal";
 import { DeleteSitesModal, SiteHealthTip, SitesGuide } from "./sites/SitesExtras";
 import { ImportSitesModal, downloadSitesExport, readSitesExportFile } from "./sites/SitesTransfer";
+import { loadSitePopularity, popularityTip, type SitePopularityMap } from "@/lib/popularity";
 import type { SiteCollectHealth, SiteConfig, SitesData } from "@/lib/types";
 
 /** 新建站点用的默认字段模板；认证等高级字段留空，需要时在高级配置 JSON 里补充。 */
@@ -44,6 +45,8 @@ function ratioUrlText(row: SiteConfig): string {
 export function AdminSites() {
   const [sites, setSites] = useState<SiteConfig[] | null>(null);
   const [siteHealth, setSiteHealth] = useState<Record<string, SiteCollectHealth>>({});
+  // 站点人气（交流群/访问量/排名）：选站参考，公开接口拉取，失败不挂图标
+  const [popularity, setPopularity] = useState<SitePopularityMap>({});
   const [editing, setEditing] = useState<{ config: SiteConfig; isNew: boolean } | null>(null);
   const [deleting, setDeleting] = useState<string[] | null>(null);
   // 导入流程：非 null 时展示导入确认弹窗，内容是文件里解析出的站点
@@ -151,6 +154,11 @@ export function AdminSites() {
     reloadSites();
   }, [reloadSites]);
 
+  // 人气数据与站点列表相互独立（一个是采集文档、一个是配置），各自拉取互不阻塞
+  useEffect(() => {
+    loadSitePopularity().then(setPopularity);
+  }, []);
+
   async function toggleSite(site: SiteConfig, next: boolean) {
     try {
       await apiSend(`/api/sites/${encodeURIComponent(site.id)}`, "PUT", { config: { ...site, enabled: next } });
@@ -220,6 +228,10 @@ export function AdminSites() {
           const ratio = ratioUrlText(row);
           if (ratio) extraMarks.push({ label: "倍率", tip: `倍率接口：${ratio}`, icon: <IconPercent size={13} /> });
         }
+        // 人气图标：有交流群/访问量/排名的站才挂，悬停看明细——选站时「有群且人多」一眼可查
+        const popularityInfo = popularity[row.id];
+        const popularityText = popularityTip(popularityInfo);
+        if (popularityText) extraMarks.push({ label: "人气", tip: popularityText, icon: <IconUsers size={13} /> });
         const nameNode = (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <span className="mono" style={{ fontWeight: 550 }}>

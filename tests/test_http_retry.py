@@ -113,11 +113,21 @@ def spy_http_transport(monkeypatch):
 
 
 def test_default_transport_reads_proxy_env(monkeypatch, spy_http_transport):
-    """显式 transport 会绕过 httpx 的环境代理解析，build_client 必须自己读代理环境变量当兜底。"""
+    """显式 transport 会绕过 httpx 的环境代理解析，build_client 必须自己读代理配置当兜底。"""
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7897")
     with build_client() as client:
         assert isinstance(client._transport, FallbackTransport)
     assert spy_http_transport.proxies_seen == [None, "http://127.0.0.1:7897"]
+
+
+def test_panel_fallback_proxy_beats_proxy_env(monkeypatch, spy_http_transport):
+    """面板备用代理优先于环境变量：面板的「备用代理 + 节点自动切换」是同一条出口链路，
+    环境变量只带得走代理地址、切换功能对它无从生效（2026-10-14 cun.ai 实锤）。"""
+    monkeypatch.setenv("HTTPS_PROXY", "http://env.test:7890")
+    egress.configure_provider(lambda: "http://127.0.0.1:7899")
+    with build_client() as client:
+        assert isinstance(client._transport, FallbackTransport)
+    assert spy_http_transport.proxies_seen == [None, "http://127.0.0.1:7899"]
 
 
 def test_default_transport_prefers_https_over_all_proxy(monkeypatch, spy_http_transport):
@@ -288,9 +298,11 @@ def test_build_client_transport_variants(monkeypatch, spy_http_transport):
     with build_client() as client:
         assert isinstance(client._transport, FallbackTransport)
     assert spy_http_transport.proxies_seen == [None, "http://172.17.0.1:7890"]
-    # 环境变量代理与备用代理同走兜底位，环境变量优先
+    # 面板备用代理在场时优先于环境变量（见 test_panel_fallback_proxy_beats_proxy_env）；
+    # 撤掉面板配置后环境变量接棒兜底位
     spy_http_transport.proxies_seen.clear()
     monkeypatch.setenv("HTTPS_PROXY", "http://env.test:7890")
+    egress.configure_provider(None)
     with build_client() as client:
         assert isinstance(client._transport, FallbackTransport)
     assert spy_http_transport.proxies_seen == [None, "http://env.test:7890"]
