@@ -88,7 +88,7 @@ export function popularityBadge(popularity?: SitePopularity | null): PopularityB
   const telegram = (popularity.groups ?? []).find((group) => group.type === "telegram" && group.members);
   const kind = telegram ? groupKindLabel(telegram) : "";
   const segments = [
-    traffic.monthly_visits ? `${formatCompactCn(traffic.monthly_visits)}/月` : null,
+    traffic.monthly_visits ? `访问 ${formatCompactCn(traffic.monthly_visits)}/月` : null,
     telegram?.members ? `TG${kind} ${formatCompactCn(telegram.members)} 人` : null,
     traffic.rank ? `排名 ${formatCompactCn(traffic.rank)}` : null,
   ].filter(Boolean);

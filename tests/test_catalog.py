@@ -134,6 +134,27 @@ def test_sanity_violation_relaxes_bound_for_direct_api_prices():
     assert reason and "输入" in reason
 
 
+def test_sanity_violation_relaxes_low_bound_for_structured_rows():
+    """结构直采（JSON 直读，无提取环节）的低价端同步放宽：站方真把分组定到官价 0.15%
+    也放行（2026-10-14 model101「限时折扣测试组」x0.01 实价 ¥0.04 实锤）；page_table 文本
+    解析与无 metadata 的行维持 1% 严格下界；÷1e6 级换算事故结构直采也拦。"""
+    structured = {"metadata": {"pricing_kind": "ratio_multiplier", "adapter": "browser_network"}}
+    # 约 0.0015 折（官价 33.7）：结构直采放行
+    assert sanity_violation(_row(input_price=0.05, output_price=0.3, **structured), OFFICIAL_MODELS, 6.74) is None
+    # 同一价格来自 HTML 表格解析：维持严格下界拦下
+    extracted = {"metadata": {"pricing_kind": "page_table", "adapter": "browser_network"}}
+    reason = sanity_violation(_row(input_price=0.05, output_price=0.3, **extracted), OFFICIAL_MODELS, 6.74)
+    assert reason and "输入" in reason
+    # 无 metadata：按提取价口径拦
+    reason = sanity_violation(_row(input_price=0.05, output_price=0.3), OFFICIAL_MODELS, 6.74)
+    assert reason and "输入" in reason
+    # ÷1e6 级单位错位：结构直采也拦（0.01 元 vs 官价 2022 元 ≈ 5e-6 折；
+    # 注：小于一分钱的价会被折算取整成 0，走"0 元价不拦"分支，不在此射程内）
+    big_official = {"gpt5.6sol": {**OFFICIAL_MODELS["gpt5.6sol"], "list": {"input": 300.0, "output": 600.0}}}
+    reason = sanity_violation(_row(input_price=0.01, output_price=0.02, **structured), big_official, 6.74)
+    assert reason and "输入" in reason
+
+
 # ---------- modelsdev.fetch_catalog ----------
 
 def _provider(pid: str, name: str, doc: str, models: dict) -> dict:

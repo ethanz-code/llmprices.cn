@@ -3444,6 +3444,36 @@ def test_above_official_price_is_dropped_not_stored(tmp_path: Path, monkeypatch)
     assert "demo:demo-model:default" not in store.latest_all()
 
 
+def test_above_official_price_drops_before_sanity_rounds(tmp_path: Path, monkeypatch):
+    """结构直采行高于官价时先按产品口径丢弃：即使倍数也超出 sanity 上界（约 20.2 倍）
+    也只出 info，不进"价格异常"两轮确认——站方明码真价不该被报成提取错误刷异常卡片
+    （i-v1api 实锤：mimo-v2.5 真价 ¥45 = 22 倍官价，两轮确认把它报成错误，卡片噪音）。"""
+    def collect(*_args):
+        return [PriceRecord("demo-model", 680.0, 680.0, "CNY/1M tokens",
+                            "https://demo.test/pricing", 0,
+                            {"group": "default", "pricing_kind": "ratio_multiplier", "adapter": "browser_network"})]
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(_config(tmp_path)), encoding="utf-8")
+    store = Store(tmp_path / "monitor.db")
+    store.set_document("catalog", _sanity_catalog())  # 官方 33.7/202.2 CNY：680/33.7 ≈ 20.2 倍
+    monkeypatch.setattr(NetworkAdapter, "collect", collect)
+
+    from llm_price_monitor import tasklog
+
+    logs: list[tuple[str, str]] = []
+    tasklog.bind(lambda message, level: logs.append((message, level)))
+    try:
+        run_once(load_config(config_path), store=store, client=httpx.Client())
+        run_once(load_config(config_path), store=store, client=httpx.Client())
+    finally:
+        tasklog.unbind()
+
+    assert "demo:demo-model:default" not in store.latest_all()
+    assert [m for m, lv in logs if lv in ("warn", "error") and "价格异常" in m] == []
+    assert any("高于官方价" in m and lv == "info" for m, lv in logs)
+
+
 def test_price_sanity_rereads_catalog_each_site(tmp_path: Path, monkeypatch):
     """sanity 判据每站现读：一轮采集中途目录修正后，后续站点不再被启动时的坏判据误杀。
     坏目录把官价抬到离谱，使站点价被算成"低到不可能"，验低价端两轮确认。"""
@@ -4722,6 +4752,40 @@ def test_model_market_catalog_records_with_group_rates():
     assert special.output_price == pytest.approx(0.8)
     assert all(r.price_status == "candidate" and r.unit == "USD/1M tokens" for r in records)
     assert all("effective_rate_multiplier" in r.metadata["notes"] for r in records)
+
+
+def test_subscription_plan_records_snapshot_rows():
+    """订阅套餐目录（套餐制站点）：每套餐一行快照（model=订阅·名），价格列留空、
+    套餐信息落 metadata.plan（价/配额/折算每美元售价/有效期/分组/倍率/挂牌价）；无套餐价行跳过。"""
+    from llm_price_monitor.adapters import looks_like_subscription_plans, subscription_plan_records
+
+    payload = {"code": 0, "message": "success", "data": {
+        "subscription_plans": [
+            {"id": 3, "name": "ChatGPT 兼容 API 1日套餐 - 50U", "price": 1.54,
+             "daily_limit_usd": 50, "validity_days": 1, "validity_unit": "days",
+             "group_name": "ChatGPT Daily 50U Quota", "subscription_rate_multiplier": 1,
+             "list_price_usd": 1.7, "final_price_factor": 0.9072,
+             "supported_model_scopes": ["ChatGPT", "Codex"]},
+            {"id": 4, "name": "坏行无价", "price": None},
+        ],
+    }}
+    assert looks_like_subscription_plans(payload)
+    spec = SiteSpec(id="lab", models=[], network={"url": "https://api.lab.test/api/v1/payment/public/catalog"})
+    records = subscription_plan_records(spec, [{"url": "https://api.lab.test/api/v1/payment/public/catalog", "status": 200, "resource_type": "fetch", "payload": payload}])
+    assert len(records) == 1
+    r = records[0]
+    assert r.model == "订阅·ChatGPT 兼容 API 1日套餐 - 50U"
+    assert r.input_price is None and r.output_price is None
+    assert r.price_status == "confirmed"
+    assert r.unit == "USD/套餐"
+    plan = r.metadata["plan"]
+    assert plan["price_usd"] == pytest.approx(1.54)
+    assert plan["quota_usd"] == pytest.approx(50)
+    assert plan["per_quota_usd"] == pytest.approx(0.0308)
+    assert plan["validity"] == "1天"
+    assert plan["group"] == "ChatGPT Daily 50U Quota"
+    assert plan["list_price_usd"] == pytest.approx(1.7)
+    assert r.metadata["pricing_kind"] == "subscription"
 
 
 def test_billing_rate_items_records_micro_usd():

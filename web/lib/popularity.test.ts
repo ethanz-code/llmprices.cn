@@ -29,12 +29,12 @@ describe("popularityBadge", () => {
       groups: [{ type: "telegram", url: "https://t.me/a", label: "@a", members: 705, members_kind: "members" }],
       traffic: { monthly_visits: 134_700, rank: 461_591 },
     };
-    expect(popularityBadge(full)?.text).toBe("13.5万/月 · TG群 705 人 · 排名 46.2万");
+    expect(popularityBadge(full)?.text).toBe("访问 13.5万/月 · TG群 705 人 · 排名 46.2万");
     expect(popularityBadge(full)?.title).toContain("Telegram 群 705 人");
     // 缺访问量：剩下的段照常显示，位置不变
     expect(popularityBadge({ groups: full.groups, traffic: {} })?.text).toBe("TG群 705 人");
     expect(popularityBadge({ groups: [], traffic: { rank: 969_713 } })?.text).toBe("排名 97万");
-    expect(popularityBadge({ groups: [], traffic: { monthly_visits: 134_700 } })?.text).toBe("13.5万/月");
+    expect(popularityBadge({ groups: [], traffic: { monthly_visits: 134_700 } })?.text).toBe("访问 13.5万/月");
   });
 
   it("Telegram 频道（subscribers）文案叫「TG频道」不是「群」", () => {

@@ -9,7 +9,7 @@ import httpx
 
 from llm_price_monitor import tasklog
 from llm_price_monitor.adapters import NetworkAdapter
-from llm_price_monitor.catalog.discount import above_official
+from llm_price_monitor.catalog.discount import above_official, structured_direct_row
 from llm_price_monitor.config import AuthRequiredError, MonitorConfig, PriceMonitorError, SiteSpec
 from llm_price_monitor.status import diff_status
 from llm_price_monitor.store import Store, latest_key, latest_site_prefix, split_latest_key
@@ -202,12 +202,27 @@ def _scan_prices(
             key = latest_key(spec.id, record.model, group)
             site_keys.add(key)
             previous = latest.get(key)
-            # sanity 两轮确认要读上一轮的待复核标记，须在查出 previous 之后判
-            current = _apply_price_sanity(
-                _backfill_rule_price(record_dict(spec.id, record)), sanity_models, sanity_rate, previous, sanity_state, key
-            )
+            current = _backfill_rule_price(record_dict(spec.id, record))
             # 站价折合后高于官方价（折扣 > 100%）：中转站比官价还贵，对用户没有选择价值 →
-            # 不入快照、不展示（显式摘除该 key，且不走"沿用旧价"分支，免得旧高价又挂回来）
+            # 不入快照、不展示（显式摘除该 key，且不走"沿用旧价"分支，免得旧高价又挂回来）。
+            # 结构化直采的行「高于官价」几乎都是站方明码真价（i-v1api 实锤 mimo-v2.5 ¥45
+            # = 22 倍官价），先按产品口径丢弃，不走 sanity 两轮确认报成"提取错误"刷异常卡片；
+            # 提取类来源维持原顺序——离谱高价可能是提取事故，先过 sanity 留错误信号。
+            if (
+                _has_price(current)
+                and above_official(current, sanity_models, sanity_rate)
+                and structured_direct_row(current)
+            ):
+                tasklog.emit(
+                    f"[{spec.id}] {record.model} 站价高于官方价（折扣>100%），按无参考意义丢弃",
+                    "info",
+                )
+                latest.pop(key, None)
+                touched_keys.add(key)
+                removed_keys.add(key)
+                continue
+            # sanity 两轮确认要读上一轮的待复核标记，须在查出 previous 之后判
+            current = _apply_price_sanity(current, sanity_models, sanity_rate, previous, sanity_state, key)
             if _has_price(current) and above_official(current, sanity_models, sanity_rate):
                 tasklog.emit(
                     f"[{spec.id}] {record.model} 站价高于官方价（折扣>100%），按无参考意义丢弃",

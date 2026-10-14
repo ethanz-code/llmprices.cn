@@ -23,6 +23,8 @@ class CollectBody(BaseModel):
     persist: bool = False
     site_id: str | None = None
     site_ids: list[str] | None = None
+    # 人气采集专用：true = 手动全量刷新，无视「7 天内已有数据就跳过外部查询」的新鲜策略
+    force: bool = False
 
 
 def _resolve_sites(config: MonitorConfig, body: CollectBody) -> MonitorConfig:
@@ -113,8 +115,8 @@ def build_router(store: Store) -> APIRouter:
 
     @router.post("/api/collect/popularity")
     def collect_popularity(body: CollectBody) -> dict[str, str]:
-        """手动触发站点人气采集（交流群/访问量/排名）：与定时任务同一任务体，可指定站点。"""
-        return _submit("collect-popularity", body, popularity_scan_job)
+        """手动触发站点人气采集：与定时任务同一任务体，可指定站点；force=全量刷新（无视数据新鲜度）。"""
+        return _submit("collect-popularity", body, lambda config, store: popularity_scan_job(config, store, force=body.force))
 
     @router.get("/api/tasks")
     def list_tasks() -> dict[str, Any]:

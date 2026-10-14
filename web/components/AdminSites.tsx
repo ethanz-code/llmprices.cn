@@ -167,6 +167,30 @@ export function AdminSites() {
     reloadSites();
   }, [reloadSites]);
 
+  // 手动刷新人气：提交采集任务并轮询到结束（限流环境下定时轮只补缺数据的站，这里是随时手动补）
+  const [popularityRefreshing, setPopularityRefreshing] = useState(false);
+  const [popularityForce, setPopularityForce] = useState(false);
+  async function refreshPopularity() {
+    setPopularityRefreshing(true);
+    try {
+      const res = await apiSend<{ task_id: string }>("/api/collect/popularity", "POST", { force: popularityForce });
+      // 轮询任务状态直到结束；人气整轮要几分钟（逐站查外部源），只给按钮态不阻塞页面
+      for (let i = 0; i < 600; i += 1) {
+        const task = await apiSend<{ status: string }>(`/api/tasks/${res.task_id}`, "GET");
+        if (task.status !== "running") {
+          if (task.status === "done") toast("人气数据已更新");
+          else toast("人气采集任务异常结束，详情看「采集任务」页");
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    } catch (error) {
+      toast(`人气采集触发失败: ${errorText(error)}`);
+    } finally {
+      setPopularityRefreshing(false);
+    }
+  }
+
   async function toggleSite(site: SiteConfig, next: boolean) {
     try {
       await apiSend(`/api/sites/${encodeURIComponent(site.id)}`, "PUT", { config: { ...site, enabled: next } });
@@ -539,7 +563,22 @@ export function AdminSites() {
             </>
           )}
         </span>
-        <span style={{ display: "inline-flex", gap: 10 }}>
+        <span style={{ display: "inline-flex", gap: 10, alignItems: "center" }}>
+          <Btn
+            size="sm"
+            variant="ghost"
+            disabled={popularityRefreshing}
+            title="立即补采各站点的交流群、访问量与排名；数据齐的站默认不重查外部源（省额度），勾上全量则逐站强制重查"
+            onClick={refreshPopularity}
+          >
+            {popularityRefreshing ? "人气采集中…" : "刷新人气"}
+          </Btn>
+          <Check
+            checked={popularityForce}
+            onChange={setPopularityForce}
+          >
+            <span title="无视数据新鲜度逐站重查外部源（SimilarWeb/Tranco），额度消耗大、整轮更久">全量刷新</span>
+          </Check>
           <Btn size="sm" variant="ghost" onClick={() => setImportChoice(true)}>
             导入站点
           </Btn>

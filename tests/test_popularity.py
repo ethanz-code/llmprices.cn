@@ -359,6 +359,38 @@ def test_record_popularity_merges_and_keeps_old_on_partial(tmp_path):
     assert set(store.get_document(POPULARITY_DOC)) == {"other"}
 
 
+# ---------- 新鲜跳过策略 ----------
+
+
+def test_needs_query_and_fresh_skip(monkeypatch):
+    """访问量+排名齐全且 7 天内采过 → 跳过外部查询（省额度）；缺任一就照查；force 无视新鲜。"""
+    fresh = time.time() - 86_400  # 1 天前
+    stale = time.time() - 8 * 86_400  # 8 天前
+    complete = {"groups": [], "traffic": {"monthly_visits": 100, "visits_source": "similarweb", "rank": 500_000}, "checked_at": fresh}
+    missing_rank = {"groups": [], "traffic": {"monthly_visits": 100}, "checked_at": fresh}
+    assert pop.needs_query(None) is True
+    assert pop.needs_query(complete) is False  # 齐全且新鲜：跳过
+    assert pop.needs_query(missing_rank) is True  # 缺排名：照查（自动补齐）
+    assert pop.needs_query({**complete, "checked_at": stale}) is True  # 数据变旧：照查刷新
+    # collect_site 层：skip 时沿用旧 traffic、不 sleep 不查外部
+    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 99)
+    called = {"external": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        called["external"] += 1
+        return httpx.Response(200, text="<footer>t.me/again</footer>")
+
+    with _client(handler) as client:
+        payload = collect_site(_spec(), client, previous=complete)
+        assert payload is not None
+        assert payload["traffic"]["monthly_visits"] == 100 and payload["traffic"]["rank"] == 500_000
+        # skip 分支只打站点自身三处（/api/status、首页、t.me），Tranco/SimilarWeb/hypestat 都没打
+        assert called["external"] == 3
+        before = called["external"]
+        payload = collect_site(_spec(), client, previous=complete, force=True)
+        assert called["external"] > before  # force：外部源照查（Tranco/hypestat）
+
+
 # ---------- 接口与调度接线 ----------
 
 
@@ -401,14 +433,16 @@ def test_popularity_endpoint_public_and_under_read_lockdown(workspace: Path, mon
 
 
 def test_manual_collect_endpoint_uses_popularity_job(workspace: Path, monkeypatch):
-    """手动触发走人气任务体，结果进任务记录。"""
+    """手动触发走人气任务体，结果进任务记录；force=全量刷新透传给任务体。"""
     import llm_price_monitor.webapi.routes.collect as collect_routes
 
-    monkeypatch.setattr(
-        collect_routes,
-        "popularity_scan_job",
-        lambda config, store: (lambda: {"sites": 1, "groups": 2, "visits": 1, "ranked": 1, "failed": 0}),
-    )
+    captured: dict[str, bool] = {}
+
+    def fake_job(config, store, *, force=False):
+        captured["force"] = force
+        return lambda: {"sites": 1, "groups": 2, "visits": 1, "ranked": 1, "failed": 0, "skipped": 0}
+
+    monkeypatch.setattr(collect_routes, "popularity_scan_job", fake_job)
     client = TestClient(_app(workspace))
     assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200
     submitted = client.post("/api/collect/popularity", json={})
@@ -421,6 +455,16 @@ def test_manual_collect_endpoint_uses_popularity_job(workspace: Path, monkeypatc
         time.sleep(0.05)
     assert task["kind"] == "collect-popularity" and task["status"] == "done"
     assert task["result"]["groups"] == 2
+    assert captured["force"] is False
+    # force=true 全量刷新
+    submitted = client.post("/api/collect/popularity", json={"force": True})
+    task_id = submitted.json()["task_id"]
+    for _ in range(50):
+        task = client.get(f"/api/tasks/{task_id}").json()
+        if task["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert captured["force"] is True
 
 
 def test_purge_and_rename_move_popularity(workspace: Path):
@@ -463,7 +507,7 @@ def test_scan_popularity_records_and_isolates_failures(tmp_path, monkeypatch):
     config = _Config([_spec("ok", "https://ok.test/api/pricing"), _spec("bad", "https://bad.test/api/pricing")])
     with _client(handler) as client:
         summary = pop.scan_popularity(config, store, client=client)
-    assert summary == {"sites": 2, "groups": 1, "visits": 0, "ranked": 0, "failed": 1}
+    assert summary == {"sites": 2, "groups": 1, "visits": 0, "ranked": 0, "failed": 1, "skipped": 0}
     doc = store.get_document(POPULARITY_DOC)
     assert doc["ok"]["groups"][0]["members"] == 12
     assert doc["bad"]["traffic"]["rank"] == 1 and doc["bad"]["checked_at"] == 1.0  # 失败保留旧数据

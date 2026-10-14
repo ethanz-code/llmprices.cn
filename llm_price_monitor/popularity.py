@@ -346,17 +346,44 @@ class SimilarWebClient:
         return None
 
 
+def needs_query(entry: dict[str, Any] | None, *, now: float | None = None) -> bool:
+    """这个站还需要查外部人气源（SimilarWeb/Tranco）吗？
+
+    三条全满足才跳过：① 访问量和排名都已有值（SimilarWeb 月更，7 天内的数据就是新鲜的）；
+    ② 数据是 7 天内采的；③ 群信息也采过（群链接有被站方撤掉的可能，但 7 天内重扫意义不大）。
+    任一不满足就查——优先把额度花在「还没数据」和「数据变旧」的站上，这是限流环境下的
+    自动补齐策略：没数据的站每轮都轮到，有新鲜数据的站让路。
+
+    `grouped` 阈值：Telegram 人数天天在变，但排名/访问量月更，群人数 7 天一刷足够。
+    """
+    if not isinstance(entry, dict):
+        return True
+    now = now if now is not None else time.time()
+    traffic = entry.get("traffic") if isinstance(entry.get("traffic"), dict) else {}
+    has_traffic = bool(traffic.get("monthly_visits")) and bool(traffic.get("rank"))
+    fresh = now - float(entry.get("checked_at") or 0) < FRESH_SKIP_SECONDS
+    return not (has_traffic and fresh)
+
+
+# 数据新鲜阈值：7 天内的访问量+排名视为新鲜，不再烧外部额度重查
+FRESH_SKIP_SECONDS = 7 * 86_400
+
+
 def collect_site(
     spec: SiteSpec,
     client: httpx.Client,
     *,
     notice_text: str = "",
     similarweb: "SimilarWebClient | None" = None,
+    previous: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> dict[str, Any] | None:
     """采集单站人气；站点接口、首页、已存公告三个来源全空时返回 None（保留旧数据）。
 
     notice_text 是 store 里该站最近一条公告正文：公告是群号的高产来源（"加入 QQ 群 …"），
-    顺带扫描比再打一次公告接口便宜。
+    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的落库数据：访问量+排名都有且
+    7 天内采过时跳过外部额度查询（SimilarWeb 限流环境下的自动补齐策略），群链接仍照常
+    扫描（站点接口与首页本来就是本轮要打的，只省外部源）；force=True 无视新鲜跳过。
     """
     page_url = site_homepage(spec) or ""
     origin = _origin(str((spec.network or {}).get("url") or "")) or _origin(page_url)
@@ -394,23 +421,33 @@ def collect_site(
     traffic: dict[str, Any] = {}
     host = site_host(spec)
     if host:
-        # Tranco 有速率限制：两次查询之间拉开间隔（放在查排名前，保证跨站点也生效）
-        time.sleep(TRANCO_INTERVAL_SECONDS)
-        rank = fetch_tranco_rank(host, client)
-        if rank is not None:
-            traffic.update({"rank": rank, "rank_source": "tranco"})
-        # 月访问量：SimilarWeb 站内 API 是主源（覆盖面广、真实统计），WAF 拦下自动换节点；
-        # 拿不到再退 hypestat 公开页估算（覆盖面小）
-        visits: int | None = None
-        visits_source = ""
-        if similarweb is not None:
-            visits = similarweb.visits_with_retry(host, spec.id)
-            visits_source = "similarweb" if visits else ""
-        if visits is None:
-            visits = fetch_visits_estimate(host, client)
-            visits_source = "hypestat" if visits else ""
-        if visits:
-            traffic.update({"monthly_visits": visits, "visits_source": visits_source})
+        skip_external = not force and not needs_query(previous)
+        if skip_external:
+            # 数据新鲜：不烧外部额度，沿用上轮访问量/排名（合并逻辑本身就有按字段回退，
+            # 这里直接带上旧值，让 checked_at 照常刷新、群链接照常更新）
+            old_traffic = previous.get("traffic") if isinstance(previous, dict) else {}
+            if isinstance(old_traffic, dict):
+                for key in ("monthly_visits", "visits_source", "rank", "rank_source"):
+                    if old_traffic.get(key) is not None:
+                        traffic[key] = old_traffic[key]
+        else:
+            # Tranco 有速率限制：两次查询之间拉开间隔（放在查排名前，保证跨站点也生效）
+            time.sleep(TRANCO_INTERVAL_SECONDS)
+            rank = fetch_tranco_rank(host, client)
+            if rank is not None:
+                traffic.update({"rank": rank, "rank_source": "tranco"})
+            # 月访问量：SimilarWeb 站内 API 是主源（覆盖面广、真实统计），WAF 拦下自动换节点；
+            # 拿不到再退 hypestat 公开页估算（覆盖面小）
+            visits: int | None = None
+            visits_source = ""
+            if similarweb is not None:
+                visits = similarweb.visits_with_retry(host, spec.id)
+                visits_source = "similarweb" if visits else ""
+            if visits is None:
+                visits = fetch_visits_estimate(host, client)
+                visits_source = "hypestat" if visits else ""
+            if visits:
+                traffic.update({"monthly_visits": visits, "visits_source": visits_source})
     return {"groups": groups, "traffic": traffic, "checked_at": time.time()}
 
 
@@ -468,18 +505,34 @@ def remove_popularity(store, site_id: str) -> None:
         store.set_document(POPULARITY_DOC, doc)
 
 
-def scan_popularity(config, store, *, client: httpx.Client | None = None, user_agent: str | None = None) -> dict[str, int]:
+def scan_popularity(
+    config,
+    store,
+    *,
+    client: httpx.Client | None = None,
+    user_agent: str | None = None,
+    force: bool = False,
+) -> dict[str, int]:
     """逐站采集一轮人气：全部站点（含未启用，选站要用），单站失败记日志继续下一站。
 
-    返回 {sites, groups, visits, ranked, failed} 计数。
+    force=False（默认定时轮）时，访问量+排名都有且 7 天内采过的站跳过外部额度查询
+    （SimilarWeb/Tranco 限流环境下的自动补齐策略：额度优先花给缺数据的站）；
+    force=True（手动刷新）无视新鲜、逐站全量重查。
+
+    返回 {sites, groups, visits, ranked, failed, skipped} 计数。
     """
     owns_client = client is None
     if client is None:
         client = build_client(
             timeout=15, headers={"User-Agent": user_agent or DEFAULT_BROWSER_USER_AGENT}
         )
-    stats = {"sites": 0, "groups": 0, "visits": 0, "ranked": 0, "failed": 0}
-    tasklog.emit("开始站点人气采集")
+    stats = {"sites": 0, "groups": 0, "visits": 0, "ranked": 0, "failed": 0, "skipped": 0}
+    popularity_doc = dict(store.get_document(POPULARITY_DOC) or {})
+    pending = sum(1 for spec in config.sites if needs_query(popularity_doc.get(spec.id)))
+    tasklog.emit(
+        "开始站点人气采集"
+        + (f"（手动全量刷新）" if force else f"（{pending} 个站待补数据，其余站数据新鲜跳过外部查询）")
+    )
     # SimilarWeb 站内 API 的 WAF 按出口 IP 计额度：整轮共用一个轻客户端（独立于采集 client，
     # 不走退避重试——它没有"换出口"逻辑），碰壁时经 proxy_switch 换节点续命
     similarweb = SimilarWebClient(user_agent or DEFAULT_BROWSER_USER_AGENT)
@@ -488,8 +541,9 @@ def scan_popularity(config, store, *, client: httpx.Client | None = None, user_a
             stats["sites"] += 1
             notice = store.latest_notice(spec.id) or {}
             notice_text = str(notice.get("content") or "")
+            previous = popularity_doc.get(spec.id) if isinstance(popularity_doc.get(spec.id), dict) else None
             try:
-                payload = collect_site(spec, client, notice_text=notice_text, similarweb=similarweb)
+                payload = collect_site(spec, client, notice_text=notice_text, similarweb=similarweb, previous=previous, force=force)
             except Exception as exc:  # noqa: BLE001 —— 单站异常不拖垮整轮，但必须留痕
                 stats["failed"] += 1
                 tasklog.emit(f"[{spec.id}] 人气采集失败：{exc}", "warn")
@@ -504,6 +558,8 @@ def scan_popularity(config, store, *, client: httpx.Client | None = None, user_a
             stats["groups"] += len(groups)
             stats["visits"] += 1 if traffic.get("monthly_visits") else 0
             stats["ranked"] += 1 if traffic.get("rank") else 0
+            if not force and previous is not None and not needs_query(previous):
+                stats["skipped"] += 1
             detail = "，".join(group["label"] for group in groups) or "未发现交流群"
             tasklog.emit(
                 f"[{spec.id}] 人气：{detail}"
@@ -511,8 +567,9 @@ def scan_popularity(config, store, *, client: httpx.Client | None = None, user_a
                 + (f"，全网排名 {traffic['rank']}" if traffic.get("rank") else "")
             )
         tasklog.emit(
-            f"站点人气采集结束：{stats['sites']} 站，发现交流群 {stats['groups']} 个，"
-            f"月访问量 {stats['visits']} 站，排名 {stats['ranked']} 站，失败 {stats['failed']} 站"
+            f"站点人气采集结束：{stats['sites']} 站（跳过外部查询 {stats['skipped']} 站），"
+            f"发现交流群 {stats['groups']} 个，月访问量 {stats['visits']} 站，"
+            f"排名 {stats['ranked']} 站，失败 {stats['failed']} 站"
         )
     finally:
         if owns_client:

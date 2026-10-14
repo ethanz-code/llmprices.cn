@@ -26,6 +26,11 @@ ALL_CATALOG_TRANSLATE_BUDGET = 300
 # 取前 N 个滚动，厂商发新模型时最旧的自动挤出
 DOMESTIC_APPEND_LIMIT = 4
 
+# 孤儿清理宽限期（目录刷新轮次）：连续 N 轮「不在官方目录 + 全库无人售卖」才移出。
+# 目录刷新约 4 小时一轮，24 轮 ≈ 4 天——新加的名字、站方即将上架的名字都有窗口，
+# 真被站点卖起来有价即清零重来。
+ORPHAN_GRACE_ROUNDS = 24
+
 
 def auto_append_latest_models(store: Store, catalog: dict[str, Any]) -> list[str]:
     """目录刷新后把各厂商最新的通用模型补进 settings.monitor_models。
@@ -242,6 +247,60 @@ def prune_stale_monitor_models(store: Store, catalog: dict[str, Any], max_age_mo
     return removed
 
 
+def prune_orphan_monitor_models(store: Store, catalog: dict[str, Any]) -> list[str]:
+    """清理既不在官方目录、又没有任何站点在售的池内条目（历史粘贴残留、价目表装饰名）。
+
+    这类名字永远匹配不上站点（如「mimo-v2.6-flashmimo-v2.5」「…（即将下线）」），官方
+    目录的老化与国内滚动规则都管不到（不认识的名字一律不动），不清就永久占池、虚增
+    「没采到价」计数。连续 ORPHAN_GRACE_ROUNDS 轮零覆盖才移出：新加的名字、站方即将
+    上架的名字都有宽限期，一旦有价（或进了官方目录）计数清零重来。
+
+    计数存 documents.monitor_orphan_state（与 settings 解耦，旧表单回写冲不掉进度）；
+    移出记 monitor_models_dismissed，防厂商定价页再次产出同名装饰条目时被自动补回。
+    返回移出的模型名。
+    """
+    settings = store.get_document("settings") or {}
+    monitor = [str(item) for item in settings.get("monitor_models") or []]
+    if not monitor:
+        return []
+    entries = catalog.get("models") if isinstance(catalog, dict) else None
+    catalog_keys = {
+        model_key(str(entry.get("model") or ""))
+        for entry in (entries or {}).values()
+        if isinstance(entry, dict) and str(entry.get("model") or "").strip()
+    }
+    covered = {
+        str(record.get("model") or "")
+        for record in store.latest_all().values()
+        if isinstance(record, dict) and record.get("model")
+    }
+    previous = store.get_document("monitor_orphan_state") or {}
+    kept_state: dict[str, int] = {}
+    removed: list[str] = []
+    for name in monitor:
+        if model_key(name) in catalog_keys or name in covered:
+            continue  # 官方目录认识或有站点在售：不是孤儿，进度清零
+        rounds = int(previous.get(name) or 0) + 1
+        if rounds >= ORPHAN_GRACE_ROUNDS:
+            removed.append(name)
+        else:
+            kept_state[name] = rounds
+    store.set_document("monitor_orphan_state", kept_state)
+    if not removed:
+        return []
+    removed_set = set(removed)
+    dismissed = {str(item) for item in settings.get("monitor_models_dismissed") or []} | removed_set
+    store.set_document(
+        "settings",
+        {
+            **settings,
+            "monitor_models": ordered_monitor_models([name for name in monitor if name not in removed_set], catalog),
+            "monitor_models_dismissed": sorted(dismissed),
+        },
+    )
+    return removed
+
+
 def canonicalize_monitor_models(store: Store, catalog: dict[str, Any]) -> list[str]:
     """目录刷新后把监控清单与移除名单里匹配到目录的名字换成标准显示名，返回「旧名 → 新名」记录。
 
@@ -361,6 +420,15 @@ def catalog_refresh_job(store: Store) -> Callable[[], dict[str, Any]]:
         auto_appended = auto_append_latest_models(store, output)
         if auto_appended:
             tasklog.emit(f"自动新增监控模型（各厂商最新发布）：{'、'.join(auto_appended)}")
+        # 孤儿清理：既不在官方目录、又没有任何站点在售的名字（历史粘贴残留/装饰名）
+        # 连续多轮零覆盖后移出，不占池、不虚增「没采到价」计数
+        orphans_removed = prune_orphan_monitor_models(store, output)
+        if orphans_removed:
+            tasklog.emit(
+                "监控清单清理长期无人售卖的模型（不在官方目录且全库无价）："
+                + "、".join(orphans_removed)
+                + "；如仍需监控可在系统设置的模型清单里重新加回"
+            )
         # 清单维护完做一次数据对账：不再监控的模型（手动删/超期/滚出前 N/清单外遗留）
         # 的价格快照、趋势点与事件一并清掉，数据列表不再出现"早已不存在"的幽灵模型
         monitor_now = store.get_document("settings").get("monitor_models") or []
@@ -416,13 +484,16 @@ def screenshot_scan_job(config: MonitorConfig, store: Store) -> Callable[[], dic
     return _run
 
 
-def popularity_scan_job(config: MonitorConfig, store: Store) -> Callable[[], dict[str, Any]]:
-    """站点人气任务体：逐站采交流群链接/群人数与公开访问量、排名，落 documents.site_popularity。"""
+def popularity_scan_job(config: MonitorConfig, store: Store, *, force: bool = False) -> Callable[[], dict[str, Any]]:
+    """站点人气任务体：逐站采交流群链接/群人数与公开访问量、排名，落 documents.site_popularity。
+
+    force=True（手动全量刷新）无视数据新鲜度、逐站重查外部源；默认定时轮只补缺数据的站。
+    """
     from llm_price_monitor.popularity import scan_popularity
     from llm_price_monitor.useragent import choose_user_agent
 
     def _run() -> dict[str, Any]:
-        return scan_popularity(config, store, user_agent=choose_user_agent(config))
+        return scan_popularity(config, store, user_agent=choose_user_agent(config), force=force)
 
     return _run
 
