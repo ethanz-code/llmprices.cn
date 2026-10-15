@@ -228,9 +228,9 @@ def test_monitor_writes_snapshot_and_detects_price_change(tmp_path: Path, monkey
 
 
 def test_per_site_persist_and_hard_timeout(tmp_path: Path, monkeypatch):
-    """每站采完立即落库：站点被硬超时掐掉时，已完成站点的价格不随内存丢失；
+    """每站采完立即写库：站点被硬超时掐掉时，已完成站点的价格不随内存丢失；
     挂死的站点以错误收场，不拖垮整轮。网络阶段并行开工（并发槽限流），
-    落库仍按站点顺序在主线程完成。"""
+    写库仍按站点顺序在主线程完成。"""
     def collect(self, spec, *_args):
         if spec.id == "demo":
             return [PriceRecord("demo-model", 1.0, 2.0, "USD/1M tokens", "https://demo.test/pricing", 0, {})]
@@ -252,7 +252,7 @@ def test_per_site_persist_and_hard_timeout(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("llm_price_monitor.report.SITE_HARD_TIMEOUT_SECONDS", 0.3)
     report = run_once(config, store=store, client=httpx.Client())
 
-    assert "demo:demo-model:default" in store.latest_all()  # demo 已落库，不随 stuck 超时丢失
+    assert "demo:demo-model:default" in store.latest_all()  # demo 已写库，不随 stuck 超时丢失
     stuck = report.site_status["stuck"]
     assert stuck["status"] == "error" and "硬上限" in str(stuck["error"])
     assert set(store.latest_all()) == {"demo:demo-model:default"}
@@ -261,7 +261,7 @@ def test_per_site_persist_and_hard_timeout(tmp_path: Path, monkeypatch):
 
 def test_hard_timeout_releases_slot_so_queued_sites_proceed(tmp_path: Path, monkeypatch):
     """超时放弃的站点必须把并发槽让给排队站点：并发 1、两个挂死站排前面，整轮仍要跑完、
-    正常站照常落库。回归：挂死线程杀不掉又永久占槽时，排队站点的 result() 无限等待、
+    正常站照常写库。回归：挂死线程杀不掉又永久占槽时，排队站点的 result() 无限等待、
     整轮采集永不结束（4 站同挂即可触发，SSL 抖动批量出现是常态）。"""
     import threading
 
@@ -467,7 +467,7 @@ def test_network_pricing_uses_newapi_ratios_without_dom_or_ai():
 
 def test_network_pricing_marketplace_url_still_reads_status_denomination():
     """subrouter 实测：采集地址是 marketplace 路径（不含 /api/pricing），status 推导
-    要退回 URL 起源，否则充值口径拿不到、挂牌价原值当 CNY 入库。"""
+    要退回 URL 起源，否则充值汇率拿不到、挂牌价原值当 CNY 入库。"""
     spec = SiteSpec(
         id="mkt",
         network={"url": "https://mkt.test/api/marketplace/shared-models?page=1"},
@@ -539,7 +539,7 @@ def test_collect_from_html_table_fallback_beats_ai():
     assert by_model["gpt-6.1-sol"].unit == "USD/1M tokens"
     assert by_model["gpt-6.1-sol"].price_status == "confirmed"
     assert by_model["gpt-6-luna"].input_price == 0.1
-    # 页面上没有的监控模型（GLM-5.3 ≠ glm-5.3-flash）不产出也不硬抽，宁缺勿编
+    # 页面上没有的监控模型（GLM-5.3 ≠ glm-5.3-flash）不产出也不硬抽，宁缺毋编
     assert "glm-5.3-flash" not in by_model
     assert by_model["gpt-6.1-sol"].metadata["pricing_kind"] == "page_table"
 
@@ -691,9 +691,9 @@ def test_network_adapter_uses_ai_alias_before_newapi_calculation(monkeypatch):
 
 
 def test_network_adapter_keeps_direct_prices_when_aliases_cause_ambiguity(monkeypatch):
-    """别名把精确命中撞成多命中歧义（宁缺勿猜）时，别名的退化结果不得顶掉直采的确认价。
+    """别名把精确命中变成多命中歧义（歧义即弃权）时，别名的退化结果不得顶掉直采的确认价。
 
-    bytonsec 实锤：站上「裸名 + zen/ 前缀变体」并存，AI 别名把两者都列为候选后
+    bytonsec 实证：站上「裸名 + zen/ 前缀变体」并存，AI 别名把两者都列为候选后
     精确命中变歧义，带别名的结果整站无价、只剩 rule_only 占位——旧守卫见到
     rule_only 就认作"解析成功"，把直采算出的 16 条确认价整轮丢掉。
     """
@@ -748,7 +748,7 @@ def test_browser_adapter_requires_ai_for_non_newapi_json():
 
 
 def test_grouped_ratio_pricing_expands_groups_and_reads_usd_base():
-    """定价页聚合结构（group_info+model_info）：逐分组合成，基准按 status 的 USD 展示口径。"""
+    """定价页聚合结构（group_info+model_info）：逐分组合成，基准按 status 的 USD 展示规则。"""
     pricing = {
         "data": {
             "group_info": {"default": {"GroupRatio": 1}, "Azure": {"GroupRatio": 0.6}, "闲置": {"GroupRatio": None}},
@@ -788,7 +788,7 @@ def test_grouped_ratio_pricing_expands_groups_and_reads_usd_base():
 def test_group_price_map_prefers_explicit_prices_over_ratio():
     """逐分组显式价优先于倍率：该形态同时满足 newapi 判定，必须在倍率分支之前拦下。
 
-    infistar 实锤：step-5-preview 的 group_prices 给 CNY 5.8125，而 model_ratio 折算只有
+    infistar 实证：step-5-preview 的 group_prices 给 CNY 5.8125，而 model_ratio 折算只有
     1.04（偏低 5.6 倍），走倍率分支会采到错价。
     """
     pricing = {
@@ -1126,7 +1126,7 @@ def test_ai_extractor_discards_prices_for_models_missing_from_evidence():
 
 def test_ai_extractor_unavailable_result_carries_no_zero_prices():
     """AI 自报 unavailable 却照提示词模板抄来 0 价时必须清空：模板示例里的 "0" 字符几乎总在
-    证据文本中，数字在证闸门拦不住；0/0 一旦以 candidate 落库，首页"最低价"挑选会把
+    证据文本中，数字在证校验拦不住；0/0 一旦以 candidate 写库，首页"最低价"挑选会把
     无数据模型渲染成 ¥0 假免费价（DaiTuAI grok-4.7 实测）。"""
     def handler(request: httpx.Request) -> httpx.Response:
         result = {"models": [
@@ -1161,8 +1161,8 @@ def test_ai_extractor_unavailable_result_carries_no_zero_prices():
 
 def test_ai_extractor_discards_prices_whose_digits_are_absent_from_evidence():
     """价格数字不在证据文本里时作废：模型名会被残留文案误判存在（DaiTuAI 已下线的 Kimi
-    分组描述仍写着 kimi-k3），AI 还会张冠李戴（把 gpt-5.4-mini 的 ¥0.11/¥0.68 安给
-    页面上不存在的 step-3.5-flash）。名字+数字双闸兜底。"""
+    分组描述仍写着 kimi-k3），AI 还会价格错配（把 gpt-5.4-mini 的 ¥0.11/¥0.68 安给
+    页面上不存在的 step-3.5-flash）。名字+数字双重校验回退。"""
     def handler(request: httpx.Request) -> httpx.Response:
         result = {"models": [
             {
@@ -1199,7 +1199,7 @@ def test_ai_extractor_discards_prices_whose_digits_are_absent_from_evidence():
 
 
 def test_ai_extractor_corrects_cny_claim_when_evidence_is_usd():
-    """证据满是美元标识、AI 却照抄提示词示例报 CNY 时必须纠正为 USD：币种闸门此前只有
+    """证据满是美元标识、AI 却照抄提示词示例报 CNY 时必须纠正为 USD：币种校验此前只有
     USD→CNY 单向纠正，118.ink 实测页面 $1.68 被落成 ¥1.68（低约 7 倍）。"""
     def handler(request: httpx.Request) -> httpx.Response:
         result = {"models": [
@@ -1424,7 +1424,7 @@ def test_ai_stream_error_carries_response_body(monkeypatch):
 
 
 def test_ai_stream_transport_error_is_logged(monkeypatch):
-    """流式请求的传输错误同样留痕：未出字按连接抖动记录，池子耗尽补一条整次失败。"""
+    """流式请求的传输错误同样留痕：未出字按连接抖动记录，清单耗尽补一条整次失败。"""
     import llm_price_monitor.ai as ai_mod
 
     rows: list[dict] = []
@@ -1594,10 +1594,10 @@ def test_ai_transport_error_is_logged(monkeypatch):
     config = AIConfig(base_url="https://ai.test/v1", models=("m-a",), api_key="k")
     with pytest.raises(httpx.ConnectError):
         request_with_model_fallback(config, "", "hi", scene="测试", client=httpx.Client(transport=httpx.MockTransport(handler)))
-    # 单模型池：先留一条「连接抖动」痕迹（不算报错失败），池子耗尽再补一条整次失败
+    # 单模型备选池：先留一条「连接抖动」痕迹（不算报错失败），清单耗尽再补一条整次失败
     assert [(row["model"], row["status"]) for row in rows] == [("m-a", "transport"), ("m-a", "error")]
     assert "connection reset by peer" in rows[0]["error"]
-    assert "模型池全部失败" in rows[1]["error"]
+    assert "模型备选池全部失败" in rows[1]["error"]
 
 
 def test_ai_fallback_respects_deadline():
@@ -1615,7 +1615,7 @@ def test_ai_fallback_respects_deadline():
 
 
 def test_ai_fallback_pool_puts_preferred_model_first():
-    """preferred_model 固定排首位（不在池里也照样先试），其余池子乱序作后备。"""
+    """preferred_model 固定排首位（不在池里也照样先试），其余清单乱序作后备。"""
     import llm_price_monitor.ai as ai_mod
 
     config = AIConfig(base_url="https://ai.test/v1", models=("m-a", "m-b"), api_key="k")
@@ -1629,7 +1629,7 @@ def test_ai_fallback_pool_puts_preferred_model_first():
 
 
 def test_ai_preferred_model_tried_first_then_pool_fallback(monkeypatch):
-    """价格提取固定模型：preferred_model 先试，失败仍按池子换，不因固定模型丢掉兜底。"""
+    """价格提取固定模型：preferred_model 先试，失败仍按清单换，不因固定模型丢掉后备。"""
     import llm_price_monitor.ai as ai_mod
 
     monkeypatch.setattr(ai_mod, "ai_log_hook", lambda **fields: None)
@@ -1651,7 +1651,7 @@ def test_ai_preferred_model_tried_first_then_pool_fallback(monkeypatch):
 
 
 def test_ai_prompt_too_long_falls_back_to_next_model(monkeypatch):
-    """prompt 超出单模型上下文按模型级故障换下一个，不再判死整轮：池内模型上下文差异大，
+    """prompt 超出单模型上下文按模型级故障换下一个，不再判死整轮：清单内模型上下文差异大，
     小上下文模型（如 7b 蒸馏 32k）装不下不代表 129k 的模型装不下。"""
     import llm_price_monitor.ai as ai_mod
 
@@ -1688,7 +1688,7 @@ def test_ai_max_tokens_range_error_retries_with_clamped_budget(monkeypatch):
             return httpx.Response(400, json={"error": {"message": "Range of max_tokens should be [1, 2000]"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
 
-    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)  # 预算收到旧口径，断言按小批规模推
+    monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)  # 预算收到旧标准，断言按小批规模推
     config = AIConfig(base_url="https://ai.test/v1", models=("m-a",), api_key="k")
     model, _ = request_with_model_fallback(config, "", "hi", scene="测试", client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert model == "m-a"
@@ -1700,7 +1700,7 @@ def test_ai_max_tokens_range_error_retries_with_clamped_budget(monkeypatch):
 
 
 def test_ai_learned_limit_persists_and_preloads(monkeypatch):
-    """学到的 max_tokens 上限经 saver 落库、load_model_limits 预载：重启后每个模型不再白发降额 400。"""
+    """学到的 max_tokens 上限经 saver 写库、load_model_limits 预载：重启后每个模型不再白发降额 400。"""
     import llm_price_monitor.ai as ai_mod
 
     saved: dict[str, int] = {}
@@ -1731,7 +1731,7 @@ def test_ai_learned_limit_persists_and_preloads(monkeypatch):
 
 
 def test_ai_thinking_required_persists_and_preloads(monkeypatch):
-    """拒收 enable_thinking=false 的模型经 saver 落库、load_thinking_models 预载：重启后不再白发翻参 400。"""
+    """拒收 enable_thinking=false 的模型经 saver 写库、load_thinking_models 预载：重启后不再白发翻参 400。"""
     import llm_price_monitor.ai as ai_mod
 
     saved: list[str] = []
@@ -1795,7 +1795,7 @@ def test_ai_fallback_skips_models_with_too_small_limit(monkeypatch):
 
 
 def test_ai_http_client_bypasses_env_proxy(monkeypatch):
-    """AI 请求默认直连：环境变量代理（本地 Clash 等）不再接管，trust_env 关闭、不传代理。"""
+    """AI 请求默认直连：环境变量代理（本地 Clash 等）不再接入，trust_env 关闭、不传代理。"""
     import llm_price_monitor.ai as ai_mod
 
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:7897")
@@ -1890,7 +1890,7 @@ def test_ai_extract_batch_loop_stops_at_budget(monkeypatch):
 
 def test_ai_extract_budget_scales_with_batch_waves(monkeypatch):
     """预算按并行波次折算，不按串行批次数线性放大：2 批在默认 4 路并发下是 1 波（600s），
-    并发压到 1 退回串行口径（2×600s）。串行口径会把预算放大到站点 900s 硬超时之上，
+    并发压到 1 退回串行标准（2×600s）。串行标准会把预算放大到站点 900s 硬超时之上，
     硬超时先到就轮不到「超预算保留已完成批次」生效。"""
     import llm_price_monitor.ai as ai_mod
     from llm_price_monitor.ai import extractor as extractor_mod
@@ -2053,7 +2053,7 @@ def test_ai_extract_switches_model_on_bad_models_shape(monkeypatch):
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
     assert called == ["garbage-model", "good-model"]  # 坏模型被换掉，整轮没有失败
-    # good-model 返回空 models：预期模型按既有口径落 unavailable 占位，而不是整轮报错
+    # good-model 返回空 models：预期模型按既有标准落 unavailable 占位，而不是整轮报错
     assert len(records) == 1
     assert records[0].price_status == "unavailable"
 
@@ -2744,7 +2744,7 @@ def test_summary_row_skips_cross_group_tiers_and_normalizes_per_token_unit():
         },
     }
     summary = _summary_row(row)
-    # 分组型多档（与记录分组不一致）不平铺到顶层，避免张冠李戴
+    # 分组型多档（与记录分组不一致）不平铺到顶层，避免价格错配
     assert summary["input_price"] is None and summary["output_price"] is None
     # per-token 单位统一换算成 /1M tokens
     tier = summary["tiers"][0]
@@ -2826,7 +2826,7 @@ def _record_dict_for_test(record):
 
 
 def test_fingerprint_ignores_ai_noise_and_detects_real_price_changes():
-    """指纹只含价格口径字段：AI 抽取的上下文边界/备注漂移不产生"价格变化"事件。"""
+    """指纹只含价格相关字段：AI 抽取的上下文边界/备注漂移不产生"价格变化"事件。"""
     base = {
         "model": "claude-fable-5",
         "input_price": 2.5,
@@ -2861,7 +2861,7 @@ def test_fingerprint_ignores_ai_noise_and_detects_real_price_changes():
     assert classify(base, raised) == "changed"
     assert fingerprint({**base, "output_price": 12.50}) == fingerprint(base)
 
-    # 缓存价属于价格口径：变了要发事件
+    # 缓存价属于价格规则：变了要发事件
     assert classify(base, {**base, "metadata": {**base["metadata"], "cache_read_price": 0.3}}) == "changed"
 
     # 价格变了但 price_status 同时变（如确认价→推断价）：按真实价格变化发 changed，不能当状态抖动吞掉
@@ -2871,7 +2871,7 @@ def test_fingerprint_ignores_ai_noise_and_detects_real_price_changes():
 
 
 def test_fingerprint_treats_null_value_as_missing_key():
-    """tier 里显式写 null 的键与整键省略是同一价格口径：AI 抽取轮次间的表示漂移不得刷"变更"事件
+    """tier 里显式写 null 的键与整键省略是同一价格规则：AI 抽取轮次间的表示漂移不得刷"变更"事件
     （DaiTuAI 2026-10-03 实测：前后有效价完全一致，仅 cache_create_price 从 null 键变成省略键，被误判 changed）。"""
     base = {
         "model": "gpt-6-astra",
@@ -2919,7 +2919,7 @@ def test_fingerprint_treats_null_value_as_missing_key():
 
 
 def test_fingerprint_treats_zero_price_as_empty_in_tiers():
-    """tier 价位里 0 与 null 是同一口径（"该处无独立价"）：AI 抽取轮次间在两种写法间漂移
+    """tier 价位里 0 与 null 是同一规则（"该处无独立价"）：AI 抽取轮次间在两种写法间漂移
     不得刷"变更"事件（DaiTuAI 2026-10-08 实测：同一档位前轮 0/0 后轮 null/null，两天刷了
     60 条假 changed）。仅档位/缓存价槽位归一；顶层 input_price/output_price 的 0 是真免费
     档语义，0↔null 仍算真变更。"""
@@ -2939,7 +2939,7 @@ def test_fingerprint_treats_zero_price_as_empty_in_tiers():
             ]}]},
         },
     }
-    # 下一轮 AI 把档位价写成 null/null，其余一字未动（DaiTuAI 实测形态）：同一价格口径
+    # 下一轮 AI 把档位价写成 null/null，其余一字未动（DaiTuAI 实测形态）：同一价格标准
     drifted = {
         **base,
         "metadata": {
@@ -2963,7 +2963,7 @@ def test_fingerprint_treats_zero_price_as_empty_in_tiers():
         },
     }
     assert fingerprint(base) != fingerprint(raised)
-    # 顶层 0/0（真免费档）与无价（null）：语义不同，不算同口径
+    # 顶层 0/0（真零价）与无价（null）：语义不同，不算同一套规则
     no_price = {
         **base,
         "input_price": None,
@@ -3108,7 +3108,7 @@ def test_site_collect_health_tracks_latest_round(tmp_path: Path, monkeypatch):
     assert health["bad"]["status"]["level"] == "error"
     assert "good" not in health and "off" not in health
 
-    # 第二轮：bad 恢复即整站摘除；good 价格变需认证，黄色提示带着原因
+    # 第二轮：bad 恢复即整站移除；good 价格变需认证，黄色提示带着原因
     state.update(fail_price=False, fail_status=False, auth_price=True)
     run_once(config, store=store, client=httpx.Client())
     health = store.get_document("site_collect_health")
@@ -3257,7 +3257,7 @@ def test_ai_ping_model_retries_with_thinking_enabled_when_restricted(monkeypatch
 
 
 def test_group_removed_event_after_miss_threshold(tmp_path: Path, monkeypatch):
-    """分组连续 GROUP_REMOVED_MISSES 轮没出现才记 group_removed 并从快照摘除；中途恢复则不报。"""
+    """分组连续 GROUP_REMOVED_MISSES 轮没出现才记 group_removed 并从快照移除；中途恢复则不报。"""
     groups = {"default", "vip"}
 
     def collect(*_args):
@@ -3289,7 +3289,7 @@ def test_group_removed_event_after_miss_threshold(tmp_path: Path, monkeypatch):
 
 def test_zero_price_placeholder_never_entered_snapshot(tmp_path: Path, monkeypatch):
     """0/0 双零占位行不得进快照：AI 抽不到价照模板抄成 0 时，非 confirmed 的双零行若被当有价入库，
-    会被首页"最低价"挑选选中，把无数据模型渲染成 ¥0 假免费价；confirmed 双零（真免费档）照常入库。"""
+    会被首页"最低价"挑选选中，把无数据模型渲染成 ¥0 假免费价；confirmed 双零（真零价）照常入库。"""
     def collect(*_args):
         return [
             PriceRecord("ghost-model", 0, 0, "CNY/1M tokens", "https://demo.test/pricing", 0,
@@ -3310,7 +3310,7 @@ def test_zero_price_placeholder_never_entered_snapshot(tmp_path: Path, monkeypat
 
 
 def test_legacy_zero_price_row_swept_on_next_persist(tmp_path: Path, monkeypatch):
-    """旧版本落进快照的 0/0 无数据占位行：新口径判无价，下一轮落库时随无价行清扫直接摘除。"""
+    """旧版本落进快照的 0/0 无数据占位行：新规则判无价，下一轮写库时随无价行清扫直接移除。"""
     def collect(*_args):
         return [PriceRecord("demo-model", 1, 2, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "default"})]
 
@@ -3333,8 +3333,8 @@ def test_legacy_zero_price_row_swept_on_next_persist(tmp_path: Path, monkeypatch
 
 
 def test_stale_price_removed_after_consecutive_no_data_rounds(tmp_path: Path, monkeypatch):
-    """连续 GROUP_REMOVED_MISSES 轮"响应还在但没解析出价"同样向摘除阈值累计：
-    阈值内沿用旧价展示，到阈值整行摘除并发 group_removed，过期价不长期挂定价页。"""
+    """连续 GROUP_REMOVED_MISSES 轮"响应还在但没解析出价"同样向移除阈值累计：
+    阈值内沿用上次价格展示，到阈值整行移除并发 group_removed，过期价不长期挂定价页。"""
     def placeholder_round():
         return [PriceRecord("demo-model", None, None, "来源未说明单位", "https://demo.test/pricing", 0,
                             {"group": "default", "pricing_kind": "unavailable"}, "unavailable")]
@@ -3352,7 +3352,7 @@ def test_stale_price_removed_after_consecutive_no_data_rounds(tmp_path: Path, mo
     monkeypatch.setattr(NetworkAdapter, "collect", collect)
     run_once(config, store=store, client=httpx.Client())
 
-    second = run_once(config, store=store, client=httpx.Client())  # 第 1 轮无数据：沿用旧价
+    second = run_once(config, store=store, client=httpx.Client())  # 第 1 轮无数据：沿用上次价格
     assert [event["kind"] for event in second.events] == ["changed"]
     assert "demo:demo-model:default" in store.latest_all()
 
@@ -3360,7 +3360,7 @@ def test_stale_price_removed_after_consecutive_no_data_rounds(tmp_path: Path, mo
     assert all(event["kind"] == "unchanged" for event in third.events)
     assert "demo:demo-model:default" in store.latest_all()
 
-    final = run_once(config, store=store, client=httpx.Client())  # 第 3 轮：到阈值，摘除旧价
+    final = run_once(config, store=store, client=httpx.Client())  # 第 3 轮：到阈值，移除旧价
     assert [event["kind"] for event in final.events if event["kind"] != "unchanged"] == ["group_removed"]
     assert "demo:demo-model:default" not in store.latest_all()
 
@@ -3393,7 +3393,7 @@ def test_price_sanity_voids_absurd_extraction(tmp_path: Path, monkeypatch):
     run_once(config, store=store, client=httpx.Client())
     run_once(config, store=store, client=httpx.Client())
 
-    # 首轮异常挂标记入库、第二轮复现后被作废：无价行被落库层清理，整行摘除
+    # 首轮异常挂标记入库、第二轮复现后被作废：无价行被写库层清理，整行移除
     assert "demo:demo-model:default" not in store.latest_all()
     # 正常价（0.2 折）原样入库
     sane = store.latest_all()["demo:sane-model:default"]
@@ -3403,7 +3403,7 @@ def test_price_sanity_voids_absurd_extraction(tmp_path: Path, monkeypatch):
 def test_price_sanity_first_violation_kept_with_flag(tmp_path: Path, monkeypatch):
     """首轮异常不作废：这次采集到的价照常展示，只挂 sanity_suspect 待复核标记，
     官方价目录自身带错（如厂商页提取列错位）时不误杀真数据。
-    注：高倍端（站价 > 官价）现行由「折扣>100% 不展示」产品口径直接丢弃，故这里用
+    注：高倍端（站价 > 官价）现行由「折扣>100% 不展示」产品决策直接丢弃，故这里用
     低价端（放大百万倍的换算事故）验两轮确认。"""
     rounds = [
         [PriceRecord("demo-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {"group": "default"})],
@@ -3445,9 +3445,9 @@ def test_above_official_price_is_dropped_not_stored(tmp_path: Path, monkeypatch)
 
 
 def test_above_official_price_drops_before_sanity_rounds(tmp_path: Path, monkeypatch):
-    """结构直采行高于官价时先按产品口径丢弃：即使倍数也超出 sanity 上界（约 20.2 倍）
+    """结构直采行高于官价时先按产品决策丢弃：即使倍数也超出 sanity 上界（约 20.2 倍）
     也只出 info，不进"价格异常"两轮确认——站方明码真价不该被报成提取错误刷异常卡片
-    （i-v1api 实锤：mimo-v2.5 真价 ¥45 = 22 倍官价，两轮确认把它报成错误，卡片噪音）。"""
+    （i-v1api 实证：mimo-v2.5 真价 ¥45 = 22 倍官价，两轮确认把它报成错误，卡片噪音）。"""
     def collect(*_args):
         return [PriceRecord("demo-model", 680.0, 680.0, "CNY/1M tokens",
                             "https://demo.test/pricing", 0,
@@ -3618,7 +3618,7 @@ def test_price_sanity_legacy_suspect_row_voids_directly():
 
 
 def test_phony_group_flat_pricing_with_void_skipped(tmp_path: Path, monkeypatch):
-    """占位组跳过：组内全部模型同一价目且有作废实锤时整组跳过（快照旧价走连续缺失摘除）；
+    """虚假分组跳过：组内全部模型同一价目且有作废实证时整组跳过（快照旧价走连续缺失移除）；
     同价的健康组（价格全可信，如各站 grok 分组）与模型各有其价的作废组（如 01tree 单位错）不受影响。"""
     catalog = _sanity_catalog()
     catalog["models"]["v4pro"] = {"found": True, "currency": "USD",
@@ -3626,11 +3626,11 @@ def test_phony_group_flat_pricing_with_void_skipped(tmp_path: Path, monkeypatch)
     catalog["models"]["v4flash"] = {"found": True, "currency": "CNY",
                                     "list": {"input": 2.0, "output": 8.0}, "source_url": "https://demo.test"}
     records = [
-        # 占位组：两个模型同一 0.03/0.12 价目；v4-pro 对厂商价偏离 300 倍（越界→作废实锤），
-        # v4-flash 0.015 倍在可信区间内（任何价格偏离判据都拦不住，靠同价目+作废实锤摘除）
-        PriceRecord("v4-pro", 0.03, 0.12, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "占位组"}),
-        PriceRecord("v4-flash", 0.03, 0.12, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "占位组"}),
-        # 同价的健康组：价格全部可信，无作废实锤，不触发
+        # 虚假分组：两个模型同一 0.03/0.12 价目；v4-pro 对厂商价偏离 300 倍（越界→作废实证），
+        # v4-flash 0.015 倍在可信区间内（任何价格偏离判据都拦不住，靠同价目+作废实证移除）
+        PriceRecord("v4-pro", 0.03, 0.12, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "虚假分组"}),
+        PriceRecord("v4-flash", 0.03, 0.12, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "虚假分组"}),
+        # 同价的健康组：价格全部可信，无作废实证，不触发
         PriceRecord("sane-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {"group": "ok"}),
         PriceRecord("demo-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {"group": "ok"}),
     ]
@@ -3646,19 +3646,19 @@ def test_phony_group_flat_pricing_with_void_skipped(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(NetworkAdapter, "collect", collect)
 
     run_once(config, store=store, client=httpx.Client())  # 轮1：建档，v4-pro 待复核，v4-flash 照常入库
-    assert store.latest_all()["demo:v4-flash:占位组"]["input_price"] == 0.03
+    assert store.latest_all()["demo:v4-flash:虚假分组"]["input_price"] == 0.03
     run_once(config, store=store, client=httpx.Client())  # 轮2：v4-pro 作废（跳过下一轮才生效）
-    assert "demo:v4-pro:占位组" not in store.latest_all()
-    assert store.latest_all()["demo:v4-flash:占位组"]["input_price"] == 0.03
-    run_once(config, store=store, client=httpx.Client())  # 轮3：占位组整组跳过
+    assert "demo:v4-pro:虚假分组" not in store.latest_all()
+    assert store.latest_all()["demo:v4-flash:虚假分组"]["input_price"] == 0.03
+    run_once(config, store=store, client=httpx.Client())  # 轮3：虚假分组整组跳过
     run_once(config, store=store, client=httpx.Client())  # 轮4：缺失计数累计
-    run_once(config, store=store, client=httpx.Client())  # 轮5：连续缺失达阈值，v4-flash 旧价从快照摘除
-    assert "demo:v4-flash:占位组" not in store.latest_all()
+    run_once(config, store=store, client=httpx.Client())  # 轮5：连续缺失达阈值，v4-flash 旧价从快照移除
+    assert "demo:v4-flash:虚假分组" not in store.latest_all()
     assert store.latest_all()["demo:sane-model:ok"]["input_price"] == 1  # 同价健康组不受影响
 
 
 def test_flat_pricing_group_without_void_kept(tmp_path: Path, monkeypatch):
-    """整组同价但价格全部可信（真实打包价形态）：无作废实锤不触发跳过。"""
+    """整组同价但价格全部可信（真实打包价形态）：无作废实证不触发跳过。"""
     records = [
         PriceRecord("sane-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {"group": "打包组"}),
         PriceRecord("demo-model", 1, 2, "USD/1M tokens", "https://demo.test/pricing", 0, {"group": "打包组"}),
@@ -3703,7 +3703,7 @@ def test_varied_pricing_group_with_void_not_skipped(tmp_path: Path, monkeypatch)
 
 
 def test_channel_rate_records_synthesize_from_status_snapshot(tmp_path: Path):
-    """渠道倍率价合成：价格腿零命中时，按状态快照里的渠道倍率 × 官方价出价
+    """渠道倍率价合成：价格链路零命中时，按状态快照里的渠道倍率 × 官方价出价
     （sub2api 倍率语义），分组用渠道名、整批 candidate；官方目录查无的渠道跳过。"""
     from llm_price_monitor.report.pricing import _channel_rate_records
 
@@ -3740,11 +3740,11 @@ def test_channel_rate_records_synthesize_from_status_snapshot(tmp_path: Path):
 
 
 def test_channel_rate_fills_pricing_when_direct_leg_misses(tmp_path: Path, monkeypatch):
-    """端到端：售卖渠道接口（价格腿）未命中监控模型、状态快照带渠道倍率时，
+    """端到端：售卖渠道接口（价格链路）未命中监控模型、状态快照带渠道倍率时，
     采集自动合成渠道价入库；多渠道同模型按渠道名分组成多条。"""
 
     def collect_empty(*_args):
-        return []  # 价格腿未命中（如 1for 的 available 只剩订阅制渠道）
+        return []  # 价格链路未命中（如 1for 的 available 只剩订阅制渠道）
 
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(_config(tmp_path)), encoding="utf-8")
@@ -3760,7 +3760,7 @@ def test_channel_rate_fills_pricing_when_direct_leg_misses(tmp_path: Path, monke
         ]}},
     })
     monkeypatch.setattr(NetworkAdapter, "collect", collect_empty)
-    # 状态腿在本轮价格合成读的是上一轮快照，本轮先跑一次状态写入再跑价格
+    # 状态链路在本轮价格合成读的是上一轮快照，本轮先跑一次状态写入再跑价格
     run_once(config, store=store, client=httpx.Client())
     report = run_once(config, store=store, client=httpx.Client())
     groups = sorted(r["metadata"]["group"] for r in report.records)
@@ -3768,7 +3768,7 @@ def test_channel_rate_fills_pricing_when_direct_leg_misses(tmp_path: Path, monke
     latest = store.latest_all()
     plus = latest["demo:demo-model:Plus【稳定】"]
     assert plus["input_price"] == 0.4 and plus["price_status"] == "candidate"
-    # 合成价即本轮真实产出：站点状态按合成结果记 ok，健康档案不得按价格腿零命中误报"没抓到数据"
+    # 合成价即本轮真实产出：站点状态按合成结果记 ok，健康档案不得按价格链路零命中误报"没抓到数据"
     assert report.site_status["demo"]["status"] == "ok"
     assert (store.get_document("site_collect_health") or {}).get("demo", {}).get("price") is None
 
@@ -3849,7 +3849,7 @@ def test_established_site_still_records_new_model(tmp_path: Path, monkeypatch):
 
 def test_concurrent_persist_dedupes_events_and_respects_touched(tmp_path: Path):
     """并行采集复查去重：测试采集与全量采集对同一份旧快照各自检出同一变化时，
-    后落库一路在锁内复查最新快照后丢弃重复事件；本轮没碰过的站点行（touched 之外）
+    后写库一路在锁内复查最新快照后丢弃重复事件；本轮没碰过的站点行（touched 之外）
     不得拿开始时的旧值回写覆盖并发轮次的更新。"""
 
     def row(site_id: str, model: str, input_price: float, captured_at: float) -> dict:
@@ -3877,7 +3877,7 @@ def test_concurrent_persist_dedupes_events_and_respects_touched(tmp_path: Path):
     )
     assert store.read_events(limit=10)[1] == 1
 
-    # 并行路（单站测试）在第一路落库后写同一变化：事件被复查丢弃；
+    # 并行路（单站测试）在第一路写库后写同一变化：事件被复查丢弃；
     # 它基线里的 other 旧值不在 touched 内，不得覆盖期间 other 被并发更新的价格
     concurrent_other = row("other", "other-model", 9.0, 2200.0)
     store.replace_latest({"other:other-model:default": concurrent_other})
@@ -3889,7 +3889,7 @@ def test_concurrent_persist_dedupes_events_and_respects_touched(tmp_path: Path):
     assert store.latest_all()["other:other-model:default"]["input_price"] == 9.0  # 不回写覆盖
     assert store.latest_all()["demo:demo-model:default"]["input_price"] == 3.0
 
-    # 分组下线同口径：并发轮次已把分组摘除时，后到一路的下线事件被丢弃
+    # 分组下线同一套规则：并发轮次已把分组移除时，后到一路的下线事件被丢弃
     store.remove_latest(["demo:demo-model:default"])
     remove_event = {"site_id": "demo", "model": "demo-model", "kind": "group_removed", "previous": fresh_demo_later, "current": None, "detected_at": 3000.0}
     _persist_scan_results(
@@ -3897,7 +3897,7 @@ def test_concurrent_persist_dedupes_events_and_respects_touched(tmp_path: Path):
         history_rows=[], events=[remove_event], removed_keys={"demo:demo-model:default"}, touched_keys=set(),
     )
     assert store.read_events(limit=10)[1] == 1
-    assert "demo:demo-model:default" not in store.latest_all()  # 摘除结果不被复活
+    assert "demo:demo-model:default" not in store.latest_all()  # 移除结果不被复活
 
 
 def test_persist_false_scan_does_not_pollute_group_miss(tmp_path: Path, monkeypatch):
@@ -4135,7 +4135,7 @@ def test_refresh_due_thresholds():
     assert not token_refresh.refresh_due(_jwt(now - 21240, now + day - 21240), now=now)  # 闲置 5.9h 未到上限，离到期也远
     assert token_refresh.refresh_due(_jwt(now - 840, now + 60), now=now)  # 15 分钟 token 剩 1 分钟
     assert not token_refresh.refresh_due(_jwt(now - 300, now + 600), now=now)  # 剩 10 分钟 > 7.5 分钟阈值
-    assert token_refresh.refresh_due(_jwt(now - day, now), now=now)  # 已过期：主动续一次兜底
+    assert token_refresh.refresh_due(_jwt(now - day, now), now=now)  # 已过期：主动续一次回退
     assert not token_refresh.refresh_due("not-a-jwt", now=now)
     assert not token_refresh.refresh_due(None, now=now)
 
@@ -4202,7 +4202,7 @@ def test_ensure_fresh_token_skips_valid_token_and_missing_refresh():
 
 
 def test_ensure_fresh_token_adopts_db_token_when_race(tmp_path: Path):
-    """并发竞态：价格腿刚续签过，状态腿拿着旧快照续签撞 401 时直接采用库里的新 token，不刷瞬时错误。"""
+    """并发竞态：价格链路刚续签过，状态链路拿着旧快照续签遇到 401 时直接采用库里的新 token，不刷瞬时错误。"""
     from llm_price_monitor import token_refresh
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -4217,7 +4217,7 @@ def test_ensure_fresh_token_adopts_db_token_when_race(tmp_path: Path):
         "token_refresh": {"url": "https://race.test/auth/refresh", "refresh_token": "rt_stale"},
     }
     store = Store(tmp_path / "monitor.db")
-    # 模拟别的腿已续签回写：库里 access/refresh 都比 spec 快照新
+    # 模拟别的链路已续签回写：库里 access/refresh 都比 spec 快照新
     store.upsert_site("race", {**raw_site, "auth_token": "at_fresh",
                                "token_refresh": {**raw_site["token_refresh"], "refresh_token": "rt_fresh"}})
     (spec,) = sites_from_raw([raw_site])
@@ -4230,7 +4230,7 @@ def test_ensure_fresh_token_adopts_db_token_when_race(tmp_path: Path):
 
 
 def test_ensure_fresh_token_silent_when_chain_dead(tmp_path: Path):
-    """续签链真死（库里也没有新 token）：静默返回原 spec，不抛错——用户可见的失败交给 401 后的被动续签上报。"""
+    """续签流程真死（库里也没有新 token）：静默返回原 spec，不抛错——用户可见的失败交给 401 后的被动续签上报。"""
     from llm_price_monitor import token_refresh
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -4713,7 +4713,7 @@ def test_marketplace_groups_pricing_effective_per_token():
 def test_model_market_catalog_records_with_group_rates():
     """sub2api model-market catalog（行价 "$X/M tokens" 字符串 + supported_groups 倍率）：
     实付 = 行价 × 组级 price_multiplier × 分组 effective_rate_multiplier，按 (模型 × 分组) 展开；
-    非 token 行（¥/秒）与未命中监控池的模型跳过。"""
+    非 token 行（¥/秒）与未命中监控清单的模型跳过。"""
     from llm_price_monitor.adapters import looks_like_model_market_catalog, model_market_catalog_records
 
     payload = {"code": 0, "message": "success", "data": {"version": 11, "groups": [
@@ -4852,7 +4852,7 @@ def test_network_adapter_dispatches_sub2api_shapes_without_ai():
 
 def test_product_library_price_records_parses_302ai():
     """302.ai 产品库价目（data.products[].price_info[]）：按折后实付价（platform_*）直读、
-    缺失回落标价，缓存读/写价随实付口径采集；多档取标准档，按次计费档跳过，
+    缺失回落标价，缓存读/写价随实付标准采集；多档取标准档，按次计费档跳过，
     折扣 SKU 归「折扣」分组、sale/ 前缀剥掉参与匹配。"""
     from llm_price_monitor.adapters import looks_like_product_library_prices, product_library_price_records
 
@@ -4913,7 +4913,7 @@ def test_product_library_price_records_parses_302ai():
     assert "档位：≤ 272K" in by_group["default"].metadata["notes"]
     assert by_group["折扣"].model == "claude-fable-5-1"
     assert by_group["折扣"].metadata["group_ratio"] == 0.85
-    # 折后实付价优先于标价，缓存读/写随实付口径
+    # 折后实付价优先于标价，缓存读/写随实付标准
     assert by_group["折扣"].input_price == pytest.approx(2.125)
     assert by_group["折扣"].output_price == pytest.approx(10.625)
     assert by_group["折扣"].metadata["cache_read_price"] == pytest.approx(0.2125)
@@ -4997,7 +4997,7 @@ def test_canonical_site_config_slims_and_unifies_auth():
     canonical, notes = canonical_site_config(config)
     assert canonical == {
         "id": "x",
-        "enabled": True,  # 启用态始终落库：管理台行内判断直接读它
+        "enabled": True,  # 启用态始终写库：管理台行内判断直接读它
         "auth_token": new_token,  # 两份手写 JWT 里 exp 新的那份收编
         "network": {"url": "https://x.test/api/pricing", "headers": {"referer": "https://x.test"}},
         "status": {"url": "https://x.test/api/metrics"},
@@ -5110,7 +5110,7 @@ def test_ai_extract_splits_expected_models_into_batches_of_four(monkeypatch: pyt
     targets = [f"model-{index:02d}" for index in range(17)]
     seen_batches: list[list[str]] = []
     handler = _ai_extract_handler(seen_batches)
-    # max_tokens=4000 → 4 条/批（旧默认口径，批大小随 max_tokens 折算）
+    # max_tokens=4000 → 4 条/批（旧默认规则，批大小随 max_tokens 折算）
     monkeypatch.setattr("llm_price_monitor.ai.AI_MAX_TOKENS", 4000)
     extractor = AIPriceExtractor(AIConfig(base_url="https://ai.test/v1", models=("test-model",), api_key="k"))
     records = extractor.extract(
@@ -5242,7 +5242,7 @@ def test_request_fallback_switches_model_on_invalid_output(monkeypatch):
     import llm_price_monitor.ai as ai_mod
     from llm_price_monitor.ai import json_content
 
-    # 模型池是随机洗牌的，钉死顺序断言才稳定
+    # 模型备选池是随机洗牌的，钉死顺序断言才稳定
     monkeypatch.setattr(ai_mod.random, "shuffle", lambda value: None)
     config = AIConfig(base_url="https://ai.test/v1", models=("bad-model", "good-model"), api_key="k")
     called_models: list[str] = []
@@ -5659,7 +5659,7 @@ def test_ai_extract_batch_size_scales_with_max_tokens():
 
 
 # ---------------------------------------------------------------------------
-# 续签链熔断：refresh_token 被站方作废（REFRESH_TOKEN_INVALID 类）后不再锤接口
+# 续签流程熔断：refresh_token 被站方作废（REFRESH_TOKEN_INVALID 类）后不再锤接口
 # ---------------------------------------------------------------------------
 
 def _dead_store(tmp_path: Path, site_id: str = "rt", refresh_token: str = "rt_old") -> Store:
@@ -5704,7 +5704,7 @@ def test_refresh_revoked_marks_dead_since_in_config(tmp_path: Path, monkeypatch)
 
 
 def test_refresh_chain_dead_skips_network_call(tmp_path: Path):
-    """熔断后 ensure_fresh_token 直接跳过：不再发任何续签请求（锤接口=反复撞墙）。"""
+    """熔断后 ensure_fresh_token 直接跳过：不再发任何续签请求（锤接口=反复失败）。"""
     from llm_price_monitor import token_refresh
 
     store = _dead_store(tmp_path)
@@ -5731,7 +5731,7 @@ def test_refresh_chain_dead_skips_network_call(tmp_path: Path):
 
 
 def test_refresh_revoked_uses_fresh_library_token_on_race(tmp_path: Path, monkeypatch):
-    """并发护栏：报作废时若库里的 rt_ 已被别的腿换新，直接采用库内新 token 重试，不再发请求。"""
+    """并发护栏：报作废时若库里的 rt_ 已被别的链路换新，直接采用库内新 token 重试，不再发请求。"""
     from llm_price_monitor import token_refresh
 
     store = _dead_store(tmp_path, refresh_token="rt_old_in_library")
@@ -5741,7 +5741,7 @@ def test_refresh_revoked_uses_fresh_library_token_on_race(tmp_path: Path, monkey
         "network": {"url": "https://rt.test/api/pricing"},
         "token_refresh": {"url": "https://rt.test/auth/refresh", "refresh_token": "rt_stale_in_spec"},
     }])
-    # spec 是旧快照（rt_stale），库里的 rt_ 刚被价格腿换新 → 判"作废"时应走并发护栏
+    # spec 是旧快照（rt_stale），库里的 rt_ 刚被价格链路换新 → 判"作废"时应走并发护栏
     record = PriceRecord("m", 1, 2, "USD/1M tokens", "https://rt.test/pricing", 0, {})
     retried_with: list[str] = []
 
@@ -5760,7 +5760,7 @@ def test_refresh_revoked_uses_fresh_library_token_on_race(tmp_path: Path, monkey
 
 
 def test_refresh_revoked_error_message_is_actionable(tmp_path: Path):
-    """错误文案说人话：带站方 reason 与"需重新登录接管"，不是干巴巴的 HTTP 401。"""
+    """错误文案说人话：带站方 reason 与"需重新登录接入"，不是干巴巴的 HTTP 401。"""
     from llm_price_monitor import token_refresh
 
     (spec,) = sites_from_raw([{

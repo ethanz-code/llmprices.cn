@@ -40,7 +40,7 @@
 
 ## 3. 字体与字号
 
-- `--font-sans`：Geist Sans（next/font 注入）+ 苹方/雅黑兜底，正文与标题。
+- `--font-sans`：Geist Sans（next/font 注入）+ 苹方/雅黑后备，正文与标题。
 - `--font-mono`：Geist Mono，**所有数字**（价格、百分比、时间戳、限额）用 `.mono.num`，配 `tabular-nums`。
 - 衬线已全面退役（`--font-serif` 已删除），不要再引入。
 
@@ -62,7 +62,7 @@
 数字格式（2026-10-14 用户定：全站统一英文风格，不用中文「万/亿」）：
 
 - **精确统计数**（条数、次数、token 用量明细）：千分位 `1,000`，用 `lib/format.ts` 的 `formatCount`；价格走 `formatPrice`（≥1000 同样补千分位）。
-- **量级缩写**（访问量、群人数、排名、token 档位）：统一英文缩写 k/M/B（小写 k），用 `formatCompact`（`9.5k / 134.7k / 1.2M`，一位小数封顶）；token 数走 `formatTokens`（同一口径，`272k`）。不要再写中文缩写或自造 `13.5万` 式格式。
+- **量级缩写**（访问量、群人数、排名、token 档位）：统一英文缩写 k/M/B（小写 k），用 `formatCompact`（`9.5k / 134.7k / 1.2M`，一位小数封顶）；token 数走 `formatTokens`（同一规则，`272k`）。不要再写中文缩写或自造 `13.5万` 式格式。
 - **文案里的数字单位**：说「每 1M token」不说「每百万 token」，快捷档位写 `10M / 100M / 1B` 不加中文注音。
 
 ## 4. 布局与间距

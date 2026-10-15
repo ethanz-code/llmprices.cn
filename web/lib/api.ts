@@ -1,7 +1,7 @@
 /** API 访问层：服务端直连 FastAPI；浏览器侧走同源代理，
  *  管理接口依赖 HttpOnly session cookie，浏览器自动携带。 */
 
-// 服务端直连 FastAPI；浏览器侧必须走同源 /api 代理（直连会撞 CORS，且拿不到 HttpOnly cookie）。
+// 服务端直连 FastAPI；浏览器侧必须走同源 /api 代理（直连会触发 CORS 限制，且拿不到 HttpOnly cookie）。
 // 部署开启读接口封锁（后端 PRICE_WEB_INTERNAL_TOKEN）后，服务端请求附带令牌自证内网身份；
 // 浏览器拿不到令牌，匿名只能看页面 HTML，调不到数据接口。
 const API_BASE =

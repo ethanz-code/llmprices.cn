@@ -14,7 +14,7 @@ _USD_PATTERN = re.compile(r"\$|美元|usd|dollar", re.IGNORECASE)
 
 
 def detect_currency(*texts: str | None) -> str | None:
-    """从表头/单位文本里判断币种：人民币标识优先于美元（国内定价页默认口径）。"""
+    """从表头/单位文本里判断币种：人民币标识优先于美元（国内定价页默认规则）。"""
     joined = " ".join(text for text in texts if text)
     if _CNY_PATTERN.search(joined):
         return "CNY"
@@ -24,7 +24,7 @@ def detect_currency(*texts: str | None) -> str | None:
 
 
 def unit_scale(header_text: str) -> float:
-    """页面标价换算成"每百万 tokens"要乘的系数；识别不出按国内定价页惯例的百万口径。"""
+    """页面标价换算成"每百万 tokens"要乘的系数；识别不出按国内定价页惯例的百万标准。"""
     text = header_text.replace(" ", "")
     if re.search(r"百万|1M|/M(?![A-Za-z])|million", text, re.IGNORECASE):
         return 1.0
@@ -71,12 +71,12 @@ def clean_model_name(name: str) -> str:
     return _TRAILING_QUALIFIER_PATTERN.sub("", text).strip()
 
 
-# 上下文窗口文本的取数与单位：K/M 按二进制口径（与 Kimi 官方标注 1,048,576 tokens 一致）
+# 上下文窗口文本的取数与单位：K/M 按二进制标准（与 Kimi 官方标注 1,048,576 tokens 一致）
 _CONTEXT_TOKEN_PATTERN = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(K|M|B|万|亿)?", re.IGNORECASE)
 _CONTEXT_TOKEN_SCALE = {"K": 1024, "M": 1024**2, "B": 1024**3, "万": 10_000, "亿": 10_000**2}
 # 显式输出上限标注：标注后的数字是输出上限而不是上下文
 _OUTPUT_LABEL_PATTERN = re.compile(r"最大输出|输出上限|输出|max(?:imum)?[\s-]*output", re.IGNORECASE)
-# "8K~1M"这类可取值区间读不出单一上限，宁缺勿猜
+# "8K~1M"这类可取值区间读不出单一上限，歧义即弃权
 _CONTEXT_RANGE_PATTERN = re.compile(r"\d[^/／]*[-~～–—]\s*\d")
 
 

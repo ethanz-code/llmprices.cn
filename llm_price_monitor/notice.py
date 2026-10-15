@@ -78,7 +78,7 @@ def _fetch_announcements(
     except httpx.HTTPStatusError as exc:
         raise PriceMonitorError(f"多条公告接口（/api/status）返回 HTTP {response.status_code}") from exc
     except ValueError:
-        return []  # 200 但非 JSON：多半是前端路由兜底的 HTML 页，站点没有该接口
+        return []  # 200 但非 JSON：多半是前端路由回退的 HTML 页，站点没有该接口
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
         return []
     items = payload["data"].get("announcements")

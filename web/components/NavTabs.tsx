@@ -36,7 +36,7 @@ export function NavTabs({
       setIndicator({ left: activeRect.left - pillRect.left, width: activeRect.width });
     };
     measure();
-    // 字体加载完成会改变字宽，延迟重测一次兜底
+    // 字体加载完成会改变字宽，延迟重测一次后备
     const timer = setTimeout(measure, 350);
     window.addEventListener("resize", measure);
     return () => {

@@ -1,4 +1,4 @@
-"""价格行的采集侧变换：占位沿用上次价、规则价回填、分组白名单、合理性作废、占位组跳过与渠道倍率合成。"""
+"""价格行的采集侧变换：占位沿用上次价、推算价回填、分组白名单、合理性作废、虚假分组跳过与渠道倍率合成。"""
 from __future__ import annotations
 
 import time
@@ -15,7 +15,7 @@ from .summary import representative_tier, summary_tiers
 
 
 def _has_price(row: dict[str, Any]) -> bool:
-    """是否拿到真实价格。0/0 双零只有 confirmed（渠道真免费档）才算有价：
+    """是否拿到真实价格。0/0 双零只有 confirmed（渠道真零价）才算有价：
     AI 抽不到价时可能照提示词模板把数值抄成 0，这种占位行若被当成"有价"入库，
     会以 ¥0 假免费价进快照并被首页最低价挑选选中。"""
     input_price, output_price = row.get("input_price"), row.get("output_price")
@@ -47,7 +47,7 @@ def _carry_last_price(current: dict[str, Any], previous: dict[str, Any]) -> dict
 
 def _backfill_rule_price(row: dict[str, Any]) -> dict[str, Any]:
     """rule_only 行价格字段为空但 pricing_rules 有推断价时，把代表档价格回填到顶层：
-    推断价得以进快照与定价页（price_status 保持 rule_only，前端标注"规则价"）；
+    推断价得以进快照与定价页（price_status 保持 rule_only，前端标注"推算价"）；
     真正无数据的行（pricing_rules 也为空）保持无价，不进快照。"""
     if row.get("price_status") != "rule_only" or _has_price(row):
         return row
@@ -63,7 +63,7 @@ def _backfill_rule_price(row: dict[str, Any]) -> dict[str, Any]:
 
 def _filter_price_groups(records: list[PriceRecord], groups: list[str]) -> list[PriceRecord]:
     """按站点分组白名单过滤采集到的价格记录：分组名忽略大小写，metadata 缺分组视为 default；
-    一个都没匹配上时保留原记录，避免白名单写错把整站价格清空（与状态侧口径一致）。"""
+    一个都没匹配上时保留原记录，避免白名单写错把整站价格清空（与状态侧规则一致）。"""
     targets = {group.strip().casefold() for group in groups if group.strip()}
     if not targets:
         return records
@@ -92,14 +92,14 @@ def _channel_rate_records(
     official_models: dict[str, Any] | None,
     source_url: str,
 ) -> list[PriceRecord]:
-    """渠道倍率价合成：价格腿零命中、而本站渠道状态快照（status_ref:{site_id}，渠道监测
+    """渠道倍率价合成：价格链路零命中、而本站渠道状态快照（status_ref:{site_id}，渠道监测
     接口响应）的渠道带 rate_multiplier 与模型名时，按 sub2api 倍率语义
     「实付 = 官方价 × 渠道倍率」合成价格记录（1for 案：售卖渠道接口只剩订阅制 swe，
     ChatGPT/Claude/Grok 渠道的倍率价目只挂在渠道状态页）。
 
-    判据零配置、天然通用：任何"渠道倍率型"站价格腿空时自动走这里；渠道模型在官方目录
+    判据零配置、天然通用：任何"渠道倍率型"站价格链路空时自动走这里；渠道模型在官方目录
     查无基准价、或渠道无倍率则跳过该渠道；同模型多渠道各按渠道名成组出价。倍率价是
-    跨源合成（官方目录 × 状态快照），整批标 candidate 待复核；快照是上一轮状态腿采集
+    跨源合成（官方目录 × 状态快照），整批标 candidate 待复核；快照是上一轮状态链路采集
     的结果，首建轮无状态快照时自然不触发，下一轮起生效。"""
     if official_models is None:
         return []
@@ -190,16 +190,16 @@ def _drop_phony_group_records(
     site_id: str,
     sanity_state: dict[str, Any],
 ) -> list[PriceRecord]:
-    """占位组跳过：分组内全部有价模型共享同一价目、且组内已有模型被 sanity 两轮
+    """虚假分组跳过：分组内全部有价模型共享同一价目、且组内已有模型被 sanity 两轮
     确认作废时，整组视为站方占位目录（2000lab deepseek稳定高速案：5 个模型同一
-    0.03/0.12 价目，v4-pro 对厂商价偏离 300 倍被作废实锤，同价目型号一并跳过）。
+    0.03/0.12 价目，v4-pro 对厂商价偏离 300 倍被作废实证，同价目型号一并跳过）。
 
     双信号缺一不可：同价目是占位的形态证据（真实渠道不同模型成本不同，整组一个
-    价几乎必是拍脑袋填的目录），作废实锤给出价格为假的决定性证据。真实的整组
+    价几乎必是拍脑袋填的目录），作废实证给出价格为假的决定性证据。真实的整组
     同价（各站 grok 分组：grok-4.6/4.7 官方同价打包卖、价格可比对在可信区间）因
-    无作废实锤不受影响；模型各自有价的组（01tree 单位错，逐模型价格不同）不触发，
+    无作废实证不受影响；模型各自有价的组（01tree 单位错，逐模型价格不同）不触发，
     仍走 sanity 逐模型作废。站方改价后自动恢复采集。被跳过的组本轮视为"没取到
-    数据"，快照旧价走既有的连续缺失摘除路径自然消退。"""
+    数据"，快照旧价走既有的连续缺失移除路径自然消退。"""
     priced_by_group: dict[str, list[PriceRecord]] = {}
     for record in records:
         if record.input_price is None and record.output_price is None:
@@ -218,7 +218,7 @@ def _drop_phony_group_records(
     if not phony_groups:
         return records
     tasklog.emit(
-        f"[{site_id}] 分组 {'、'.join(sorted(phony_groups))} 全部模型同一价目且有作废实锤，按站方占位目录跳过",
+        f"[{site_id}] 分组 {'、'.join(sorted(phony_groups))} 全部模型同一价目且有作废实证，按站方占位目录跳过",
         "info",
     )
     return [record for record in records if str((record.metadata or {}).get("group") or "default") not in phony_groups]
@@ -238,9 +238,9 @@ def _apply_price_sanity(
     官方价目录自身也可能带错（如 AI 提取厂商定价页列错位），单轮偏差就把价作废会
     误杀真数据；连续两轮都越界才认定是站点侧问题。作废后走既有的"本次没拿到价"
     路径（上次有价则沿用并带出原因），保证错误数值永远进不了快照与历史；
-    校验判据缺失（无目录/无汇率）时不拦，不构成兜底。
+    校验判据缺失（无目录/无汇率）时不拦，不构成后备。
 
-    作废行因无价被落库层清理，previous 随之消失，两轮确认的跨轮进度记在 state
+    作废行因无价被写库层清理，previous 随之消失，两轮确认的跨轮进度记在 state
     （key → {reason, voided}，由调用方按采集轮持久化到 sanity_state 文档）：
     已作废的同因复现静默维持作废，不再每轮重走两轮确认刷任务日志与异常卡片；
     站方改回正常价即清除状态，再次越界重新走两轮确认。只带旧版

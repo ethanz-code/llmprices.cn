@@ -167,7 +167,7 @@ class PriceStoreMixin(StoreBase):
             return int(conn.execute("SELECT COUNT(*) FROM price_events").fetchone()[0])
 
     def prune_price_groups(self, site_id: str, groups: list[str]) -> dict[str, int]:
-        """按分组过滤口径清理该站点已入库的价格数据：最新快照、历史趋势点与价格事件里
+        """按分组过滤标准清理该站点已入库的价格数据：最新快照、历史趋势点与价格事件里
         未选中分组的行直接删除，分组缺失计数同步清掉。供保存分组配置时调用，幂等；返回清理统计。"""
         stats = {"latest": 0, "trend": 0, "events": 0}
         targets = {group.strip().casefold() for group in groups if group.strip()}

@@ -1,4 +1,4 @@
-"""通用定价页拉取脚本（page_price）：三种确定性解析、Headless 兜底与 AI 兜底的证据校验。"""
+"""通用定价页拉取脚本（page_price）：三种确定性解析、Headless 后备与 AI 回退的证据校验。"""
 from __future__ import annotations
 
 import json
@@ -67,7 +67,7 @@ JSON_PAGE = json.dumps({
     ]
 })
 
-# 纯文本价目：md/html/json 三种解析都拿不到，只能走 AI 兜底
+# 纯文本价目：md/html/json 三种解析都拿不到，只能走 AI 回退
 PLAIN_PAGE = """DeepSeek 价格表（2026年9月）
 deepseek-flash：输入 1 元/百万 tokens，输出 4 元/百万 tokens，缓存命中 0.02 元
 deepseek-v4-pro：输入 4.5 元/百万 tokens，输出 13.5 元/百万 tokens
@@ -343,7 +343,7 @@ def test_transposed_grid_rejects_attribute_header() -> None:
 
 
 # 仿 cloud.baidu.com 千帆价目表：rowspan 把模型列下推多行，输入/输出各占一行，
-# 价格在「在线推理」服务列，单位列标元/千tokens（要 ×1000 折成百万口径）
+# 价格在「在线推理」服务列，单位列标元/千tokens（要 ×1000 折成百万标准）
 BAIDU_CATEGORIZED_HTML = """<html><body><table>
   <tr><th>模型名称</th><th>版本名称</th><th>子项</th><th>在线推理</th><th>批量推理</th><th>单位</th></tr>
   <tr><td rowspan="4">ERNIE 5.1</td><td rowspan="4">ERNIE-5.1</td><td>输入（输入&lt;=32k）</td><td>0.004</td><td>-</td><td rowspan="4">元/千tokens</td></tr>
@@ -401,7 +401,7 @@ def test_parse_json_entries() -> None:
     assert [record["model_key"] for record in records] == ["deepseekchat", "deepseekreasoner"]
     chat = records[0]
     assert (chat["input_price"], chat["output_price"], chat["cache_read_price"]) == (0.27, 1.1, 0.07)
-    # 无币种标识时按该解析结构的约定口径标注
+    # 无币种标识时按该解析结构的约定标准标注
     assert chat["currency"] == "USD"
 
 
@@ -708,7 +708,7 @@ def test_parse_html_time_tier_column():
 
 
 def test_fetch_page_prices_ai_fallback_uses_rendered_text(monkeypatch):
-    """显式 headless 渲染成功但静态解析不出：AI 兜底必须看渲染后的正文，而不是渲染前的 JS 空壳。"""
+    """显式 headless 渲染成功但静态解析不出：AI 后备必须看渲染后的正文，而不是渲染前的 JS 空壳。"""
     from llm_price_monitor.config import AIConfig
 
     monkeypatch.setattr(page_price, "fetch_page_html", lambda url, headers, user_agent: "<html>claude-x 渲染后价格 $3.00</html>")

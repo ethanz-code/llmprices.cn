@@ -1,7 +1,7 @@
 """store/schema.py：SQLite DDL、旧库迁移与 latest 快照 key 的编码规则。
 
 key 编码放在这里是因为它和 latest 表结构是同一份契约：key 格式 "{site_id}:{model}:{group}"，
-建表、迁移与读写两侧都依赖这个格式，放一起避免口径漂移。
+建表、迁移与读写两侧都依赖这个格式，放一起避免标准漂移。
 """
 from __future__ import annotations
 

@@ -22,7 +22,7 @@ export const metadata = pageMetadata(
   "/overview",
 );
 
-// 本页只取「列表本身」：价格行 + 排序/徽标索引。渠道点阵不再随列表下发（整轮 40MB+），
+// 本页只取「列表本身」：价格行 + 排序/徽标索引。检测点阵不再随列表下发（整轮 40MB+），
 // 改由每行的懒加载组件进入视口后按需向后端要（见 app/api/channel-dots）。
 // 取数不带会话 cookie：/api/overview 对管理员与访客返回同一份数据（采集异常清单公开脱敏下发），
 // 页面不随登录态分叉。
@@ -34,15 +34,15 @@ export default async function OverviewPage() {
   // AA 榜单匹配索引：给当前选中模型挂排名徽标；拉取失败只影响徽标
   let rankingsIndex: Record<string, RankingHit> = {};
   // 目录排序索引（模型归一键 → 厂商序+发布日期）：模型下拉按「厂商分块+发布倒序」排的依据；
-  // 只传这份轻量映射而非整个目录，拉取失败只影响排序口径（退化为按名称）
+  // 只传这份轻量映射而非整个目录，拉取失败只影响排序规则（退化为按名称）
   let modelOrder: Record<string, ModelOrderEntry> = {};
-  // 站点首页覆盖表：站名外链用；拉取失败退回内置映射/来源域名兜底（loadSiteHomepages 自带兜底）
+  // 站点首页覆盖表：站名外链用；拉取失败退回内置映射/来源域名后备（loadSiteHomepages 自带后备）
   let siteHomepages: SiteHomepages = {};
-  // 站点人气：站点列的月访问量/群人数徽标用；拉取失败整体不挂徽标（loadSitePopularity 自带兜底）
+  // 站点人气：站点列的月访问量/群人数徽标用；拉取失败整体不挂徽标（loadSitePopularity 自带后备）
   let sitePopularity: SitePopularityMap = {};
   let error: string | null = null;
   try {
-    // 在售监测集与站点综合分共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求；
+    // 在售模型与分组集合与站点综合分共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求；
     // 渠道视图（每站可用率/成功率）SWR 缓存，只服务排序，失败只让「渠道稳定」一项取中性分
     const overviewPromise = apiGet<OverviewData>("/api/overview");
     const [overview, rankings, catalog, homepages, statusViews, popularity] = await Promise.all([
@@ -86,7 +86,7 @@ export default async function OverviewPage() {
           ]}
         />
       )}
-      {/* 风险提示只放这一页（用户 2026-10-13 定）：试水建议 + 榜单口径 + 消费免责，表前一段说清 */}
+      {/* 风险提示只放这一页（用户 2026-10-13 定）：试水建议 + 榜单规则 + 消费免责，表前一段说清 */}
       {data && (
         <RiskNotice title={risk.title}>
           {risk.lines.map((line) => (

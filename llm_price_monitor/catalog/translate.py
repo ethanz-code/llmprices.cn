@@ -134,7 +134,7 @@ def _translate_batch(
     batch: list[tuple[str, dict[str, Any]]],
     client: httpx.Client | None,
 ) -> int:
-    """一个批次的 AI 翻译：返回成功落盘的条数；失败抛异常由调用方兜底。"""
+    """一个批次的 AI 翻译：返回成功写盘的条数；失败抛异常由调用方后备。"""
     payload = [{"model": key, "description": entry.get("description")} for key, entry in batch]
     translations = chat_json(
         config,

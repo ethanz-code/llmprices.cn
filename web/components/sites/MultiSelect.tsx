@@ -42,7 +42,7 @@ function TagMultiSelect({
   value: string[];
   onChange: (next: string[]) => void;
   options: MultiOption[] | null;
-  /** 候选拉取失败：空态文案换成"没拉到"口径 */
+  /** 候选拉取失败：空态文案换成"没拉到"标准 */
   failed?: boolean;
   /** 外层与下拉共用的宽度；默认 420px，宽版场景（如监控模型行）自行加宽 */
   ariaLabel: string;
@@ -268,11 +268,11 @@ function TagMultiSelect({
 
 /** 目标模型多选：搜索勾选 models.dev 官方目录，目录外的名字输入后回车添加；
  *  已选清单与下拉同序（同厂商的模型挨在一起，厂商内发布日期倒序、同日期按名称），
- *  目录外自定义的垫底。 */
+ *  目录外自定义的排最后。 */
 function ModelMultiSelect({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
   const [options, setOptions] = useState<MultiOption[] | null>(null);
   // 模型归一键 → 目录排序依据（厂商序+发布日期）：已选清单按与下拉同款规则排序时查用；
-  // 排序口径与模型数据页模型下拉共用（lib/modelOrder），两处看到的顺序一致
+  // 排序规则与模型数据页模型下拉共用（lib/modelOrder），两处看到的顺序一致
   const [orderById, setOrderById] = useState<ReadonlyMap<string, ModelOrderEntry> | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -306,7 +306,7 @@ function ModelMultiSelect({ value, onChange }: { value: string[]; onChange: (nex
   }, []);
 
   /** 已选清单按目录同款规则排序：同厂商挨在一起、厂商内发布日期倒序、同日期按名称，
-   *  目录外的自定义模型垫底。显示与保存都过它：存量乱序打开页面即归位，编辑保存落库的也是同一套顺序。 */
+   *  目录外的自定义模型排在最后。显示与保存都过它：存量乱序打开页面即归位，编辑保存写库的也是同一套顺序。 */
   const sortModels = useCallback(
     (list: string[]) => {
       if (!orderById) return list;

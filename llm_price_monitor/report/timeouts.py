@@ -14,12 +14,12 @@ from llm_price_monitor.tracker import PriceRecord
 from llm_price_monitor import report as _report_pkg  # noqa: F401
 
 # 单站采集的硬上限（秒）：适配器内有 per-request 超时，但实测经本地代理的半死连接
-# 会在 SSL 抖动重试后无限挂起、超时不触发——单站卡死不能拖垮整轮和后续站点的落库
+# 会在 SSL 抖动重试后无限挂起、超时不触发——单站卡死不能拖垮整轮和后续站点的写库
 SITE_HARD_TIMEOUT_SECONDS = 900.0
 
 # 站点网络阶段并行度：站点彼此独立，串行时一个站卡满硬上限整轮跟着等；
 # 4 路并发下最坏耗时 ≈ ⌈站数/4⌉ × 硬上限。共享 httpx.Client 线程安全，
-# 快照比对与落库仍在主线程按站点顺序串行，不改数据语义。
+# 快照比对与写库仍在主线程按站点顺序串行，不改数据语义。
 SITE_FETCH_CONCURRENCY = 4
 _FETCH_SLOTS = threading.BoundedSemaphore(SITE_FETCH_CONCURRENCY)
 
@@ -91,7 +91,7 @@ class _NetworkPhaseHandle:
 def start_network_phase(
     phase: Callable[[], tuple[list[PriceRecord], list[str]]], site_id: str
 ) -> _NetworkPhaseHandle:
-    """立即并行开工一个站点的采集；调用方稍后对句柄 result() 取结果并落库。"""
+    """立即并行开工一个站点的采集；调用方稍后对句柄 result() 取结果并写库。"""
     return _NetworkPhaseHandle(phase, site_id)
 
 
@@ -105,8 +105,8 @@ def _run_network_phase(
 
 
 def _run_site_fetch(fetch: Callable[[], Any], site_id: str) -> Any:
-    """单站状态/公告请求的硬上限兜底：与价格腿同因，半死代理连接上 per-request
-    超时可能不触发，此前这两条腿没有保护，单站挂死会把整轮任务无限拖住。
+    """单站状态/公告请求的硬上限后备：与价格链路同因，半死代理连接上 per-request
+    超时可能不触发，此前这两条链路没有保护，单站挂死会把整轮任务无限拖住。
     超时按 PriceMonitorError 抛出，走各扫描段已有的失败落账路径。"""
     hard_timeout = _report_pkg.SITE_HARD_TIMEOUT_SECONDS
     sink = tasklog.current_sink()

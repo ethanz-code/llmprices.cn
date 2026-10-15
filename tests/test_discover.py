@@ -1,5 +1,5 @@
 """price-discover 测试：链接归一、域名转 id、README 表格解析、pricing 响应判读，
-以及 probe 落盘链路（--take 只预览不落盘 / 全量落盘 / 重测增量合并）与 harvest 源选择。"""
+以及 probe 写盘链路（--take 只预览不写盘 / 全量写盘 / 重测增量合并）与 harvest 源选择。"""
 import asyncio
 import json
 from pathlib import Path
@@ -41,7 +41,7 @@ def test_host_to_id_strips_infra_prefix_and_tld_and_dedupes():
     assert host_to_id("api.gpt.ge", taken) == "gpt"
     assert host_to_id("www.bkbk.baby", taken) == "bkbk"
     assert host_to_id("uo.mentoe.com", taken) == "uo-mentoe"
-    # 撞名追加序号
+    # 重名时追加序号号
     assert host_to_id("api.gpt.ge", taken) == "gpt-2"
 
 
@@ -168,7 +168,7 @@ def test_harvest_html_links_skips_own_host_and_cleans_backslash():
     assert harvest_html_links(r"https://b.example.com\/x", source="s", own_host="s.com")[0].host == "b.example.com"
 
 
-# ---------- probe 落盘链路与 harvest 源选择（run_probe / run_harvest） ----------
+# ---------- probe 写盘链路与 harvest 源选择（run_probe / run_harvest） ----------
 
 
 def _write_candidates(out_dir: Path, *cands: Candidate) -> None:
@@ -216,7 +216,7 @@ def test_run_probe_take_preview_keeps_full_results(tmp_path: Path, monkeypatch):
 
 
 def test_run_probe_full_run_writes_results(tmp_path: Path, monkeypatch):
-    """全量探测（take=0）正常落盘：明细含失败项，importable 只含可用站且默认停用。"""
+    """全量探测（take=0）正常写盘：明细含失败项，importable 只含可用站且默认停用。"""
     out = tmp_path / "discovery"
     out.mkdir()
     monkeypatch.setattr(discover_mod, "OUT_DIR", out)
@@ -243,7 +243,7 @@ def test_run_probe_full_run_writes_results(tmp_path: Path, monkeypatch):
 
 
 def test_run_probe_retry_failed_merges_stale_ok(tmp_path: Path, monkeypatch):
-    """--retry-failed 只重测失败项：上轮已通过的保留原样，与捞回结果合并落盘。"""
+    """--retry-failed 只重测失败项：上轮已通过的保留原样，与捞回结果合并写盘。"""
     out = tmp_path / "discovery"
     out.mkdir()
     monkeypatch.setattr(discover_mod, "OUT_DIR", out)
@@ -275,7 +275,7 @@ def test_run_probe_retry_failed_merges_stale_ok(tmp_path: Path, monkeypatch):
 
 def test_run_harvest_only_selection_and_incremental_merge(tmp_path: Path, monkeypatch):
     """缺省只跑 zuiquanapi 单源，--only/all 按名展开，未知源拒绝；
-    候选池与上轮增量合并——本轮没拉到的旧站不会被挤掉。"""
+    候选站列表与上轮增量合并——本轮没拉到的旧站不会被挤掉。"""
     out = tmp_path / "discovery"
     out.mkdir()
     monkeypatch.setattr(discover_mod, "OUT_DIR", out)
@@ -296,7 +296,7 @@ def test_run_harvest_only_selection_and_incremental_merge(tmp_path: Path, monkey
     with pytest.raises(SystemExit):
         asyncio.run(discover_mod.run_harvest(None, "nope"))
 
-    # 增量合并：上轮池里的站在本轮源里拉不到，也必须留在池子里
+    # 增量合并：上轮池里的站在本轮源里拉不到，也必须留在清单里
     _write_candidates(out, Candidate("old.example", "https://old.example", "Old", ["github-nav"]))
     asyncio.run(discover_mod.run_harvest(None, None))
     merged = json.loads((out / "candidates.json").read_text(encoding="utf-8"))["candidates"]
@@ -337,7 +337,7 @@ def test_parse_hunter_uses_url_field():
 
 
 def test_refresh_pool_harvest_only_never_probes(tmp_path: Path, monkeypatch):
-    """刷新只拉源合并候选池（站点与简介），不做任何探测——探测是 CLI probe 的显式动作。"""
+    """刷新只拉源合并候选站列表（站点与简介），不做任何探测——探测是 CLI probe 的显式动作。"""
     monkeypatch.setattr(discover_mod, "OUT_DIR", tmp_path)
 
     async def fake_harvest(proxy, only=None):

@@ -1,7 +1,7 @@
-"""全量渠道价目录的浏览分页：排序/筛选/分页口径，以及 /api/catalog/all 的接口契约。
+"""全量渠道价目录的浏览分页：排序/筛选/分页标准，以及 /api/catalog/all 的接口契约。
 
 这份目录 8000+ 条、整份约 8 MB，原先整份下发给浏览器排序筛选；分页后接口只回当前页，
-所以排序口径必须由后端自己保证稳定，这里把它钉住。
+所以排序规则必须由后端自己保证稳定，这里把它钉住。
 """
 import json
 import re
@@ -48,7 +48,7 @@ def _order(entries: list[tuple[str, dict]]) -> list[str]:
     return [str(entry["model"]) for _, entry in sort_entries(entries)]
 
 
-# ---------- 排序口径 ----------
+# ---------- 排序规则 ----------
 
 
 def test_vendor_display_matches_frontend_map():
@@ -88,12 +88,12 @@ def test_sort_entries_vendor_block_then_release_desc_then_name():
         "d": _entry("zzz", "Beta", "2026-03-01"),
         "e": _entry("nodate", "Alpha", None),
     }
-    # Beta 家最新发布更晚，整块在前；Alpha 块内先按发布日期倒序，同日按模型名，没日期的垫底
+    # Beta 家最新发布更晚，整块在前；Alpha 块内先按发布日期倒序，同日按模型名，没日期的排最后
     assert _order(found_entries(models)) == ["zzz", "ccc", "aaa", "bbb", "nodate"]
 
 
 def test_sort_entries_tie_break_matches_browser_collation():
-    """同日并列的次序：小写在前（浏览器 localeCompare 口径）、标点排在字母数字之前。"""
+    """同日并列的次序：小写在前（浏览器 localeCompare 标准）、标点排在字母数字之前。"""
     models = {
         "a": _entry("NanoGPT", "Alpha", "2026-01-01"),
         "b": _entry("nanogpt", "Alpha", "2026-01-01"),
@@ -205,7 +205,7 @@ def _sorted_models(sort: str, direction: str = "ascend") -> list[str]:
 
 
 def test_sort_by_column_ascending_and_descending():
-    # 价格升序：缺价的按 0 排最前（与前端列 sorter 的 `?? 0` 同口径）
+    # 价格升序：缺价的按 0 排最前（与前端列 sorter 的 `?? 0` 同一套规则）
     assert _sorted_models("list") == ["m-c", "m-b", "m-d", "m-a"]
     assert _sorted_models("list", "descend") == ["m-a", "m-d", "m-b", "m-c"]
     assert _sorted_models("limit") == ["m-c", "m-b", "m-a", "m-d"]
@@ -220,13 +220,13 @@ def test_sort_by_release_date_and_unknown_key_keeps_directory_order():
     }
     page = page_catalog_all(_doc(models), limit=10, sort="release_date")
     assert [e["model"] for e in page["models"].values()] == ["nodate", "old", "new"]
-    # 白名单外的键当没传：仍是目录口径（厂商块 + 发布日期倒序）
+    # 白名单外的键当没传：仍是目录排序（厂商块 + 发布日期倒序）
     page = page_catalog_all(_doc(models), limit=10, sort="description_zh")
     assert [e["model"] for e in page["models"].values()] == ["new", "old", "nodate"]
 
 
 def test_sort_keeps_directory_order_for_ties():
-    """价格并列时保持目录口径的行序（厂商块 + 发布日期倒序），不被排序键搅乱。"""
+    """价格并列时保持目录排序的行序（厂商块 + 发布日期倒序），不被排序键搅乱。"""
     models = {
         "a": _priced("m-a", "Alpha", 2.0, 100),
         "b": _priced("m-b", "Beta", 2.0, 100),

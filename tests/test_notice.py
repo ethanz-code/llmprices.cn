@@ -253,7 +253,7 @@ def test_fetch_site_notice_skips_status_when_absent():
 
 
 def test_fetch_site_notice_skips_status_when_not_json():
-    """/api/status 返回 200 HTML（前端路由兜底）：视为站点没有该接口，不报错。"""
+    """/api/status 返回 200 HTML（前端路由回退）：视为站点没有该接口，不报错。"""
     spec = _spec(None)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -515,7 +515,7 @@ def test_scan_notices_runs_independently_of_prices(tmp_path: Path, monkeypatch):
 
 
 def test_scan_notices_renews_token_on_401_and_retries(tmp_path: Path):
-    """公告撞 401：配了续签的站点换一次新 token 重试，成功则照常入库并把新 token 写回配置。"""
+    """公告遇到 401：配了续签的站点换一次新 token 重试，成功则照常入库并把新 token 写回配置。"""
     from llm_price_monitor.report import scan_notices
 
     site = {
@@ -547,12 +547,12 @@ def test_scan_notices_renews_token_on_401_and_retries(tmp_path: Path):
     assert scan.errors == []
     assert [event["kind"] for event in scan.events] == ["notice_init"]
     assert scan.records[0]["content"] == "第一版公告"
-    assert seen_auth == ["Bearer at_stale", "Bearer at_new"]  # 旧 token 撞 401，换新后重试成功
+    assert seen_auth == ["Bearer at_stale", "Bearer at_new"]  # 旧 token 遇到 401，换新后重试成功
     assert store.get_site_config("demo")["auth_token"] == "at_new"
 
 
 def test_scan_notices_401_without_refresh_config_reports_error(tmp_path: Path):
-    """没配续签的站点撞 401 不尝试换新：公告采集照常记错误并给出需认证提示。"""
+    """没配续签的站点遇到 401 不尝试换新：公告采集照常记错误并给出需认证提示。"""
     from llm_price_monitor.report import scan_notices
 
     config = _config_file(tmp_path, {**_site_raw_config({"url": "https://demo.test/api/notice"})})

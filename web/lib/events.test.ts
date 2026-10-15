@@ -1,4 +1,4 @@
-/** 事件折叠口径：首页侧栏与事件追踪页共用，同站同模型同类 120s 内折一张卡、公告不折叠。 */
+/** 事件折叠规则：首页侧栏与事件追踪页共用，同站同模型同类 120s 内折一张卡、公告不折叠。 */
 import { describe, expect, it } from "vitest";
 
 import { foldEvents, noticeText } from "@/lib/events";

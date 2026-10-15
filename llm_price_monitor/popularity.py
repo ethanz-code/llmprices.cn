@@ -52,7 +52,7 @@ GROUP_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # 公告正文里的裸 QQ 群号（"QQ群：123456789"）：QQ 没有公开的加群网页，只存群号供用户搜索
 _QQ_NUMBER = re.compile(r"(?:QQ\s*群|Q\s*群|交流群|官方群|用户群|售后群|群号)[^\d\n]{0,8}(\d{6,12})")
 
-# 链接尾部可能粘上引号/括号/转义符，落库前剪掉
+# 链接尾部可能粘上引号/括号/转义符，写库前剪掉
 _TRAILING_JUNK = "\"'<>\\,);。，、"
 
 # Telegram 公开用户名：私邀链接（+hash / joinchat）拿不到预览数据，只存链接
@@ -70,7 +70,7 @@ _VISITS_SCALE = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
 
 # SimilarWeb 站内 JSON API（免登录）：空 aws-waf-token cookie 免 WAF 质询（omkarcloud/
 # similarweb-scraper 验证的规律，本地实测复现），但同一出口 IP 只有约 6 次额度，超了回
-# 202（质询）/403（拉黑数小时）。出口用系统设置里配的备用代理（与采集兜底同一条线）；
+# 202（质询）/403（拉黑数小时）。出口用系统设置里配的备用代理（与采集回退同一条线）；
 # 没配代理的直连环境额度打完只能等下一轮（24h 周期天然错开额度窗口，数据月更不敏感）。
 SIMILARWEB_API = "https://www.similarweb.com/api/website/{domain}"
 _SIMILARWEB_BLOCKED = frozenset({202, 403, 405})
@@ -151,7 +151,7 @@ def extract_groups(texts: list[str]) -> list[dict[str, Any]]:
                 if not url:
                     continue
                 if not url.lower().startswith("http"):
-                    url = f"https://{url}"  # 公告里的裸域名补协议，落库后可直接点
+                    url = f"https://{url}"  # 公告里的裸域名补协议，写库后可直接点
                 if url in seen:
                     continue
                 seen.add(url)
@@ -287,7 +287,7 @@ class SimilarWebClient:
     def fetch(self, domain: str) -> dict[str, Any] | None:
         """域名 → {monthly_visits, global_rank}；无数据/被拦/网络失败返回 None（上游语义不区分）。"""
         # SimilarWeb 的 CloudFront 拒数据中心/本机直连 IP，住宅代理出口才放行——
-        # 代理优先、直连兜底，与采集链路「直连优先」正好镜像
+        # 代理优先、直连后备，与采集链路「直连优先」正好镜像
         proxies = egress.effective_proxy()
         attempts: tuple[dict | None, ...] = ({"proxy": proxies} if proxies else None, None)
         for kwargs in attempts:
@@ -390,7 +390,7 @@ def collect_site(
     """采集单站人气；站点接口、首页、已存公告三个来源全空时返回 None（保留旧数据）。
 
     notice_text 是 store 里该站最近一条公告正文：公告是群号的高产来源（"加入 QQ 群 …"），
-    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的落库数据：访问量+排名都有且
+    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的写库数据：访问量+排名都有且
     7 天内采过时跳过外部额度查询（SimilarWeb 限流环境下的自动补齐策略），群链接仍照常
     扫描（站点接口与首页本来就是本轮要打的，只省外部源）；force=True 无视新鲜跳过。
     """

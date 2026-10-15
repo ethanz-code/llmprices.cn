@@ -1,4 +1,4 @@
-/** /llms-full.txt：llms.txt 的完整版（数据口径 + 页面明细 + 常见问题全文），内容构造见 lib/llms。 */
+/** /llms-full.txt：llms.txt 的完整版（数据规则 + 页面明细 + 常见问题全文），内容构造见 lib/llms。 */
 import { apiGetOptional } from "@/lib/api";
 import { buildLlmsFullTxt } from "@/lib/llms";
 import { siteOrigin } from "@/lib/seo";

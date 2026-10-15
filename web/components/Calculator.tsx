@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Btn, Input, Seg, toast } from "./ui";
+import { Btn, Input, Seg, Tip, toast } from "./ui";
 import { IconCheck } from "./icons";
 import { DajuAwake, DajuNap } from "./DajuArt";
 import { formatCount, formatDiscount, formatPrice, looseIncludes } from "@/lib/format";
@@ -38,11 +38,19 @@ interface Option {
   sub: string;
   prices: Record<PriceKey, number | null>;
   currency: string;
-  /** 目录发布日期：候选按「发布日期倒序 + 名称」排，与监控模型下拉同一套口径 */
+  /** 目录发布日期：候选按「发布日期倒序 + 名称」排，与监控模型下拉同一套规则 */
   release?: string;
 }
 
 const BUCKET_LABEL = calculator.buckets;
+
+/** 四档单价的悬停说明：缓存两档叫法各家账单不统一，列出来免得对不上号 */
+const PRICE_TIPS: Record<PriceKey, string | undefined> = {
+  input: undefined,
+  output: undefined,
+  cacheRead: calculator.bucketAlias,
+  cacheWrite: calculator.bucketAlias,
+};
 
 /** 厂商分组默认露出的模型条数：超出部分折叠进「更多」，搜索时不限量 */
 const VENDOR_PREVIEW_COUNT = 5;
@@ -129,7 +137,7 @@ export function Calculator({
   /** 候选模型：厂商模式走目录，站点模式走该站的价格记录（同模型同分组各占一项）。 */
   const options = useMemo<Option[]>(() => {
     if (source === "official") {
-      // 目录口径排序（发布倒序+名称）：厂商分节的先后也由它带出——新模型多的厂商靠前
+      // 目录排序（发布倒序+名称）：厂商分节的先后也由它带出——新模型多的厂商靠前
       return Object.entries(catalog?.models ?? {})
         .map(([key, entry]) => optionFromCatalog(key, entry))
         .sort((a, b) => compareByReleaseDesc({ name: a.label, release: a.release }, { name: b.label, release: b.release }));
@@ -182,6 +190,9 @@ export function Calculator({
     parsedPrices.cacheRead == null && hitNum > 0 && totalTokens > 0;
   // 至少填了一档单价才有得算：明细表四档常显，空态与导出按钮都以它为准
   const anyPriced = hasAnyPrice(parsedPrices);
+
+  /** 缓存写入档分到的 token：输入档显示 0 时用来判断钱是不是转到这一档去了 */
+  const cacheWriteTokens = result.lines.find((line) => line.key === "cacheWrite")?.tokens ?? 0;
 
   const symbol = symbolOf(currency);
 
@@ -259,10 +270,24 @@ export function Calculator({
     setPrices((prev) => ({ ...prev, [key]: text }));
   }
 
+  /** 用量字段的悬停说明：长段落说明全部收进气泡，正文区只留字段名 */
+  const usageTips: Partial<Record<"hitRate" | "outputShare", string>> = {
+    hitRate: calculator.usageHint,
+    outputShare: calculator.usageHint,
+  };
+
+  /** 字段标签：文本 + 可选悬停气泡，单价区与用量区共用 */
+  const fieldLabel = (text: string, tip?: string) => (
+    <span className="calc-field-label">
+      {text}
+      {tip && <Tip text={tip} />}
+    </span>
+  );
+
   /** 单档单价输入框：基础区与高级配置区共用同一套渲染 */
   const renderPriceField = (key: PriceKey) => (
     <label key={key} className="calc-field">
-      <span className="calc-field-label">{BUCKET_LABEL[key]}</span>
+      {fieldLabel(BUCKET_LABEL[key], PRICE_TIPS[key])}
       <Input
         value={prices[key]}
         onChange={(text) => setPrice(key, text)}
@@ -382,7 +407,10 @@ export function Calculator({
           {PRICE_KEYS.map(renderPriceField)}
         </div>
         <div className="calc-head" style={{ margin: "18px 0 0" }}>
-          <span className="calc-label">{calculator.usageTotal}</span>
+          <span className="calc-label" style={{ display: "inline-flex", alignItems: "center" }}>
+            {calculator.usageTotal}
+            <Tip text={calculator.sourceNote} />
+          </span>
         </div>
         {/* 三格用量输入：auto-fit 自动折行，窄屏不必靠 .calc-grid 的固定列数（那套只服务四档单价） */}
         <div
@@ -390,7 +418,7 @@ export function Calculator({
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}
         >
           <label className="calc-field">
-            <span className="calc-field-label">{calculator.usageSelect}</span>
+            {fieldLabel(calculator.usageSelect)}
             <span className="sel-wrap">
               <select
                 name="calc-token-preset"
@@ -408,7 +436,7 @@ export function Calculator({
             </span>
           </label>
           <label className="calc-field">
-            <span className="calc-field-label">{calculator.hitRate}</span>
+            {fieldLabel(calculator.hitRate, usageTips.hitRate)}
             <Input
               value={hitRate}
               onChange={setHitRate}
@@ -417,7 +445,7 @@ export function Calculator({
             />
           </label>
           <label className="calc-field">
-            <span className="calc-field-label">{calculator.outputShare}</span>
+            {fieldLabel(calculator.outputShare, usageTips.outputShare)}
             <Input
               value={outputShare}
               onChange={setOutputShare}
@@ -425,13 +453,6 @@ export function Calculator({
               placeholder={String(DEFAULT_OUTPUT_SHARE)}
             />
           </label>
-        </div>
-        <div className="calc-actions">
-          <span className="calc-tip">{calculator.usageHint}</span>
-          <span className="calc-tip">{calculator.bucketAlias}</span>
-        </div>
-        <div className="calc-actions">
-          <span className="calc-tip">{calculator.sourceNote}</span>
         </div>
       </div>
       {/* 结果 */}
@@ -492,11 +513,16 @@ export function Calculator({
                       // 没填价的档：单价/小计/占比留空并标注「未计入」，用量照实展示，
                       // 让各档用量加总与总用量对得上，占比失真的疑问在表内就有答案
                       const unbilled = line.subtotal === null;
+                      // 走了缓存时未命中输入被记到缓存写入档，输入档用量是 0——
+                      // 光看表格像漏算，挂个悬停说明把钱的去向挑明
+                      const movedToWrite =
+                        line.key === "input" && line.tokens === 0 && (cacheWriteTokens ?? 0) > 0;
                       return (
                         <tr key={line.key} style={unbilled ? { opacity: 0.55 } : undefined}>
                           <td>
                             {BUCKET_LABEL[line.key]}
                             {unbilled && <span className="calc-unbilled">未计入</span>}
+                            {movedToWrite && <Tip text={calculator.inputMovedToCacheWrite} />}
                           </td>
                           <td className="num" style={{ textAlign: "right" }}>
                             {line.unitPrice !== null ? `${symbol}${formatPrice(line.unitPrice)}` : "—"}

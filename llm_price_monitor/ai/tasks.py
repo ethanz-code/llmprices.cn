@@ -15,7 +15,7 @@ def ping_model(config: AIConfig, model: str, *, client: httpx.Client | None = No
     """发送一次最小对话请求验证 AI 配置连通性，返回模型回复文本；HTTP/网络错误原样抛出。
 
     思考不可关的模型拒收 enable_thinking=false：翻成 true 重试一次，避免把可用配置误判为不通。
-    timeout 缺省用配置值；模型池批量体检传短超时，个别慢模型按失败计，不拖住整轮。
+    timeout 缺省用配置值；模型备选池批量体检传短超时，个别慢模型按失败计，不拖住整轮。
     """
     request_timeout = config.timeout if timeout is None else timeout
     url, headers, base_body = ai_request(config, model, "", "连接测试，请只回复 ok", max_tokens=8, json_mode=False)

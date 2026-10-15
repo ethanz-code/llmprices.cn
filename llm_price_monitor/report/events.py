@@ -1,4 +1,4 @@
-"""报告数据模型与变更判定：MonitorReport / SectionScan、价格口径指纹与事件分类。"""
+"""报告数据模型与变更判定：MonitorReport / SectionScan、价格规则指纹与事件分类。"""
 from __future__ import annotations
 
 import hashlib
@@ -53,8 +53,8 @@ FINGERPRINT_METADATA_KEYS = (
 
 # 这五个价格槽位里 0 与 null/缺失同义（"该处无独立价"）：AI 抽取轮次间会在两种写法间
 # 漂移（DaiTuAI 2026-10-08 实测同一档位前轮 0/0 后轮 null/null，有效价没变却每轮刷
-# changed）。仅指纹比较做归一，落库数据不动；顶层 input_price/output_price 不在此列——
-# 真免费档的 0/0 confirmed 是有语义的价格。
+# changed）。仅指纹比较做归一，写库数据不动；顶层 input_price/output_price 不在此列——
+# 真零价的 0/0 confirmed 是有语义的价格。
 ZERO_PRICE_KEYS = (
     "input_price", "output_price",
     "cache_read_price", "cache_create_price", "cache_create_1h_price",
@@ -62,7 +62,7 @@ ZERO_PRICE_KEYS = (
 
 
 def fingerprint(value: dict[str, Any]) -> str:
-    """价格口径指纹：只含价格相关字段，用于判定"价格是否真的变了"。
+    """价格规则指纹：只含价格相关字段，用于判定"价格是否真的变了"。
 
     AI 抽取每次输出的上下文边界、备注文本、证据引文都会漂移，不参与指纹；
     pricing_rules 里的 context 边界同理剔除。数值统一整值浮点归一（14.0 → 14），

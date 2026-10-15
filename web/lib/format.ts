@@ -79,7 +79,7 @@ export function formatCompact(value: number): string {
 }
 
 /** 相对时间三档：分钟/小时/天前（检测新鲜度等场景）；未来时间或超 30 天回落绝对日期。
- *  at 兼容秒级时间戳（项目 captured_at 口径）与毫秒级。 */
+ *  at 兼容秒级时间戳（项目 captured_at 标准）与毫秒级。 */
 /** ISO 时间串 → "YYYY-MM-DD HH:mm"（本机时区）；空值/解析失败原样回落，不让脏数据变空白。 */
 export function formatIsoMinute(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -103,7 +103,7 @@ export function formatTimeAgo(at: number, now = Date.now()): string {
   return new Date(ms).toLocaleDateString("zh-CN");
 }
 
-/** 渠道免费档：输入输出标价都为 0（如 OpenRouter 的 :free 模型）。 */
+/** 渠道真零价：输入输出标价都为 0（如 OpenRouter 的 :free 模型）。 */
 export function isFreePrice(list?: { input?: number | null; output?: number | null } | null): boolean {
   return list?.input === 0 && list?.output === 0;
 }
@@ -126,7 +126,7 @@ export function formatCount(value: number | null | undefined, maximumFractionDig
   return value.toLocaleString("en-US", { maximumFractionDigits });
 }
 
-/** token 数缩写：统一走 formatCompact（272k、1M），与人气/统计数字同一套英文缩写口径。 */
+/** token 数缩写：统一走 formatCompact（272k、1M），与人气/统计数字同一套英文缩写规范。 */
 export function formatTokens(value: number): string {
   return formatCompact(value);
 }
@@ -222,7 +222,7 @@ export function effectiveCnyPrice(
 /** 缓存价字段：与 input/output 同币种同计价单位，存于记录 metadata。 */
 export type CachePriceField = "cache_read_price" | "cache_create_price" | "cache_create_1h_price";
 
-/** 缓存价字段的展示标签（表格行前缀与事件摘要共用同一份口径）。 */
+/** 缓存价字段的展示标签（表格行前缀与事件摘要共用同一份规则）。 */
 export const CACHE_PRICE_LABELS: Record<CachePriceField, string> = {
   cache_read_price: "缓存读",
   cache_create_price: "缓存写",
@@ -242,7 +242,7 @@ interface CachePriced {
 
 /** 缓存价原始值：顶层优先；阶梯计费记录（tiered_expr）的缓存价只存在
  *  pricing_rules.groups[].tiers[] 里（实测 136 条），回落取第一档，
- *  与后端折扣计算「顶层空时取第一档」同口径。两处都没有返回 null。 */
+ *  与后端折扣计算「顶层空时取第一档」同一套规则。两处都没有返回 null。 */
 function cachePriceValue(row: CachePriced | null | undefined, field: CachePriceField): number | null {
   const value = row?.metadata?.[field];
   if (typeof value === "number") return value;
@@ -258,7 +258,7 @@ function cachePriceValue(row: CachePriced | null | undefined, field: CachePriceF
   return null;
 }
 
-/** 缓存价文本：折算口径与输入/输出价一致（USD 乘汇率折 RMB，CNY 原样，其余回落原币）；无值返回 null。 */
+/** 缓存价文本：折算规则与输入/输出价一致（USD 乘汇率折 RMB，CNY 原样，其余回落原币）；无值返回 null。 */
 export function cachePriceText(row: CachePriced | null | undefined, field: CachePriceField, rate?: number | null): string | null {
   const value = cachePriceValue(row, field);
   if (value === null) return null;
@@ -267,7 +267,7 @@ export function cachePriceText(row: CachePriced | null | undefined, field: Cache
   return `${symbol}${formatPrice(converted ?? value)}`;
 }
 
-/** 折算成 RMB 的缓存价（排序用），口径与 effectiveCnyPrice 一致。 */
+/** 折算成 RMB 的缓存价（排序用），规则与 effectiveCnyPrice 一致。 */
 export function effectiveCnyCachePrice(
   row: CachePriced | null | undefined,
   field: CachePriceField,
@@ -350,7 +350,7 @@ export function discountTone(value: number | null | undefined): Tone {
   return "red";
 }
 
-/** 成功率语义色：按"每次尝试各记一条、报错重试计失败"的低基线口径定档——≥80% 绿、60~80% 黄、<60% 红，无数据灰；概览页与 AI 日志页共用同一档位。 */
+/** 成功率语义色：按"每次尝试各记一条、报错重试计失败"的低基线标准定档——≥80% 绿、60~80% 黄、<60% 红，无数据灰；概览页与 AI 日志页共用同一档位。 */
 export function successRateTone(rate: number | null | undefined): Tone {
   if (rate === null || rate === undefined) return "gray";
   if (rate >= 80) return "green";
@@ -372,9 +372,9 @@ export function toneBg(tone: Tone): string {
 const STATUS_META: Record<string, { label: string; tone: Tone }> = {
   ok: { label: "正常", tone: "green" },
   confirmed: { label: "正常", tone: "green" },
-  rule_only: { label: "规则价", tone: "blue" },
+  rule_only: { label: "推算价", tone: "blue" },
   candidate: { label: "待确认", tone: "blue" },
-  inferred: { label: "规则价", tone: "yellow" },
+  inferred: { label: "推算价", tone: "yellow" },
   auth_required: { label: "需认证", tone: "yellow" },
   no_data: { label: "未抓到价格", tone: "yellow" },
   unavailable: { label: "无数据", tone: "gray" },

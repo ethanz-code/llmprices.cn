@@ -170,7 +170,7 @@ def test_switch_disabled_without_controller_config(monkeypatch_proxy):
     assert controller.selected == [] and controller.probed == []
 
 
-# ---------- FallbackTransport 联动：代理腿也被拒 → 换节点 → 重试一次 ----------
+# ---------- FallbackTransport 联动：代理链路也被拒 → 换节点 → 重试一次 ----------
 
 
 @pytest.fixture(autouse=True)
@@ -205,7 +205,7 @@ def test_fallback_retries_proxy_once_after_auto_switch(monkeypatch):
         ),
     )
     assert client.get("https://demo.test/api/pricing").status_code == 200
-    assert len(calls["direct"]) == 4  # 直连腿完整退避
+    assert len(calls["direct"]) == 4  # 直连请求完整退避
     assert len(calls["proxy"]) == 5  # 首轮 4 次 + 切换后重试 1 次
 
 
@@ -302,7 +302,7 @@ def test_fallback_raises_when_auto_switch_unavailable(monkeypatch):
 
 
 def test_fetch_groups_normalizes_and_marks(monkeypatch):
-    """组清单：带 all 的才算组、内置 GLOBAL 垫底、信息位与子组都打标；形状不对报错不静默。"""
+    """组清单：带 all 的才算组、内置 GLOBAL 排在最后、信息位与子组都打标；形状不对报错不静默。"""
     payload = {
         "proxies": {
             "GLOBAL": {"type": "Selector", "now": "DIRECT", "all": ["香港01"]},
@@ -314,7 +314,7 @@ def test_fetch_groups_normalizes_and_marks(monkeypatch):
     monkeypatch.setattr(proxy_switch, "_request", lambda *args, **kwargs: payload)
     groups = proxy_switch.fetch_groups("http://127.0.0.1:9097", "s3cret")
 
-    assert [group["name"] for group in groups] == ["宝可梦", "自动选择", "GLOBAL"]  # 内置组垫底
+    assert [group["name"] for group in groups] == ["宝可梦", "自动选择", "GLOBAL"]  # 内置组排最后
     by_name = {group["name"]: group for group in groups}
     assert by_name["GLOBAL"]["builtin"] is True
     assert by_name["宝可梦"]["nodes"] == [

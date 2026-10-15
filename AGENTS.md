@@ -5,8 +5,8 @@
 - 全自动协作协议：docs/ai-collab.md（先读）
 - 部署/运维：docs/deploy/ai-runbook.md（事实卡、红线、故障速查）+ docs/deploy/docker-compose.md
 - 服务器现状档案（域名/证书/1Panel 站点/出口 IP，敏感不入公开仓库）：~/workspace/docs/私人资料/服务器/，部署到线上时与本项目 runbook 配套读
-- 采集与价格口径：docs/pricing.md；页面对照核查（采集值 vs 页面渲染值，模型列表优先于 Model Plaza）：docs/page-cross-check.md；认证/反爬实测坑：Serena 记忆 `dom_url_auth_constraint`
-- 站点导入/编辑与渠道筛选口径：docs/sites.md（含 AI 浏览器代办 SOP）
+- 采集与价格规则：docs/pricing.md；页面对照核查（采集值 vs 页面渲染值，模型列表优先于 Model Plaza）：docs/page-cross-check.md；认证/反爬实测坑：Serena 记忆 `dom_url_auth_constraint`
+- 站点导入/编辑与渠道筛选规则：docs/sites.md（含 AI 浏览器代办 SOP）
 - UI 规范：docs/design-guide.md
 - 历史踩坑速查：docs/lessons.md（动手前先翻，别重踩）
 
@@ -20,8 +20,8 @@
 4. 红线：删数据、发版上线、重启用户在跑的服务一律不擅自执行，进待确认清单。
 5. 需求再模糊也不反问：列出关键假设，直接做 v1。
 6. 小步交付每步自验（测试/浏览器走查），结果如实报告；完成判据是自验绿，不是"我觉得写完了"。
-7. 长任务先列任务清单再动手，每阶段把「决策/进度/待处理」落盘到 .zcode/plans/，会话压缩或中断可无损续跑；大任务拆 subagent 并行。
-8. 防死循环：同一问题连续两次同一修法失败就换思路，再不行记「待你处理」清单跳过；途中命中 docs/lessons.md 触发词索引的关键词先翻坑再动手。
+7. 长任务先列任务清单再动手，每阶段把「决策/进度/待处理」写盘到 .zcode/plans/，会话压缩或中断可无损续跑；大任务拆 subagent 并行。
+8. 防死循环：同一问题连续两次同一修法失败就换思路，再不行记「待你处理」清单跳过；途中命中 docs/lessons.md 关键词索引的关键词先翻坑再动手。
 
 ## Git 提交规范
 

@@ -24,8 +24,8 @@ _log = logging.getLogger("llm_price_monitor.webapi.tasks")
 MAX_TASK_RUNS = 100
 MAX_TASK_LOG_LINES = 500
 
-# 落盘时保留完整日志的最近任务数：快照最多留 100 条任务、每条日志可到 500 行，
-# 全量落盘会让 tasks 文档膨胀到十几 MB；更早的任务只留一条归档说明（内存里日志不裁）
+# 写盘时保留完整日志的最近任务数：快照最多留 100 条任务、每条日志可到 500 行，
+# 全量写盘会让 tasks 文档膨胀到十几 MB；更早的任务只留一条归档说明（内存里日志不裁）
 KEEP_LOGGED_RUNS = 10
 
 _lock = threading.Lock()
@@ -122,8 +122,8 @@ def _persist() -> None:
                 entry["result"] = _slim_result(entry["result"])
     try:
         store.set_document("tasks", {"runs": snapshot})
-    except Exception as exc:  # 落盘失败不阻断采集：日志属辅助信息，任务状态仍在内存可用
-        _log.warning("任务记录落盘失败：%s", exc)
+    except Exception as exc:  # 写盘失败不阻断采集：日志属辅助信息，任务状态仍在内存可用
+        _log.warning("任务记录写盘失败：%s", exc)
 
 
 def _append_log(task_id: str, message: str, level: str) -> None:
@@ -144,7 +144,7 @@ def _append_log(task_id: str, message: str, level: str) -> None:
             logs.pop(0)
         # 异常卡片抄送：warn/error 在写任务日志时同步记入持久化流水；三类不收——
         # 容忍窗口内的 warn（链路抖动、站方源站故障未达容忍轮数）、自愈动作 warn
-        # （已改走代理/已换节点重试）都是环境噪声，与健康档案同口径；达标后的 error 照进。
+        # （已改走代理/已换节点重试）都是环境噪声，与健康档案同一套规则；达标后的 error 照进。
         # 同站同类问题按归一键合并计数，不逐轮追加（666ai 这类持续故障只占一行）
         if level in ("warn", "error") and not (
             level == "warn"
@@ -166,8 +166,8 @@ def _persist_journal() -> None:
         entries = list(_journal)
     try:
         store.set_document(_JOURNAL_DOC, {"entries": entries})
-    except Exception as exc:  # 流水落盘失败不阻断采集：卡片属辅助信息，任务日志仍照常记录
-        _log.warning("异常流水落盘失败：%s", exc)
+    except Exception as exc:  # 流水写盘失败不阻断采集：卡片属辅助信息，任务日志仍照常记录
+        _log.warning("异常流水写盘失败：%s", exc)
 
 
 def submit(kind: str, fn: Callable[[], Any]) -> str:
@@ -203,7 +203,7 @@ def submit(kind: str, fn: Callable[[], Any]) -> str:
         tasklog.bind(_write_log)
         try:
             result = fn()
-        except Exception as exc:  # 后台线程兜底：任何异常都落到任务状态里供前端展示
+        except Exception as exc:  # 后台线程后备：任何异常都落到任务状态里供前端展示
             _append_log(task_id, f"任务失败：{exc}", "error")
             with _lock:
                 # reset() 可能已把任务清出注册表（测试清场）；条目不存在时静默退出
@@ -285,13 +285,13 @@ def _dismiss_state() -> dict[str, Any]:
 
 
 # 持续故障的报错文本每轮只变「连续 N 轮」这个数字：归一后做归一键，同一站点的同类
-# 问题在卡片里只占一行、计数累计，而不是每轮追加一条（2026-10-14 实锤：666ai 一家
+# 问题在卡片里只占一行、计数累计，而不是每轮追加一条（2026-10-14 实证：666ai 一家
 # 把卡片刷到 1000 条上限，把真正的新问题挤了出去）。只归一这一处动态量，
 # 其余原文参与哈希——宁可少合并，不误合并。
 _STREAK_ROUNDS_RE = re.compile(r"连续第?\s*\d+\s*(?:/\s*\d+)?\s*轮")
 
 # 自愈动作的 warn（直连被拒收已改走备用代理、代理被拦已换节点重试）当轮即恢复，
-# 结果由后续采集的成/败日志兜底；进卡片只是每轮重复的噪声。
+# 结果由后续采集的成/败日志后备；进卡片只是每轮重复的噪声。
 _SELF_HEALED_WARN_RE = re.compile(r"改走备用代理重试|已切换节点")
 
 
@@ -312,7 +312,7 @@ def _journal_store_entry(task_id: str, kind: str, log: dict[str, Any]) -> None:
     调用方需持有 _lock（_append_log 的临界区）。
     """
     message = str(log.get("message") or "")
-    # 指纹用截断后的存储文本算：与 _merge_journal 加载历史时口径一致（文档里只有截断版），
+    # 指纹用截断后的存储文本算：与 _merge_journal 加载历史时规则一致（文档里只有截断版），
     # 否则超长消息重启后归并键漂移、会再重复出现一条
     stored = message if len(message) <= _JOURNAL_MSG_MAX else message[:_JOURNAL_MSG_MAX] + "…"
     key = _journal_fingerprint(stored)
@@ -337,7 +337,7 @@ def _journal_store_entry(task_id: str, kind: str, log: dict[str, Any]) -> None:
 def _merge_journal(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """加载持久化流水时归并：同归一键合并成一条（计数累计、首见取最早、其余取最新）。
 
-    老式逐条 key 一并重算，历史堆积（每轮一条）缩回「每类问题一条」；与抄送口径一致，
+    老式逐条 key 一并重算，历史堆积（每轮一条）缩回「每类问题一条」；与抄送规则一致，
     自愈类/容忍窗口内的 warn 历史条目顺带清掉。
     """
     merged: dict[str, dict[str, Any]] = {}
@@ -373,7 +373,7 @@ def error_stream(limit: int = 200) -> list[dict[str, Any]]:
     """跨任务汇总 warn/error 日志（新在前），滤掉已移除/清空时间点之前的条目，供概览页异常卡片展示。
 
     条目来自写日志时同步抄送的持久化流水，不随任务日志的滚动窗口归档、也不因重启丢失；
-    传输层抖动的 warn 在抄送时已按健康档案口径拦下，重试耗尽升级成 error 的站点失败仍可见。
+    传输层抖动的 warn 在抄送时已按健康档案标准拦下，重试耗尽升级成 error 的站点失败仍可见。
     """
     state = _dismiss_state()
     cleared_at = state.get("cleared_at")

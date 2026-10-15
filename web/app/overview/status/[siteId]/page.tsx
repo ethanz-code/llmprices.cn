@@ -39,7 +39,7 @@ export async function generateMetadata({
   const name = getSiteInfo(decodeURIComponent(rawId)).name;
   return pageMetadata(
     `站点检测 · ${name}`,
-    `「${name}」的渠道检测档案：近 7 天可用率、延迟、出字速度与站点公告存档。`,
+    `「${name}」的渠道检测档案：近 7 天可用率、延迟、输出速度与站点公告存档。`,
     `/overview/status/${rawId}`,
   );
 }
@@ -178,7 +178,7 @@ async function ScreenshotSection({ siteId }: { siteId: string }) {
 }
 
 /** 站点人气：交流群、月访问量估算与全网排名——判断站点规模与售后渠道的公开信息，
- *  采集不到任何一项时整块不渲染（与截图区同口径）。 */
+ *  采集不到任何一项时整块不渲染（与截图区同一套规则）。 */
 function PopularitySection({ popularity }: { popularity?: SitePopularity }) {
   if (!popularity) return null;
   const groups = popularity.groups ?? [];
@@ -298,7 +298,7 @@ export default async function StatusDetailPage({
   let error: string | null = null;
   try {
     // 渠道时序走 lib/statusData.ts：每站最近 400 条、近 7 天——首页与总览的渠道统计
-    // 也用这同一份口径（数据同源，各页数字才一致），这里是「详情页口径」的本体。
+    // 也用这同一份标准（数据同源，各页数字才一致），这里是「详情页标准」的本体。
     const [timeline, noticeData, overviewData, homepageMap, popularityMap] = await Promise.all([
       fetchSiteStatus(siteId),
       // 公告拉取失败只影响公告区，不阻塞整页；只取最新一次采集的存档
@@ -307,7 +307,7 @@ export default async function StatusDetailPage({
       ).catch(() => ({
         records: [] as NoticeSnapshot[],
       })),
-      // 在售监测集：后端按站过滤的轻量 overview，渠道视图只看本站在售模型/分组
+      // 在售模型与分组集合：后端按站过滤的轻量 overview，渠道视图只看本站在售模型/分组
       apiGet<OverviewData>(`/api/overview?site_id=${encodeURIComponent(siteId)}`).catch(() => null),
       loadSiteHomepages(),
       loadSitePopularity(),
@@ -328,8 +328,8 @@ export default async function StatusDetailPage({
   );
   const series = views.availability[siteId] ?? [];
   const channels = views.channels[siteId] ?? [];
-  // 顶部整站时段色块：服务端用抽稀前的全量序列预分桶（桶内平均/最差/次数都是真实口径，
-  // 不受保峰抽稀影响），客户端只拿 ~28 个桶
+  // 顶部整站时段色块：服务端用抽稀前的全量序列预分桶（桶内平均/最差/次数都是真实标准，
+  // 不受最差值降采样影响），客户端只拿 ~28 个桶
   const uptimeBuckets = views.uptimeBuckets[siteId] ?? [];
 
   return (
@@ -381,7 +381,7 @@ export default async function StatusDetailPage({
                     <span>渠道</span>
                     <span>状态</span>
                     <span className="ch-lat">延迟 · 7日可用率</span>
-                    <span className="ch-metrics">成功率 · 出字速度</span>
+                    <span className="ch-metrics">成功率 · 输出速度</span>
                     <span className="ch-cache">
                       缓存读取 · 缓存写入
                       <TermTip term="cache_metrics" />
@@ -408,7 +408,7 @@ export default async function StatusDetailPage({
                         ? `${channel.availability7d.toFixed(2)}%`
                         : null,
                     ].filter(Boolean);
-                    // 该渠道（分组）自己的可用率时段桶：每次检测正常记 100%、异常记 0%，服务端分好桶再传给组件
+                    // 该渠道（分组）自己的可用率时段分桶：每次检测正常记 100%、异常记 0%，服务端分好桶再传给组件
                     const uptimeBuckets = buildUptimeBuckets(
                       channel.dots
                         .filter((dot) => dot.at != null)

@@ -1,4 +1,4 @@
-/** 采集出口下拉的纯函数口径：组选项、节点候选、切换范围标签与关键词串互转。 */
+/** 采集出口下拉的纯函数规则：组选项、节点候选、切换范围标签与关键词串互转。 */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -39,7 +39,7 @@ describe("groupTypeLabel / groupOptionLabel", () => {
 });
 
 describe("groupOptions", () => {
-  it("当前填写值不在接口清单里时兜底成第一个选项，避免填了却看不见", () => {
+  it("当前填写值不在接口清单里时回退成第一个选项，避免填了却看不见", () => {
     const options = groupOptions([group({ name: "宝可梦" })], "良心云");
     expect(options[0]).toEqual({ value: "良心云", label: "良心云（当前填写，接口里没读到这个组）" });
     expect(options).toHaveLength(2);

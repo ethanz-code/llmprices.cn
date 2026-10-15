@@ -1,4 +1,4 @@
-/** 站点人气展示口径：平台展示名、每段一行格式与群人数行取舍。 */
+/** 站点人气展示规则：平台展示名、每段一行格式与群人数行取舍。 */
 import { describe, expect, it } from "vitest";
 
 import { groupPlatformLabel, popularityBadge, type SitePopularity } from "@/lib/popularity";

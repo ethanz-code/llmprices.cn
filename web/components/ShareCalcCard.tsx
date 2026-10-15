@@ -53,7 +53,7 @@ export function ShareCalcCard({
   prices: CalcPrices;
   totalTokens: number;
   hitRate: number;
-  /** 输出占总用量百分比：与命中率一起标在 KPI 上，看图的人才知道这笔账按什么口径拆的 */
+  /** 输出占总用量百分比：与命中率一起标在 KPI 上，看图的人才知道这笔账按什么方式拆的 */
   outputShare: number;
   result: CalcResult;
   /** 缓存命中价没填时命中的 token 不计费，图上要挑明，免得看图的人把总价当全量 */
@@ -147,7 +147,7 @@ export function ShareCalcCard({
         </span>
       </div>
 
-      {/* KPI：总价是主数，用量与两个拆分假设说明口径 */}
+      {/* KPI：总价是主数，用量与两个拆分假设说明方式 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14 }}>
         {[
           {
@@ -190,7 +190,7 @@ export function ShareCalcCard({
         ))}
       </div>
 
-      {/* 单价口径：四档并排，没填的档显示 — */}
+      {/* 单价规则：四档并排，没填的档显示 — */}
       <div style={{ display: "flex", gap: 14 }}>
         {BUCKET_ORDER.map((key) => priceChip(key))}
       </div>

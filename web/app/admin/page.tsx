@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata = { title: "管理面板 · 概览" };
 
-// collect_status（需要关注的站点）仅管理员可见：与 overview 页同样带上会话 cookie
+// 本页有管理员专属取数（/api/ai-logs/summary 等），服务端请求统一带上会话 cookie
 const SESSION_COOKIE = "ppm_session";
 
 /** 概览：双栏仪表盘 —— 主栏顶部一行轻量统计数字 + 访问统计面板 + 最近事件，右栏快捷入口与公开页面；尚无站点时显示入门清单。 */
@@ -73,7 +73,7 @@ export default async function AdminOverviewPage() {
     },
   ];
 
-  // AI 调用与成功率：口径与 AI 日志页一致（成功率 = ok / (total - transport - ignored)）
+  // AI 调用与成功率：规则与 AI 日志页一致（成功率 = ok / (total - transport - ignored)）
   if (aiSummary) {
     const rate = aiSummary.success_rate;
     const failure = aiSummary.total - aiSummary.ok - aiSummary.transport - aiSummary.ignored;

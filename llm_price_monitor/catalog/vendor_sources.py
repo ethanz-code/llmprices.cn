@@ -2,21 +2,21 @@
 
 背景：models.dev 的国内价格不进目录（时段分档缺失、他方汇率换算，实测与
 官方人民币标价偏差大），国内基准价只认这里抓到的官方定价页——无论厂商在
-models.dev 是否收录、是否带国内站口径（智谱的 zhipuai/zai 甚至都指向 z.ai）。
+models.dev 是否收录、是否按国内站标准（智谱的 zhipuai/zai 甚至都指向 z.ai）。
 本模块提供三件事：
 
 - **覆盖检测**：`DOMESTIC_BRANDS` 品牌表人工整理各厂商在 models.dev 里的渠道
-  与国内站口径，`detect_vendor_coverage` 据此判定每个品牌是「已覆盖 / 仅国际
-  口径（推荐添加）/ 未收录（推荐添加）」；输入是目录 meta 里的 `providers`
+  与国内站标准，`detect_vendor_coverage` 据此判定每个品牌是「已覆盖 / 仅国际
+  标准（推荐添加）/ 未收录（推荐添加）」；输入是目录 meta 里的 `providers`
   厂商清单（见 modelsdev._provider_inventory），零网络开销。
 - **定价源存取**：管理员为厂商配置一个公开定价页 URL（无鉴权字段），抓取复用
-  `page_price.fetch_page_prices`（静态解析优先、AI 兜底防幻觉），结果连同状态
+  `page_price.fetch_page_prices`（静态解析优先、AI 后备防幻觉），结果连同状态
   存 `vendor_sources` 文档（读改写加进程内锁）。源带 `region`：国内源（cn）
   的页价作为国内折扣基准，海外源（global）只作国际参考价。
 - **合并**：`merge_sources_into_catalog` 把抓到的价格按 `model_key` 合并进官方
   价目录——国内源命中条目则基准换成页价、原国际价退居 `list_global` 参考，
   未命中则新增条目（region=cn）；海外源只给 region=cn 的命中条目补 `list_global`
-  参考价，不动国内基准。目录统一 USD 口径：CNY 页价按快照汇率折算存
+  参考价，不动国内基准。目录统一 USD 规则：CNY 页价按快照汇率折算存
   `list`，`list_cny` 存页面标价的精确人民币值。抓到的上下文窗口解析成 `limit`
   数字、简介写进 `description_zh`（登记 desc_fp 跳过翻译），只在条目缺这两项
   时补——models.dev 已有的元数据不覆盖。
@@ -52,9 +52,9 @@ class DomesticBrand:
     """一个国内厂商品牌在 models.dev 里的渠道对照，覆盖检测的判定依据。
 
     aliases: models.dev 的 provider id（完整匹配）；cn_provider_ids: 其中属于
-    国内站口径的渠道；keywords: 名称/文档 URL 兜底关键词（models.dev 未来新增
+    国内站规则的渠道；keywords: 名称/文档 URL 回退关键词（models.dev 未来新增
     厂商也能被识别）；suggested_url: 已核验的国内定价页（2026-09-29 逐页实测：
-    静态解析可直接出价，或原始 HTML 有内容、AI 兜底可出价）；suggested_json_url:
+    静态解析可直接出价，或原始 HTML 有内容、AI 回退可出价）；suggested_json_url:
     已核验的 JSON 价格接口（可选）。两者在推荐添加时并列预填，标注采集类型。
     解析会取错价或拿不到内容的页面一律不预填，避免脏价静默进基准。
     """
@@ -151,7 +151,7 @@ DOMESTIC_BRANDS: tuple[DomesticBrand, ...] = (
         cn_provider_ids=("sensenova",),
         keywords=("sensenova",),
         suggested_url="https://www.sensecore.cn/help/docs/model-as-a-service/nova/pricing",
-        note="商汤日日新 V6.5 系列；按千 tokens 计价（入库已折算百万口径），语音按次计费的型号没入库",
+        note="商汤日日新 V6.5 系列；按千 tokens 计价（入库已折算百万标准），语音按次计费的型号没入库",
     ),
     DomesticBrand(
         vendor="Xiaomi",
@@ -218,7 +218,7 @@ def upsert_source(
     """新增或更新一个定价源（只动配置字段）；返回该源记录。
 
     note 是给覆盖检测行展示的厂商描述（如"官方中文定价页，人民币标价"），不传则保留原值。
-    换 URL 或换区域时清空上次抓取结果——models 归属旧地址与旧合并口径，
+    换 URL 或换区域时清空上次抓取结果——models 归属旧地址与旧合并标准，
     合并前必须重新抓取。
     """
     vendor, url = validate_source(vendor, url)
@@ -283,7 +283,7 @@ def refresh_source(store: Any, vendor: str, *, timeout: float, ai_config: AIConf
     models = result.get("models") or []
     # 模型名清洗 + 根源过滤：剥掉页面标注尾巴与整行文案（"kimi-k3上下文缓存享有
     # 折扣"、"参见模型列表"），再滤掉特殊领域模型与日期后缀快照变体（gpt-4o-2024-05-13、
-    # qwen3.8-max-0902 这类）——不落库，详情展示、覆盖检测与后续合并都只见通用对话大模型
+    # qwen3.8-max-0902 这类）——不写库，详情展示、覆盖检测与后续合并都只见通用对话大模型
     cleaned: list[dict[str, Any]] = []
     for item in models:
         name, reason = sanitize_model_name(str(item.get("model") or ""))
@@ -337,7 +337,7 @@ def _converted_price_views(
 ) -> tuple[dict[str, float | None], dict[str, float | None], float | None, float | None]:
     """单渠道价目 → 目录双币种视图：(list, list_cny, cache_read, cache_read_cny)。
 
-    目录统一 USD 口径：人民币标价按快照汇率折算成 list，页面原价进 list_cny；
+    目录统一 USD 规则：人民币标价按快照汇率折算成 list，页面原价进 list_cny；
     美元标价反之。
     """
     if currency == "CNY":
@@ -371,7 +371,7 @@ def _price_order_violation(
 
 # 定价源与目录现有基准的偏差边界：AI 提取列错位（把缓存命中价当输入价）会让页面价
 # 偏离既有基准成百上千倍，超出可信区间的页面价不落目录，保留原基准并记 skip 原因。
-# 边界与站点价合理性校验（catalog/discount.py）同口径。
+# 边界与站点价合理性校验（catalog/discount.py）同一套规则。
 _SOURCE_DEVIATION_MIN_RATIO = 0.01
 _SOURCE_DEVIATION_MAX_RATIO = 20.0
 
@@ -381,7 +381,7 @@ def _source_deviation_violation(
 ) -> str | None:
     """页面价与目录现有基准的交叉校验：偏差超可信区间视为提取事故，返回 skip 原因。
 
-    对比基准取目录条目现值（USD 口径 list 或人民币口径 list_cny），页面价按标价
+    对比基准取目录条目现值（USD 标准 list 或人民币计价 list_cny），页面价按标价
     货币对上对应视图；条目不存在或基准缺价时不构成判据，返回 None 放行。
     candidate 基准不受保护：它本身可能就是上一轮提取事故的产物，得给正确价格
     留纠错通道，否则错值会借这道闸永久锁死。
@@ -410,11 +410,11 @@ def merge_sources_into_catalog(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """把定价源抓取结果合并进官方价目录；返回 (新目录, 摘要)。
 
-    国内源（region=cn）：命中条目则基准换成页面价（原基准为国际口径时退居
+    国内源（region=cn）：命中条目则基准换成页面价（原基准为国际标准时退居
     list_global 参考），未命中则新增条目（vendor 用源厂商名、region=cn）。
     海外源（region=global）：只给 region=cn 的命中条目补 list_global 国际参考
-    价，不动基准；条目已是国际口径或目录未收录时跳过。
-    同一轮里两个国内源撞同一模型键时按厂商名先到先得；禁用或没有抓取结果的源跳过。
+    价，不动基准；条目已是国际标准或目录未收录时跳过。
+    同一轮里两个国内源在同一模型键上冲突时按厂商名先到先得；禁用或没有抓取结果的源跳过。
     命中已有条目时 vendor 同步为当前源，保证价格、来源与厂商归属同渠道。
     国内定价页大量列出托管/转售的第三方模型（千帆卖 DeepSeek、百炼代售 deepseek、
     SiliconFlow 聚合各家开源模型），按模型名判品牌，归属不是本厂商的一律不进
@@ -460,7 +460,7 @@ def merge_sources_into_catalog(
                 skipped.append(f"{vendor}/{name}{violation}")
                 continue
             currency = str(item.get("currency") or "").upper()
-            # 页面没标注货币时按源区域兜底：国内定价页默认人民币、海外页默认美元
+            # 页面没标注货币时按源区域后备：国内定价页默认人民币、海外页默认美元
             currency = currency if currency in {"CNY", "USD"} else ("USD" if source_region == "global" else "CNY")
             deviation = _source_deviation_violation(models.get(key), input_price, output_price, currency)
             if deviation is not None:
@@ -475,14 +475,14 @@ def merge_sources_into_catalog(
                 elif not isinstance(entry, dict):
                     skipped.append(f"{vendor}/{name}（目录未收录，海外源不新增条目）")
                 elif entry.get("region") != "cn":
-                    skipped.append(f"{vendor}/{name}（条目已是国际口径，无需参考价）")
+                    skipped.append(f"{vendor}/{name}（条目已是国际标准，无需参考价）")
                 else:
                     entry["list_global"] = usd
                     entry["list_global_cny"] = cny
                     referenced_keys.add(key)
                     referenced += 1
                 continue
-            # 官方自研闸门：归属他家的托管/转售模型与识别不出归属的第三方模型都不进官方目录
+            # 官方自研校验：归属他家的托管/转售模型与识别不出归属的第三方模型都不进官方目录
             if is_unbranded(name) or is_hosted_model(name, vendor):
                 skipped.append(skip_reason(name, vendor))
                 continue
@@ -492,7 +492,7 @@ def merge_sources_into_catalog(
                 skipped.append(f"{vendor}/{name}（特殊领域/快照变体，不进官方目录）")
                 continue
             if key in claimed:
-                skipped.append(f"{vendor}/{name}（与其他定价源撞模型键，先到先得）")
+                skipped.append(f"{vendor}/{name}（与其他定价源与模型键冲突，先到先得）")
                 continue
             entry = models.get(key)
             if isinstance(entry, dict):
@@ -555,7 +555,7 @@ def merge_sources_into_channel_catalog(
 
     models.dev 有意不收国内渠道价（时段分档缺失、他方汇率换算偏差大），
     国内渠道价由厂商定价源补位：`厂商:模型` 一家一条，与海外渠道同待遇，
-    官方目录撞键的模型在全量目录里各渠道价格并存、可直接对比。
+    官方目录键冲突的模型在全量目录里各渠道价格并存、可直接对比。
     同名键已存在时以官方定价页的抓取结果覆盖（比快照新鲜）。
     只收国内源（region=cn）；禁用或没有抓取结果的源跳过。
     """
@@ -630,7 +630,7 @@ def detect_vendor_coverage(
 
     providers 是目录 meta 里的厂商清单（id/name/doc/models_total/models_priced）。
     判定：品牌没有任何渠道命中 → not_listed；命中国内站渠道且带价 → has_cn；
-    其余（只有国际站口径，或国内渠道无带价模型）→ missing_cn。verdict 只描述
+    其余（只有国际站标准，或国内渠道无带价模型）→ missing_cn。verdict 只描述
     models.dev 收录情况：目录不收 models.dev 国内价，任何品牌都需要配置国内
     定价源才能产出国内基准。
     """
@@ -677,7 +677,7 @@ def detect_vendor_coverage(
 
 
 def _catalog_rate(catalog: dict[str, Any]) -> float | None:
-    """目录快照汇率优先，缺失时实时兜底。"""
+    """目录快照汇率优先，缺失时实时后备。"""
     rate = catalog.get("usd_cny_rate")
     if isinstance(rate, (int, float)) and rate > 0:
         return float(rate)

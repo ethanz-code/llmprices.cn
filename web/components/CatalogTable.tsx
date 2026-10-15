@@ -165,7 +165,7 @@ export function CatalogTable({
           vendorOrder(a.vendor, b.vendor) ||
           compareByReleaseDesc({ name: a.model ?? "", release: a.release_date }, { name: b.model ?? "", release: b.release_date }),
       );
-    // 模糊匹配忽略 - _ . 空格等分隔符：搜 GLM5.3 也能命中 GLM-5.3；重排为目录口径（厂商块+发布倒序）
+    // 模糊匹配忽略 - _ . 空格等分隔符：搜 GLM5.3 也能命中 GLM-5.3；重排为目录排序（厂商块+发布倒序）
   }, [data, keyword, vendor, vendorOrder]);
 
   const columns: DColumn<Row>[] = [
@@ -184,7 +184,7 @@ export function CatalogTable({
     {
       title: "模型",
       dataIndex: "model",
-      // 296：给下方 Artificial Analysis 全称徽标留足一行宽度，避免"智能指数"数值被省略号吃掉
+      // 296：给下方 Artificial Analysis 全称徽标留足一行宽度，避免"综合评分"数值被省略号吃掉
       width: 296,
       render: (v: string, row: Row) => {
         const hit = rankingHit(rankingsIndex, row.model);
@@ -202,11 +202,11 @@ export function CatalogTable({
             {hit && (
               <span
                 className="mono"
-                title="第三方评测的榜单排名与智能指数（0–100，非本站评测）"
+                title="第三方评测的榜单排名与综合评分（0–100，非本站评测）"
                 style={{ fontSize: 11, color: "var(--text-3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
               >
                 评测排名 #{hit.rank}
-                {hit.intelligence_index != null && ` · 智能指数 ${hit.intelligence_index}/100`}
+                {hit.intelligence_index != null && ` · 综合评分 ${hit.intelligence_index}/100`}
               </span>
             )}
           </span>
@@ -223,10 +223,10 @@ export function CatalogTable({
       key: "list",
       align: "right",
       width: 190,
-      // list 两口径都是 USD 归一值（国内条目为人民币/汇率），排序跨币种可比
+      // list 两种标准都是 USD 归一值（国内条目为人民币/汇率），排序跨币种可比
       sorter: (a, b) => (a.list?.input ?? 0) - (b.list?.input ?? 0),
       render: (_, row) => {
-        // 国内口径只展示定价源抓来的人民币原价；models.dev 换算出的分档/音频/国际价一概不出
+        // 国内标准只展示定价源抓来的人民币原价；models.dev 换算出的分档/音频/国际价一概不出
         if (row.region === "cn") {
           return isFreePrice(row.list_cny) ? (
             <ToneNum tone="green">免费</ToneNum>

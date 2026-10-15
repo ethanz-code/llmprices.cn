@@ -4,7 +4,7 @@ import Link from "next/link";
 import type { ChannelDot } from "@/lib/channelStatus";
 import { formatTime } from "@/lib/format";
 
-// 渠道点阵规格与总览页一致：3 行 × 15 列小点 = 最近 45 次检测
+// 检测点阵规格与总览页一致：3 行 × 15 列小点 = 最近 45 次检测
 const DOT_COLS = 15;
 const DOT_ROWS = 3;
 

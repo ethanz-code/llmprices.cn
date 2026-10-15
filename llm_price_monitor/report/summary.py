@@ -55,7 +55,7 @@ def representative_tier(tiers: list[dict[str, Any]], row: dict[str, Any]) -> dic
     """选出可平铺到顶层价格的档位：必须是同分组、单位与记录一致的上下文阶梯。
 
     AI 路径可能返回跨分组的"分组型"多档（如 totokens 的各子分组单价），
-    单位也可能与记录不一致；这类数据不平铺，避免顶层价格张冠李戴。
+    单位也可能与记录不一致；这类数据不平铺，避免顶层价格错配。
     """
     if not tiers:
         return None
@@ -115,7 +115,7 @@ def attach_catalog_discounts(output: dict[str, Any], catalog_report: dict[str, A
             kept: list[dict[str, Any]] = []
             for row in output["records"]:
                 entry, _reason = catalog_discount.build_discount(summary_row(row), models, rate)
-                # 站价高于官方价（折扣 > 100%）不展示：与采集侧同一口径
+                # 站价高于官方价（折扣 > 100%）不展示：与采集侧同一规则
                 if entry is not None and any(
                     isinstance(value, (int, float)) and value > catalog_discount.ABOVE_OFFICIAL_MAX_RATIO
                     for value in (entry.input_discount, entry.output_discount)

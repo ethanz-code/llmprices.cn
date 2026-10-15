@@ -475,12 +475,12 @@ def parse_html_tables(text: str, source_url: str) -> list[dict[str, Any]] | None
     try:
         collector.feed(text)
     except Exception:
-        return None  # 残缺 HTML 交给Headless 渲染或 AI 兜底
+        return None  # 残缺 HTML 交给Headless 渲染或 AI 回退
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for header, rows in collector.tables:
         # 转置规格表（模型当列头）与计费类别行表（百度千帆形态）都没有标准的
-        # 输入/输出列，通用列映射落空后按这两种口径再试
+        # 输入/输出列，通用列映射落空后按这两种标准再试
         parsed = (
             _records_from_grid(header, rows, source_url=source_url)
             or _records_from_categorized_rows(header, rows, source_url=source_url)
@@ -635,7 +635,7 @@ def _parse_text(text: str, source_url: str, prefix: str) -> tuple[list[dict[str,
 def parse_text_tables(text: str, source_url: str) -> list[dict[str, Any]] | None:
     """全部表格解析器依次尝试（Markdown / HTML / JSON / 组件注入），任一命中即返回条目。
 
-    供 HTML 采集链路在 JS 内嵌条目（{category:...} 形态）解析不出时做确定性兜底：
+    供 HTML 采集链路在 JS 内嵌条目（{category:...} 形态）解析不出时做确定性后备：
     普通价目中心页面（表格 + 单元格带币种符号）由这里接住，不再落到 AI 抽价。"""
     result = _parse_text(text, source_url, "table")
     return result[0] if result else None

@@ -16,7 +16,7 @@ from llm_price_monitor.catalog.translate import (
 from llm_price_monitor.config import AIConfig
 from llm_price_monitor.report import attach_catalog_discounts
 
-# 官方价只保留列表价口径，折扣基准即列表价
+# 官方价只保留列表价标准，折扣基准即列表价
 OFFICIAL_MODELS = {
     "gpt5.6sol": {
         "found": True,
@@ -115,12 +115,12 @@ def test_sanity_violation_flags_only_absurd_ratios():
 
 def test_sanity_violation_relaxes_bound_for_direct_api_prices():
     """结构化 API 直采（explicit_price + network）无提取环节，上界放宽：
-    totokens CC-MAX 订阅池真价（约 22 倍官价）放行，百万级单位错位仍拦；
+    totokens CC-MAX 订阅套餐池真价（约 22 倍官价）放行，百万级单位错位仍拦；
     同倍数的页面/AI 提取价维持严格上界。"""
     direct = {"metadata": {"pricing_kind": "explicit_price", "adapter": "network"}}
     # 约 22 倍：直采放行
     assert sanity_violation(_row(input_price=741.0, output_price=3_705.0, **direct), OFFICIAL_MODELS, 6.74) is None
-    # 约 149 倍：仍在放宽界内（订阅池真价实锤区间）
+    # 约 149 倍：仍在放宽界内（订阅套餐池真价实证区间）
     assert sanity_violation(_row(input_price=94.0, output_price=564.0, **direct), OFFICIAL_MODELS, 6.74) is None
     # 千倍级单位错位：直采也拦
     reason = sanity_violation(_row(input_price=33_700.0, output_price=67_400.0, **direct), OFFICIAL_MODELS, 6.74)
@@ -129,14 +129,14 @@ def test_sanity_violation_relaxes_bound_for_direct_api_prices():
     extracted = {"metadata": {"pricing_kind": "page_table", "adapter": "browser_network"}}
     reason = sanity_violation(_row(input_price=741.0, output_price=3_705.0, **extracted), OFFICIAL_MODELS, 6.74)
     assert reason and "输入" in reason
-    # 无 metadata 的行按提取价口径处理
+    # 无 metadata 的行按提取价标准处理
     reason = sanity_violation(_row(input_price=741.0, output_price=3_705.0), OFFICIAL_MODELS, 6.74)
     assert reason and "输入" in reason
 
 
 def test_sanity_violation_relaxes_low_bound_for_structured_rows():
     """结构直采（JSON 直读，无提取环节）的低价端同步放宽：站方真把分组定到官价 0.15%
-    也放行（2026-10-14 model101「限时折扣测试组」x0.01 实价 ¥0.04 实锤）；page_table 文本
+    也放行（2026-10-14 model101「限时折扣测试组」x0.01 实价 ¥0.04 实证）；page_table 文本
     解析与无 metadata 的行维持 1% 严格下界；÷1e6 级换算事故结构直采也拦。"""
     structured = {"metadata": {"pricing_kind": "ratio_multiplier", "adapter": "browser_network"}}
     # 约 0.0015 折（官价 33.7）：结构直采放行
@@ -145,7 +145,7 @@ def test_sanity_violation_relaxes_low_bound_for_structured_rows():
     extracted = {"metadata": {"pricing_kind": "page_table", "adapter": "browser_network"}}
     reason = sanity_violation(_row(input_price=0.05, output_price=0.3, **extracted), OFFICIAL_MODELS, 6.74)
     assert reason and "输入" in reason
-    # 无 metadata：按提取价口径拦
+    # 无 metadata：按提取价标准拦
     reason = sanity_violation(_row(input_price=0.05, output_price=0.3), OFFICIAL_MODELS, 6.74)
     assert reason and "输入" in reason
     # ÷1e6 级单位错位：结构直采也拦（0.01 元 vs 官价 2022 元 ≈ 5e-6 折；
@@ -236,7 +236,7 @@ def test_fetch_catalog_missing_cache_cost_falls_back_to_null(catalog_fetch):
     entry = doc["models"]["gpt5.5"]
     assert entry["cache"] == {"read": None, "write": None}
     assert entry["cache_cny"] == {"read": None, "write": None}
-    # 上游没带分档/音频时同口径为 null
+    # 上游没带分档/音频时同一套规则为 null
     assert entry["list_tiers"] is None and entry["list_tiers_cny"] is None
     assert entry["list_audio"] is None and entry["list_audio_cny"] is None
 
@@ -270,8 +270,8 @@ def test_fetch_catalog_skips_resale_entries_under_platform_providers(monkeypatch
     """官方价目录只收各 lab 自研模型：白名单平台渠道下挂着他家模型（转售）不进目录。
 
     models.dev 的 alibaba 渠道下有 deepseek/kimi 转售条目，此前靠厂商块顺序
-    先到先得兜底（moonshotai 在前能赢 kimi），deepseek 没有白名单渠道就会被
-    转售条目占位；品牌闸门按模型名归属直接拦下。
+    先到先得后备（moonshotai 在前能赢 kimi），deepseek 没有白名单渠道就会被
+    转售条目占位；品牌校验按模型名归属直接拦下。
     """
     snapshot = {
         "alibaba": _provider("alibaba", "Alibaba Cloud", "https://models.dev", {
@@ -468,7 +468,7 @@ def test_attach_catalog_discounts_prefers_snapshot_rate(monkeypatch):
     assert result["catalog"]["enabled"] is True
     assert result["catalog"]["usd_cny_rate"] == 7.0
     assert result["catalog"]["rate_source"] == "厂商价快照"
-    # USD 口径下汇率在分子分母同时出现，折扣率与汇率无关
+    # USD 标准下汇率在分子分母同时出现，折扣率与汇率无关
     assert result["records"][0]["discount"]["input"] == 0.5
 
 

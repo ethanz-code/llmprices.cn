@@ -1,4 +1,4 @@
-"""系统设置端点：读取、保存与外链实测（AI / 代理），以及模型池批量体检。"""
+"""系统设置端点：读取、保存与外链实测（AI / 代理），以及模型备选池批量体检。"""
 from __future__ import annotations
 
 import json
@@ -19,7 +19,7 @@ from llm_price_monitor.config import ai_from_raw, schedule_from_raw, settings_fr
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi.seed import apply_seed
 
-# 模型池体检：单模型 15 秒内没答完按失败计；单次请求上限 40 个，前端分批调
+# 监控模型清单体检：单模型 15 秒内没答完按失败计；单次请求上限 40 个，前端分批调
 PROBE_TIMEOUT_SECONDS = 15.0
 PROBE_MAX_BATCH = 40
 
@@ -141,7 +141,7 @@ def build_router(store: Store) -> APIRouter:
         """读控制接口里有哪些代理组、组里有哪些节点（面板下拉选组/选节点用）。
 
         用表单当前值，刚填完地址密钥就能先看再存；连不上、密钥不对这类问题
-        翻成人话返回 400，面板直接提示，不落库。
+        翻成人话返回 400，面板直接提示，不写库。
         """
         merged = {**(store.get_document("settings") or {}), **(body.settings or {})}
         base = str(merged.get("proxy_controller_url") or "").strip().rstrip("/")
@@ -237,7 +237,7 @@ def build_router(store: Store) -> APIRouter:
 
     @router.get("/api/settings/test-models")
     def get_models_probe() -> dict[str, Any]:
-        """回看上一轮模型池体检结果（documents.model_probe）；没测过返回空。"""
+        """回看上一轮监控模型清单体检结果（documents.model_probe）；没测过返回空。"""
         doc = store.get_document("model_probe")
         if not doc:
             return {"tested_at": None, "results": {}}
@@ -246,10 +246,10 @@ def build_router(store: Store) -> APIRouter:
 
     @router.post("/api/settings/test-models")
     def probe_models(body: ModelsProbeBody) -> dict[str, Any]:
-        """批量实测模型池：对每个模型发一次最小对话请求，逐个返回可用状态与报错原文。
+        """批量实测模型备选池：对每个模型发一次最小对话请求，逐个返回可用状态与报错原文。
 
         用已保存的配置（密钥完整不出后端）；结果合并进 documents.model_probe 供面板回看。
-        不写 ai_logs——体检是探针流量，混进日志会污染按口径统计的成功率。
+        不写 ai_logs——体检是探针流量，混进日志会污染按规则统计的成功率。
         """
         models = list(dict.fromkeys(item.strip() for item in body.models if item.strip()))
         if not models:
@@ -261,7 +261,7 @@ def build_router(store: Store) -> APIRouter:
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not ai_config.base_url:
-            raise HTTPException(status_code=400, detail="请先填写并保存 AI Base URL 再体检模型池")
+            raise HTTPException(status_code=400, detail="请先填写并保存 AI Base URL 再体检模型备选池")
 
         def probe_one(model: str) -> dict[str, Any]:
             started = time.monotonic()

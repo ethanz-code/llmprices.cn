@@ -5,12 +5,12 @@
 每类扫描：选 UA → 逐站点采集 → 与上次快照比对生成事件 → 写历史/快照 → 输出摘要。
 
 包结构（对外 API 与旧单文件 report.py 完全一致）：
-- `events`：报告数据模型（MonitorReport / SectionScan）、价格口径指纹与事件分类
+- `events`：报告数据模型（MonitorReport / SectionScan）、价格规则指纹与事件分类
 - `summary`：阶梯平铺、汇总行与官方目录折扣附加（仅输出层）
-- `pricing`：价格行采集侧变换（沿用上次价、规则价回填、分组白名单、合理性作废）
+- `pricing`：价格行采集侧变换（沿用上次价、推算价回填、分组白名单、合理性作废）
 - `timeouts`：单站采集硬上限保护（daemon 子线程 + 超时放弃）
 - `health`：并发锁、传输抖动容忍与 collect_status / site_collect_health 健康档案合并
-- `persist`：采集结果落库（复查-写入原子锁、并发轮次去重）
+- `persist`：采集结果写库（复查-写入原子锁、并发轮次去重）
 - `scans`：三类扫描主体与分组下线检测
 - `entry`：scan_prices / scan_statuses / scan_notices 独立入口与 run_once 全量编排
 

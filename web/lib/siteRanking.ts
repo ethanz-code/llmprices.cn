@@ -5,18 +5,18 @@
  * 权重写死在此），再减去「数据滞后扣分」（价格沿用旧快照时最多扣 10 分，见 stalenessPenalty）。
  * 目标是「价格越低越靠前，同时看配置/公告/渠道的配比」。
  *
- * 关键口径：**价格在当前这张表（当前模型）里比**——同一模型下各站的实付成本横向归一，
+ * 关键规则：**价格在当前这张表（当前模型）里比**——同一模型下各站的实付成本横向归一，
  * 谁最便宜谁价格分最高；不拿站点跨模型的中位数，否则会出现「本模型里最便宜的站却排在后面」。
  * 其余四项是站点级的：渠道稳定（近 7 天可用率/成功率）、人气（交流群人数 + 月访问量 +
  * 全网排名，公开数据）、配置完整（六项清单）、公告新鲜（距今分档）。
  *
- * 价格一项按**缓存加权实付成本**算：固定按一套「重缓存 Agent 用量」（输入里约 96% 从缓存读取、
+ * 价格一项按**按重缓存用量折算的实付成本**算：固定按一套「重缓存 Agent 用量」（输入里约 96% 从缓存读取、
  * 输出占 0.4%，见 RANKING_* 常量）折算，缓存读写价直接决定成本——没给缓存读取价的站点按
  * 「无缓存优惠」计（读价回落输入价），不因缺数据被算便宜。
- * 这套口径只服务「站点之间横向比价」，与花费计算器的估算默认值**刻意解耦**：
+ * 这套规则只服务「站点之间横向比价」，与花费计算器的估算默认值**刻意解耦**：
  * 两边都变了就等于排序变了，而这张表的排序不该被别处的默认值悄悄挪动。
  *
- * 纯函数 + 显式输入，便于单测；渠道稳定从 SiteStats（lib/statusData 的口径）取。
+ * 纯函数 + 显式输入，便于单测；渠道稳定从 SiteStats（lib/statusData 的标准）取。
  */
 import { calcCost } from "./calculator";
 import { effectiveCnyCachePrice, effectiveCnyPrice } from "./format";
@@ -26,7 +26,7 @@ import type { SiteStats } from "./channelStatus";
 import type { OverviewRecord, SiteFlags } from "./types";
 import type { SitePopularityMap } from "./popularity";
 
-/** 五项权重（写死；改口径改这里）。价格仍占最大头，人气作为平台规模的独立信号占 15%。 */
+/** 五项权重（写死；改规则改这里）。价格仍占最大头，人气作为平台规模的独立信号占 15%。 */
 export const SITE_RANK_WEIGHTS = {
   price: 40,
   stability: 20,
@@ -35,7 +35,7 @@ export const SITE_RANK_WEIGHTS = {
   notice: 10,
 } as const;
 
-/** 价格项折算成本的用量口径（与花费计算器的默认值无关，见文件头）：输入 96% 命中缓存、
+/** 价格项折算成本的用量结构（与花费计算器的默认值无关，见文件头）：输入 96% 命中缓存、
  *  输出占 0.4%。改这两个数等于改榜单排序，动之前先看排序会不会翻盘。 */
 const RANKING_HIT_RATE = 96;
 const RANKING_OUTPUT_SHARE = 0.4;
@@ -86,7 +86,7 @@ export type SiteSideScore = Pick<SiteScore, "stability" | "popularity" | "comple
 
 export interface SiteRankInput {
   records: OverviewRecord[];
-  /** 展示汇率（USD→CNY）；与总览表同一口径，缺省回落原币 */
+  /** 展示汇率（USD→CNY）；与总览表同一规则，缺省回落原币 */
   rate: number | null;
   /** 渠道检测视图（每站可用率/渠道成功率）；缺省该项取中性分 */
   views?: SiteStats | null;
@@ -111,7 +111,7 @@ function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
-/** 单条记录按 AI Agent 用量口径折算的实付成本（CNY / 100 万 token 混合用量）；
+/** 单条记录按 AI Agent 用量结构折算的实付成本（CNY / 100 万 token 混合用量）；
  *  缓存读价缺失按输入价计（无缓存优惠），不把没报缓存价的站点算便宜。两档价都缺返回 null。 */
 export function effectiveCostCny(row: OverviewRecord, rate: number | null): number | null {
   const input = effectiveCnyPrice(row, "input_price", rate);
@@ -129,12 +129,12 @@ export function effectiveCostCny(row: OverviewRecord, rate: number | null): numb
     hitRate: RANKING_HIT_RATE,
     outputShare: RANKING_OUTPUT_SHARE,
   });
-  // 真免费档（0/0 confirmed）就是 0，算最便宜；只有两档价都缺才 null（上面已挡）
+  // 真零价（0/0 confirmed）就是 0，算最便宜；只有两档价都缺才 null（上面已挡）
   return total;
 }
 
 /** 逐模型算价格分：同一模型下各站取最便宜那一档成本，再按 log 尺度归一。
- *  0 成本（真免费档）按「最低正价」同档处理——免费就是最便宜，不给它记成最贵。 */
+ *  0 成本（真零价）按「最低正价」同档处理——免费就是最便宜，不给它记成最贵。 */
 function priceByModel(records: OverviewRecord[], rate: number | null): Record<string, Record<string, number>> {
   // 模型 → 站点 → 该模型下最便宜的成本（同站多分组取最低，等价于用户会挑的那档）
   const byModel = new Map<string, Map<string, number>>();
@@ -153,7 +153,7 @@ function priceByModel(records: OverviewRecord[], rate: number | null): Record<st
     const costs = [...sites.values()];
     const positive = costs.filter((cost) => cost > 0);
     // 免费档（0 成本）按「最低正价的 1/10」处理：既让它压过一切付费档，又不把付费档全压成一片。
-    // 没有正价（全免费）时取 1/10 兜底，下面走「同价全给 1」分支，不会算出 NaN。
+    // 没有正价（全免费）时取 1/10 后备，下面走「同价全给 1」分支，不会算出 NaN。
     const freeFloor = (positive.length > 0 ? Math.min(...positive) : 1) / 10;
     const hasFree = positive.length < costs.length;
     const lo = hasFree ? freeFloor : Math.min(...costs);
@@ -169,7 +169,7 @@ function priceByModel(records: OverviewRecord[], rate: number | null): Record<st
   return result;
 }
 
-/** 站点渠道稳定项 0–1：近 7 天在售渠道平均可用率（时段桶按次数加权）与渠道成功率取均值；
+/** 站点渠道稳定项 0–1：近 7 天在售渠道平均可用率（时段分桶按次数加权）与渠道成功率取均值；
  *  两项都拿不到时返回 null（调用方给中性分）。 */
 function stabilityOf(views: SiteStats | null | undefined, siteId: string): number | null {
   const buckets = views?.uptimeBuckets?.[siteId] ?? [];

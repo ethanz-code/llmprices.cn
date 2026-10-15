@@ -143,7 +143,7 @@ def test_ai_extract_status_sends_status_prompt_and_parses_json():
 
 
 def test_ai_extract_status_falls_back_to_next_model(monkeypatch):
-    """渠道状态 AI 兜底接入统一换模型链路：首模型失败自动换下一个，全程留 AI 日志。"""
+    """渠道状态 AI 后备接入统一换模型链路：首模型失败自动换下一个，全程留 AI 日志。"""
     import llm_price_monitor.ai as ai_mod
 
     rows: list[dict] = []
@@ -385,7 +385,7 @@ def test_status_origin_fault_named_and_enters_health_after_tolerance(tmp_path: P
 
 
 def test_price_origin_fault_enters_health_archive(tmp_path: Path):
-    """价格采集撞上站方源站故障（CF 522）：文案带 timed out 也要进健康档案，站方问题要可见。"""
+    """价格采集遇到站方源站故障（CF 522）：文案带 timed out 也要进健康档案，站方问题要可见。"""
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "settings": {"monitor_models": ["demo-model"]},
@@ -570,7 +570,7 @@ def test_scan_statuses_runs_independently_of_prices(tmp_path: Path, monkeypatch)
 
 
 def test_scan_statuses_renews_token_on_401_and_retries(tmp_path: Path):
-    """渠道状态撞 401：配了续签的站点换一次新 token 重试，成功则照常入库并把新 token 写回配置。"""
+    """渠道状态遇到 401：配了续签的站点换一次新 token 重试，成功则照常入库并把新 token 写回配置。"""
     from llm_price_monitor.report import scan_statuses
 
     site = {
@@ -599,7 +599,7 @@ def test_scan_statuses_renews_token_on_401_and_retries(tmp_path: Path):
 
     assert scan.errors == []
     assert scan.records[0]["data"]["channels"][0]["status"] == "up"
-    assert seen_auth == ["Bearer at_stale", "Bearer at_new"]  # 旧 token 撞 401，换新后重试成功
+    assert seen_auth == ["Bearer at_stale", "Bearer at_new"]  # 旧 token 遇到 401，换新后重试成功
     assert store.get_site_config("demo")["auth_token"] == "at_new"
 
 
@@ -630,7 +630,7 @@ def test_fetch_site_status_carries_injected_credential(tmp_path: Path):
 
 
 def test_scan_statuses_401_without_refresh_config_reports_error(tmp_path: Path):
-    """没配续签的站点撞 401 不尝试换新：只记一条采集错误，不额外发请求。"""
+    """没配续签的站点遇到 401 不尝试换新：只记一条采集错误，不额外发请求。"""
     from llm_price_monitor.report import scan_statuses
 
     config = _config_file(tmp_path, _site_raw_config({"url": "https://demo.test/status"}))
@@ -792,7 +792,7 @@ def test_fetch_site_status_kuma_transform():
 
 
 def test_fetch_site_status_kuma_config_page_unavailable():
-    """配置页拉不到时按监控 id 兜底出渠道，心跳数据照常。"""
+    """配置页拉不到时按监控 id 后备出渠道，心跳数据照常。"""
     spec = _spec({"url": "https://status.demo.test/api/status-page/heartbeat/models", "parse": "kuma"})
     heartbeat = {"heartbeatList": {"7": [{"status": 1, "time": "2026-10-09T08:00:00.000Z", "ping": 5}]}, "uptimeList": {}}
 

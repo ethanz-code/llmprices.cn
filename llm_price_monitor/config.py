@@ -67,14 +67,14 @@ REFRESH_TOKEN_VAR = "${refresh_token}"
 # 写死必然失效；用占位符每次采集现查，漂移自动跟随。
 EGRESS_IP_VAR = "${egress_ip}"
 
-# 站点级字段的默认值：与默认相同就不落库，读取时由 SiteSpec 默认值兜底
+# 站点级字段的默认值：与默认相同就不写库，读取时由 SiteSpec 默认值后备
 SITE_FIELD_DEFAULTS: dict[str, Any] = {
     "enabled": True,
 }
 
 
 def jwt_claim(value: str, claim: str) -> float:
-    """取 JWT payload 里的数值声明（exp / iat），供主动续签与认证收口判新旧；非 JWT 或缺失返回 0.0。"""
+    """取 JWT payload 里的数值声明（exp / iat），供主动续签与认证收敛判新旧；非 JWT 或缺失返回 0.0。"""
     try:
         part = value.removeprefix("Bearer ").split(".")[1]
         part += "=" * (-len(part) % 4)
@@ -102,16 +102,16 @@ def slim_site_config(config: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in slimmed.items()
         if key == "enabled" or key not in SITE_FIELD_DEFAULTS or value != SITE_FIELD_DEFAULTS[key]
-    }  # enabled 始终落库：管理台行内启用判断和渲染直接读它，缺省会让前端当成停用
+    }  # enabled 始终写库：管理台行内启用判断和渲染直接读它，缺省会让前端当成停用
 
 
 def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """把存量站点配置整理成当前结构，返回（整理结果, 变更说明）。
 
-    两件整理：瘦身（见 slim_site_config）；认证收口——各接口 headers 里手写的 Authorization
+    两件整理：瘦身（见 slim_site_config）；认证收敛——各接口 headers 里手写的 Authorization
     是站点级 auth_token 的重复实现且不随续签更新，把其中最新的一个（按 JWT exp，非 JWT 视为最旧）
     收编进站点级 auth_token（已有 auth_token 时以它为准），其余全部移除；顺带清掉
-    token_refresh 里残留的 response_sample（它只在保存时供 AI 分析用，不落库）。
+    token_refresh 里残留的 response_sample（它只在保存时供 AI 分析用，不写库）。
     """
     notes: list[str] = []
     slimmed = slim_site_config(config)
@@ -177,13 +177,13 @@ def canonical_site_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[
 # screenshot 是 headless 截站点首页、popularity 要逐个查外部数据源，都是重活，默认一天一次
 DEFAULT_SCHEDULE_MINUTES = {"price": 180, "status": 5, "notice": 30, "catalog": 1440, "rankings": 1440, "discovery": 1440, "screenshot": 1440, "popularity": 1440}
 SCHEDULE_KEYS = tuple(DEFAULT_SCHEDULE_MINUTES)
-# 会打站点接口的三项设硬上限 12 小时：部分站点续签接口的凭据时效只有 24 小时甚至更短，
-# 间隔一旦超过续签窗口，凭证会在两次采集之间过期作废，续签链死掉只能人工重登
+# 会请求站点点接口的三项设硬上限 12 小时：部分站点续签接口的凭据时效只有 24 小时甚至更短，
+# 间隔一旦超过续签窗口，凭证会在两次采集之间过期作废，续签流程死掉只能人工重登
 SCHEDULE_MAX_MINUTES = {"price": 720, "status": 720, "notice": 720}
 
 
 def schedule_from_raw(raw: Any) -> dict[str, float]:
-    """校验 settings.schedule：每项必须是不小于 0 的数字（分钟）；缺失项回默认值；打站三项上限 12 小时。"""
+    """校验 settings.schedule：每项必须是不小于 0 的数字（分钟）；缺失项回默认值；请求站点三项上限 12 小时。"""
     raw = raw if isinstance(raw, dict) else {}
     schedule: dict[str, float] = {}
     for key in SCHEDULE_KEYS:
@@ -248,7 +248,7 @@ class MonitorSettings:
     # 国内定价源条目没有发布日期不参与；0 表示不自动清理
     monitor_model_max_age_months: int = 3
     # 采集备用代理（http(s) 代理 URL，如 http://172.17.0.1:7890）：直连优先，
-    # 直连失败的域名经失败记忆（egress.py）自动改走它兜底；留空不启用
+    # 直连失败的域名经失败记忆（egress.py）自动改走它后备；留空不启用
     fallback_proxy: str | None = None
 
 
@@ -271,12 +271,12 @@ class AIConfig:
         return secrets.choice(self.models) if self.models else ""
 
     def pick_price_model(self) -> str:
-        """价格提取的起始模型：配置了 price_model 就固定用它（失败仍按池子换模型），留空回退随机。"""
+        """价格提取的起始模型：配置了 price_model 就固定用它（失败仍按清单换模型），留空回退随机。"""
         return self.price_model or self.pick_model()
 
     @property
     def usable(self) -> bool:
-        """发起 AI 请求的最低条件：有地址、模型池非空。"""
+        """发起 AI 请求的最低条件：有地址、模型备选池非空。"""
         return bool(self.base_url and self.models)
 
 

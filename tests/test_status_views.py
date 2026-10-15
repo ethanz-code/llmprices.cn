@@ -1,7 +1,7 @@
-"""status_views 与前端 web/lib/channelStatus.ts 同口径的回归钉子。
+"""status_views 与前端 web/lib/channelStatus.ts 同一套规则的回归钉子。
 
 用例与前端 channelStatus.test.ts 一一对应（同样的输入、同样的期望值），
-前端改了启发式规则时这里要同步改——两边不一致就是口径分叉。
+前端改了启发式规则时这里要同步改——两边不一致就是规则分叉。
 """
 from __future__ import annotations
 

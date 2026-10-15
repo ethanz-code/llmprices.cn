@@ -67,9 +67,9 @@ def test_resolve_site_names_uses_ai_alias_before_version_rule():
 
 
 def test_resolve_site_names_matches_ignoring_separators():
-    """池内目标名与站点名只差分隔符（空格/连字符）时按同一个模型对上。
+    """清单内目标名与站点名只差分隔符（空格/连字符）时按同一个模型对上。
 
-    ERNIE 实锤：目标名来自厂商口径写作 "ERNIE 5.0"，站点照 API 习惯写作 ernie-5.0，
+    ERNIE 实证：目标名来自厂商标准写作 "ERNIE 5.0"，站点照 API 习惯写作 ernie-5.0，
     精确匹配永远对不上，采集侧该模型长期零覆盖。
     """
     resolved = resolve_site_names(
@@ -91,8 +91,8 @@ def test_resolve_site_names_separator_match_still_abstains_on_multiple_hits():
 
 
 def test_resolve_site_names_abstains_when_alias_hits_two_site_models():
-    """AIHub365 实锤：目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash
-    两个模型时，按 payload 顺序挑一个就是把两份价格张冠李戴，必须宁缺勿猜。"""
+    """AIHub365 实证：目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash
+    两个模型时，按 payload 顺序挑一个就是把两份价格错配，必须歧义即弃权。"""
     resolved = resolve_site_names(
         ["mimo-v2.5", "gpt-image-2", "deepseek-v4-flash", "deepseek-v4.1-flash"],
         {"deepseek-flash": ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4.1-flash")},

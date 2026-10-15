@@ -1,6 +1,6 @@
 """站方自有计价 fork（heyroute 型双列价格）解析测试。
 
-数值取自 2026-10-12 页面实锤：Grok $2.00→$0.040、CN-Models glm-5.3 $1.14→$0.64、
+数值取自 2026-10-12 页面实证：Grok $2.00→$0.040、CN-Models glm-5.3 $1.14→$0.64、
 Codex-Pro20x gpt-6-astra $12.00→$0.48、minimax-m3 $0.30→$0.168。
 """
 from llm_price_monitor.adapters import (

@@ -1,4 +1,4 @@
-"""并发锁与站点健康档案：合并锁、落库复查锁、传输抖动容忍与 collect_status / site_collect_health 合并。"""
+"""并发锁与站点健康档案：合并锁、写库复查锁、传输抖动容忍与 collect_status / site_collect_health 合并。"""
 from __future__ import annotations
 
 import re
@@ -16,8 +16,8 @@ from .events import SectionScan
 # 两个整文档，后写者会覆盖先写者的站点条目；进程内互斥让合并串行，双方条目都不丢
 _MERGE_LOCK = threading.Lock()
 
-# 事件/历史/快照落库的复查-写入原子锁：并行采集各自拿旧快照比对，若不加锁，
-# 后复查的一路看不到先落库一路的结果，同一变化会写成两条事件（见 _persist_scan_results）
+# 事件/历史/快照写库的复查-写入原子锁：并行采集各自拿旧快照比对，若不加锁，
+# 后复查的一路看不到先写库一路的结果，同一变化会写成两条事件（见 _persist_scan_results）
 _PERSIST_LOCK = threading.Lock()
 
 _TRANSPORT_ERROR_RE = re.compile(
@@ -29,7 +29,7 @@ _TRANSPORT_ERROR_RE = re.compile(
 # Cloudflare 源站故障码（520-526）：请求已到达 CF 边缘、连不上或无响应的是源站，
 # 属于站方故障，不是本地链路抖动——错误文本里也带 "timed out"，会被 _TRANSPORT_ERROR_RE
 # 匹配到，判定必须先看这枚错误码（2026-10-14 666ai 连续 79 轮 522 只刷"网络抖动"日志、
-# 不进健康档案，实锤过）。两种措辞都收：自造的 "HTTP 522" 与 httpx 直抛的
+# 不进健康档案，实证过）。两种措辞都收：自造的 "HTTP 522" 与 httpx 直抛的
 # "Server error '522 <none>' for url …"。
 _ORIGIN_FAULT_RE = re.compile(r"(?:http|error)\s*'?\s*52[0-6]\b", re.IGNORECASE)
 

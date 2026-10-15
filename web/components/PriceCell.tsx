@@ -53,7 +53,7 @@ export function PriceCell({
   );
 }
 
-/** 缓存价格：读/写（及 1h 写）逐行展示，折算口径与输入/输出价一致；站点未提供任何缓存价显示 —。 */
+/** 缓存价格：读/写（及 1h 写）逐行展示，折算规则与输入/输出价一致；站点未提供任何缓存价显示 —。 */
 export function CachePriceCell({ row, rate }: { row: PriceLike; rate?: number | null }) {
   const fields = Object.keys(CACHE_PRICE_LABELS) as CachePriceField[];
   const lines = fields

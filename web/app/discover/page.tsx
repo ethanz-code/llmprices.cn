@@ -50,6 +50,12 @@ export default async function DiscoverPage({
   }
 
   const origin = await siteOrigin();
+  // 本页为空有三种情形，要分清楚：清单真没数据（提示去刷新发现）、筛选后无匹配（表格自己给空态）、
+  // 页码越界（总数 > 0 但本页空——必须照常渲染表格壳与分页器，否则翻不回去）
+  const filteredTotal = data?.filtered_total ?? data?.stations.length ?? 0;
+  const filtered = status !== "all" || Boolean(query.q);
+  const showTable = Boolean(data) && (filteredTotal > 0 || filtered);
+  const showNotReady = Boolean(data) && filteredTotal === 0 && !filtered;
   // 结构化数据只在规范 URL（第 1 页、无筛选）输出，避免给搜索引擎一堆分页变体
   const canonical = status === "all" && !query.q && query.page === 1;
   const jsonLd =
@@ -82,17 +88,15 @@ export default async function DiscoverPage({
         />
       )}
       {notReady && <SiteAlert title={alerts.discovery.title} detail="" fix={alerts.discovery.fix} />}
-      {data && data.stations.length === 0 && (
-        <SiteAlert title={alerts.discovery.title} detail="" fix={alerts.discovery.fix} />
-      )}
-      {data && data.stations.length > 0 && (
+      {showNotReady && <SiteAlert title={alerts.discovery.title} detail="" fix={alerts.discovery.fix} />}
+      {showTable && data && (
         <DiscoverTable
           data={data}
           page={query.page}
           size={query.size}
           query={query.q}
           status={status}
-          total={data.filtered_total ?? data.stations.length}
+          total={filteredTotal}
         />
       )}
 

@@ -23,7 +23,7 @@ const RANKINGS_SORT_KEYS = [
 
 export const metadata = pageMetadata(
   "模型榜单",
-  "模型智能指数榜单，先看模型能力档位，再对照各站价格挑性价比。",
+  "模型综合评分榜单，先看模型能力档位，再对照各站价格挑性价比。",
   "/rankings",
 );
 

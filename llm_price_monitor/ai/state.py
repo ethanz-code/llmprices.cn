@@ -22,11 +22,11 @@ AiLogHook = Any
 ai_log_hook: AiLogHook | None = None
 
 # 模型 max_tokens 上限的持久化钩子：上限只能从 400 报错里学出来（无查询接口），学习结果
-# 落库后重启不丢，每个模型一生最多白发一次降额请求。loader 返回 {model: limit}，saver 增量写一条。
+# 写库后重启不丢，每个模型一生最多白发一次降额请求。loader 返回 {model: limit}，saver 增量写一条。
 model_limits_loader: Callable[[], dict[str, int]] | None = None
 model_limits_saver: Callable[[str, int], None] | None = None
 
-# 思考受限模型名单的持久化钩子：同样只能从 400 报错里学出来，落库后重启不丢，每个模型
+# 思考受限模型名单的持久化钩子：同样只能从 400 报错里学出来，写库后重启不丢，每个模型
 # 一生最多白发一次翻参请求。loader 返回模型名列表，saver 增量记一个。
 thinking_models_loader: Callable[[], list[str]] | None = None
 thinking_models_saver: Callable[[str], None] | None = None
@@ -51,7 +51,7 @@ def log_ai_request(**fields: Any) -> None:
 
 
 def learn_model_limit(model: str, limit: int) -> None:
-    """记录从 400 报错里学到的模型 max_tokens 上限：进内存缓存，落库钩子存在时同步持久化。"""
+    """记录从 400 报错里学到的模型 max_tokens 上限：进内存缓存，写库钩子存在时同步持久化。"""
     if _ai._MODEL_MAX_TOKENS_LIMIT.get(model) == limit:
         return
     _ai._MODEL_MAX_TOKENS_LIMIT[model] = limit
@@ -61,7 +61,7 @@ def learn_model_limit(model: str, limit: int) -> None:
     try:
         saver(model, limit)
     except Exception:
-        pass  # 落库失败只损失重启后的预载，不影响本轮
+        pass  # 写库失败只损失重启后的预载，不影响本轮
 
 
 def load_model_limits() -> None:
@@ -78,7 +78,7 @@ def load_model_limits() -> None:
 
 
 def learn_thinking_required(model: str) -> None:
-    """记录拒收 enable_thinking=false 的模型：进内存缓存，落库钩子存在时同步持久化。"""
+    """记录拒收 enable_thinking=false 的模型：进内存缓存，写库钩子存在时同步持久化。"""
     if model in _ai._MODEL_THINKING_REQUIRED:
         return
     _ai._MODEL_THINKING_REQUIRED.add(model)
@@ -88,7 +88,7 @@ def learn_thinking_required(model: str) -> None:
     try:
         saver(model)
     except Exception:
-        pass  # 落库失败只损失重启后的预载，不影响本轮
+        pass  # 写库失败只损失重启后的预载，不影响本轮
 
 
 def load_thinking_models() -> None:

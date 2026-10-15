@@ -136,7 +136,7 @@ def _ensure_schedule_defaults(store: Store) -> None:
 def _ensure_settings_defaults(store: Store) -> None:
     """settings 里缺失的字段补上默认值：设置页直接读库展示，补齐后每项都有数可显。
 
-    只补缺、不覆盖已有值；对老库相当于一次性把新增配置项落库。
+    只补缺、不覆盖已有值；对老库相当于一次性把新增配置项写库。
     """
     settings = store.get_document("settings") or {}
     missing = {}

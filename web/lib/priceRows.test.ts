@@ -1,4 +1,4 @@
-/** 首页精选行口径：每模型取全站综合价最低行、无价模型不出现、发布日期倒序排。 */
+/** 首页代表行规则：每模型取全站加权单价最低行、无价模型不出现、发布日期倒序排。 */
 import { describe, expect, it } from "vitest";
 
 import type { OverviewRecord } from "@/lib/types";
@@ -30,11 +30,11 @@ describe("canonicalModel", () => {
 });
 
 describe("lowestPriceRowPerModel", () => {
-  it("每模型只留综合价最低的行（输入 3:输出 1 折 RMB），展示名取组内出现最多的写法", () => {
+  it("每模型只留加权单价最低的行（输入 3:输出 1 折 RMB），展示名取组内出现最多的写法", () => {
     const rate = 7.0;
     const rows = [
       row({ site_id: "a", model: "GPT-5.6", input_price: 10, output_price: 1 }),
-      row({ site_id: "b", model: "gpt-5.6", input_price: 2, output_price: 8 }), // 综合价 (2*3+8)/4=3.5 更低
+      row({ site_id: "b", model: "gpt-5.6", input_price: 2, output_price: 8 }), // 加权单价 (2*3+8)/4=3.5 更低
       row({ site_id: "c", model: "GPT-5.6", input_price: 30, output_price: 40 }),
     ];
     const picked = lowestPriceRowPerModel(rows, rate);
@@ -52,11 +52,11 @@ describe("lowestPriceRowPerModel", () => {
     expect(picked.map((r) => canonicalModel(r.model))).toEqual(["priced"]);
   });
 
-  it("0/0 双零只有 confirmed（真免费档）算可用价，无数据占位行不入选", () => {
+  it("0/0 双零只有 confirmed（真零价）算可用价，无数据占位行不入选", () => {
     const rows = [
       // 无数据占位行被 AI 照提示词模板抄成 0/0：不能当免费价当选"最低价"（DaiTuAI grok-4.7 实测）
       row({ model: "ghost", input_price: 0, output_price: 0, price_status: "unavailable" }),
-      // confirmed 双零是真免费档，照常入选
+      // confirmed 双零是真零价，照常入选
       row({ model: "free-tier", input_price: 0, output_price: 0 }),
     ];
     const picked = lowestPriceRowPerModel(rows, null);
@@ -75,7 +75,7 @@ describe("lowestPriceRowPerModel", () => {
 });
 
 describe("orderByReleaseDesc", () => {
-  it("目录发布日期倒序在前，未收录模型垫底按名称", () => {
+  it("目录发布日期倒序在前，未收录模型排在最后按名称", () => {
     const rows = [
       row({ model: "old-model" }),
       row({ model: "new-model" }),

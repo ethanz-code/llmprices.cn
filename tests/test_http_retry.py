@@ -113,7 +113,7 @@ def spy_http_transport(monkeypatch):
 
 
 def test_default_transport_reads_proxy_env(monkeypatch, spy_http_transport):
-    """显式 transport 会绕过 httpx 的环境代理解析，build_client 必须自己读代理配置当兜底。"""
+    """显式 transport 会绕过 httpx 的环境代理解析，build_client 必须自己读代理配置当后备。"""
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7897")
     with build_client() as client:
         assert isinstance(client._transport, FallbackTransport)
@@ -122,7 +122,7 @@ def test_default_transport_reads_proxy_env(monkeypatch, spy_http_transport):
 
 def test_panel_fallback_proxy_beats_proxy_env(monkeypatch, spy_http_transport):
     """面板备用代理优先于环境变量：面板的「备用代理 + 节点自动切换」是同一条出口链路，
-    环境变量只带得走代理地址、切换功能对它无从生效（2026-10-14 cun.ai 实锤）。"""
+    环境变量只带得走代理地址、切换功能对它无从生效（2026-10-14 cun.ai 实证）。"""
     monkeypatch.setenv("HTTPS_PROXY", "http://env.test:7890")
     egress.configure_provider(lambda: "http://127.0.0.1:7899")
     with build_client() as client:
@@ -161,12 +161,12 @@ def test_injected_transport_bypasses_proxy_env(monkeypatch, spy_http_transport):
     assert spy_http_transport.proxies_seen == []
 
 
-# ---------- 直连优先、代理兜底（FallbackTransport） ----------
+# ---------- 直连优先、代理后备（FallbackTransport） ----------
 
 
 @pytest.fixture(autouse=True)
 def _clean_egress():
-    """兜底用例从干净的失败记忆出发，不接线 provider（需要时用例里单独接）。"""
+    """后备用例从干净的失败记忆出发，不接线 provider（需要时用例里单独接）。"""
     egress._failures.clear()
     egress.configure_provider(None)
     yield
@@ -199,7 +199,7 @@ def test_fallback_switches_to_proxy_after_direct_connect_error(monkeypatch):
     with _fallback_client(direct, proxied) as client:
         response = client.get("https://demo.test/api/status")
     assert response.status_code == 200
-    assert len(calls["direct"]) == 1 + RETRY_ATTEMPTS  # 直连先走完整退避重试，耗尽才兜底
+    assert len(calls["direct"]) == 1 + RETRY_ATTEMPTS  # 直连先走完整退避重试，耗尽才后备
     assert len(calls["proxy"]) == 1
     assert egress.plan("demo.test").use_proxy  # 失败记入记忆，TTL 内后续直接走代理
 
@@ -218,7 +218,7 @@ def test_fallback_on_403_then_reprobe_recovers_direct(monkeypatch):
     now = [1000.0]
     monkeypatch.setattr(egress, "_now", lambda: now[0])
     with _fallback_client(direct, proxied) as client:
-        assert client.get("https://demo.test/p").status_code == 200  # 403 → 兜底
+        assert client.get("https://demo.test/p").status_code == 200  # 403 → 回退
         assert len(calls["direct"]) == 1 and len(calls["proxy"]) == 1
         assert client.get("https://demo.test/p").status_code == 200  # 记忆内：直连不再被碰
         assert len(calls["direct"]) == 1 and len(calls["proxy"]) == 2
@@ -263,8 +263,8 @@ def test_post_is_not_fallbacked():
 
 
 def test_direct_leg_caps_connect_timeout_and_restores_request(monkeypatch):
-    """直连腿统一压短建连超时（发现被墙要快），读超时保持原值，且用完还原请求——
-    残留的短 connect 泄漏到代理腿会把代理本身建连慢的合法请求也掐死。"""
+    """直连请求统一压短建连超时（发现被墙要快），读超时保持原值，且用完还原请求——
+    残留的短 connect 泄漏到代理链路会把代理链路本身建连慢的合法请求也掐死。"""
     direct_seen = []
     proxied_seen = []
 
@@ -292,14 +292,14 @@ def test_build_client_transport_variants(monkeypatch, spy_http_transport):
     with build_client() as client:
         assert type(client._transport) is RetryingTransport
     assert spy_http_transport.proxies_seen == [None]
-    # 配了备用代理：包 FallbackTransport，代理腿用该地址
+    # 配了备用代理：包 FallbackTransport，代理链路用该地址
     spy_http_transport.proxies_seen.clear()
     egress.configure_provider(lambda: "http://172.17.0.1:7890")
     with build_client() as client:
         assert isinstance(client._transport, FallbackTransport)
     assert spy_http_transport.proxies_seen == [None, "http://172.17.0.1:7890"]
     # 面板备用代理在场时优先于环境变量（见 test_panel_fallback_proxy_beats_proxy_env）；
-    # 撤掉面板配置后环境变量接棒兜底位
+    # 撤掉面板配置后环境变量接棒后备位
     spy_http_transport.proxies_seen.clear()
     monkeypatch.setenv("HTTPS_PROXY", "http://env.test:7890")
     egress.configure_provider(None)

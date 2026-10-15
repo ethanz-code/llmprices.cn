@@ -46,7 +46,7 @@ function buildRuns(from: number, to: number, levelOf: (index: number) => RateLev
 }
 
 /** 用 P2/P98 而不是极值：个别自报异常点（如 58 秒）不会把其余数据压成一条直线。
- *  分享图的延迟量程与这里同口径（全量数据算一次，抽稀只影响画法）。 */
+ *  分享图的延迟量程与这里同一套规则（全量数据算一次，抽稀只影响画法）。 */
 export function quantileRange(values: number[]): [number, number] {
   if (values.length === 0) return [0, 1];
   values.sort((a, b) => a - b);

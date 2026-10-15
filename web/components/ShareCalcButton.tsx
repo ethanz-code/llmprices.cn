@@ -32,7 +32,7 @@ export function ShareCalcButton({
   prices: CalcPrices;
   totalTokens: number;
   hitRate: number;
-  /** 输出占总用量百分比：图上与命中率并列显示，标明这笔账的拆分口径 */
+  /** 输出占总用量百分比：图上与命中率并列显示，标明这笔账的拆分方式 */
   outputShare: number;
   result: CalcResult;
   missingCacheRead: boolean;
@@ -70,7 +70,7 @@ export function ShareCalcButton({
     try {
       setGeneratedAt(Math.floor(Date.now() / 1000));
       await nextFrame();
-      // 显式给尺寸，不再让库自己量；再加超时兜底，避免任何环节卡住后按钮一直转圈
+      // 显式给尺寸，不再让库自己量；再加超时后备，避免任何环节卡住后按钮一直转圈
       const url = await withTimeout(
         withFrameFallback(() =>
           toPng(card, { width, height, pixelRatio: 2, cacheBust: true }),

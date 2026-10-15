@@ -118,5 +118,5 @@ _UNUSABLE_MODEL_STATUSES = frozenset({401, 402, 403, 404, 410})
 
 
 def model_unusable_status(status_code: int) -> bool:
-    """该 HTTP 状态是否代表"这个模型确定用不了"（模型池体检标记与清理判断共用）。"""
+    """该 HTTP 状态是否代表"这个模型确定用不了"（监控模型清单体检标记与清理判断共用）。"""
     return status_code in _UNUSABLE_MODEL_STATUSES

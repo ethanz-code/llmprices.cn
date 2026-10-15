@@ -20,7 +20,7 @@ interface Row extends CatalogEntry {
 
 /** 全量渠道价表：models.dev 所有厂商的带价模型，仅供浏览。
  *
- *  真分页：8000+ 条（整份约 8 MB）由后端按目录口径排序筛选后按页下发，页面只取当前页；
+ *  真分页：8000+ 条（整份约 8 MB）由后端按目录排序排序筛选后按页下发，页面只取当前页；
  *  搜索、厂商筛选、列排序、翻页都改 URL，服务端重新取数（分页之后前端排序只能排当页，没意义）。 */
 export function CatalogAllTable({
   data,

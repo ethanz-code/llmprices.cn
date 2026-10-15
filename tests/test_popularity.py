@@ -1,4 +1,4 @@
-"""站点人气：群链接/群号提取、Telegram 人数与访问量/排名解析、落库合并、接口与清理。
+"""站点人气：群链接/群号提取、Telegram 人数与访问量/排名解析、写库合并、接口与清理。
 
 不真发外部请求：httpx 全走 MockTransport，TRANCO_INTERVAL_SECONDS 压到 0 免等。
 """
@@ -89,7 +89,7 @@ def test_fetch_telegram_stats_parses_members_and_online():
             "members_kind": "members",
             "online": 53,
         }
-    # 频道口径是 subscribers：展示文案要叫「频道」而不是「群」
+    # 频道标准是 subscribers：展示文案要叫「频道」而不是「群」
     channel = '<div class="tgme_page_extra">705 subscribers</div>'
     with _client(lambda request: httpx.Response(200, text=channel)) as client:
         assert fetch_telegram_stats("https://t.me/cun_ai", client) == {
@@ -187,7 +187,7 @@ def test_similarweb_client_maps_blocked_and_nodata_to_none(monkeypatch):
     """出口状态码语义：202/403=被拦（试下一个出口）、204=上游没数据、0 访问量不算数。"""
     import llm_price_monitor.popularity as popularity
 
-    # 测试环境没有代理配置：代理腿被跳过，只有直连腿
+    # 测试环境没有代理配置：代理链路被跳过，只有直连请求
     monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: None)
     sw = pop.SimilarWebClient("test/1.0")
     with pytest.MonkeyPatch.context() as mp:
@@ -203,7 +203,7 @@ def test_similarweb_client_maps_blocked_and_nodata_to_none(monkeypatch):
 
 
 def test_similarweb_client_prefers_proxy_then_direct(monkeypatch):
-    """出口顺序：SimilarWeb 拒数据中心/本机 IP，代理腿优先、直连兜底（与采集链路镜像）。"""
+    """出口顺序：SimilarWeb 拒数据中心/本机 IP，代理链路优先、直连后备（与采集链路镜像）。"""
     import llm_price_monitor.popularity as popularity
 
     monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: "http://proxy:9090")
@@ -213,7 +213,7 @@ def test_similarweb_client_prefers_proxy_then_direct(monkeypatch):
     def fake_get(url, **kwargs):
         legs.append(kwargs.get("proxy") or "direct")
         if kwargs.get("proxy"):
-            return httpx.Response(403, text="blocked")  # 代理腿被拉黑
+            return httpx.Response(403, text="blocked")  # 代理链路被拉黑
         return httpx.Response(200, json={"overview": {"visitsTotalCount": 12.0}})
 
     with pytest.MonkeyPatch.context() as mp:
@@ -297,7 +297,7 @@ def test_collect_site_scans_status_payload_and_homepage(monkeypatch):
 
 
 def test_collect_site_falls_back_to_notice_text(monkeypatch):
-    """站点接口与首页都打不开时，已存公告里的群号仍能落库；公告也没有才返回 None。"""
+    """站点接口与首页都打不开时，已存公告里的群号仍能写库；公告也没有才返回 None。"""
     monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
 
     def dead(request: httpx.Request) -> httpx.Response:
@@ -318,7 +318,7 @@ def test_site_host_prefers_homepage_and_skips_ip():
     assert site_host(_spec("a", "http://134.175.71.62/api/pricing")) == ""
 
 
-# ---------- 落库合并与清理 ----------
+# ---------- 写库合并与清理 ----------
 
 
 def test_record_popularity_merges_and_keeps_old_on_partial(tmp_path):
@@ -384,7 +384,7 @@ def test_needs_query_and_fresh_skip(monkeypatch):
         payload = collect_site(_spec(), client, previous=complete)
         assert payload is not None
         assert payload["traffic"]["monthly_visits"] == 100 and payload["traffic"]["rank"] == 500_000
-        # skip 分支只打站点自身三处（/api/status、首页、t.me），Tranco/SimilarWeb/hypestat 都没打
+        # skip 分支只请求站点点自身三处（/api/status、首页、t.me），Tranco/SimilarWeb/hypestat 都没打
         assert called["external"] == 3
         before = called["external"]
         payload = collect_site(_spec(), client, previous=complete, force=True)
@@ -490,7 +490,7 @@ def test_purge_and_rename_move_popularity(workspace: Path):
 
 
 def test_scan_popularity_records_and_isolates_failures(tmp_path, monkeypatch):
-    """整轮采集：成功的站落库，失败的站保留旧数据并计数，单站异常不打断。"""
+    """整轮采集：成功的站写库，失败的站保留旧数据并计数，单站异常不打断。"""
     monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
     store = Store(tmp_path / "monitor.db")
     record_popularity(store, "bad", {"groups": [], "traffic": {"rank": 1}, "checked_at": 1.0})

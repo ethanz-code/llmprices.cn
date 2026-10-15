@@ -451,7 +451,7 @@ def test_login_value_supports_mixed_text_and_multiple_placeholders(monkeypatch):
 
 
 def test_fetch_page_html_uses_proxy_for_marked_host(monkeypatch):
-    """失败记忆标记过的域名：无头渲染直接带代理启动，不再白撞一次墙。"""
+    """失败记忆标记过的域名：无头渲染直接带代理启动，不再白白失败一次。"""
     from llm_price_monitor.browser_fetch import fetch_page_html
 
     captured: dict = {}

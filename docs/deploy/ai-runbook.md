@@ -6,7 +6,7 @@
 
 | 事实 | 值 |
 | --- | --- |
-| 架构 | `api`（FastAPI + 内置定时采集，容器内 8437）+ `web`（Next.js，容器内 3000），`docker compose` 编排；另有可选 `proxy`（mihomo 机场兜底，`profiles: ["proxy"]` 默认不启动，`.env` 加 `COMPOSE_PROFILES=default,proxy` 启用） |
+| 架构 | `api`（FastAPI + 内置定时采集，容器内 8437）+ `web`（Next.js，容器内 3000），`docker compose` 编排；另有可选 `proxy`（mihomo 机场后备，`profiles: ["proxy"]` 默认不启动，`.env` 加 `COMPOSE_PROFILES=default,proxy` 启用） |
 | 镜像版本 | compose 引用 `llmprices/{api,web}:${APP_TAG:-local}`——`.env` 里 `APP_TAG=<git 短 SHA>` 就是线上版本号，`up -d --build` 构建即带标签，**回滚 = 改回上一版 APP_TAG + up -d**；不设置回退 local |
 | 对外端口 | 仅宿主 3000（前端）。8437 永不发布、永不放行公网 |
 | 数据 | `./var/monitor.db`（SQLite，bind mount）。备份它 = 备份一切 |
@@ -108,7 +108,7 @@ curl -sI https://域名 | head -1                                      # 200/2xx
 | 构建卡死 / 被 OOM 杀 | `free -h` | 加 swap 后重新 build |
 | 磁盘满 | `docker system df` | `docker image prune -f`；`journalctl --vacuum-size=100M` |
 | 时间 / 时区不对 | `docker compose exec api date` | 镜像默认 `TZ=Asia/Shanghai`；不符时改 Dockerfile / compose 的 TZ 后重建 |
-| 容器健康但域名打不开：80 被 302 到 `dnspod.qcloud.com/.../webblock.html`、443 TLS 握手后 RST，同机其他域名正常 | 用同 IP 上已备案域名对照访问；服务器本机/跨云内网路径可能仍 200 | 域名未备案被云厂商境内入口拦截，部署侧无解；办备案（1~3 周），或经用户确认后临时换已备案子域名过渡（2026-10-03 llmprices.cn 实锤） |
+| 容器健康但域名打不开：80 被 302 到 `dnspod.qcloud.com/.../webblock.html`、443 TLS 握手后 RST，同机其他域名正常 | 用同 IP 上已备案域名对照访问；服务器本机/跨云内网路径可能仍 200 | 域名未备案被云厂商境内入口拦截，部署侧无解；办备案（1~3 周），或经用户确认后临时换已备案子域名过渡（2026-10-03 llmprices.cn 实证） |
 
 ## 10. 更新与回滚
 

@@ -31,7 +31,7 @@ function originOf(url: string): string | null {
   }
 }
 
-/** 服务端读取站点首页覆盖表；拉不到返回空表，站名链接退回内置映射/来源域名兜底，不阻塞页面。 */
+/** 服务端读取站点首页覆盖表；拉不到返回空表，站名链接退回内置映射/来源域名后备，不阻塞页面。 */
 export async function loadSiteHomepages(): Promise<SiteHomepages> {
   try {
     const data = await apiGet<{ homepages?: SiteHomepages }>("/api/sites/homepages");

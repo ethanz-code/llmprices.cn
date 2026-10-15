@@ -105,7 +105,7 @@ export function AdminSites() {
   }, []);
 
   function flashSaved() {
-    // 勾完即存没有保存按钮，用一闪而过的"已保存"确认落库
+    // 勾完即存没有保存按钮，用一闪而过的"已保存"确认写库
     setSavedShown(true);
     if (savedTimer.current !== null) window.clearTimeout(savedTimer.current);
     savedTimer.current = window.setTimeout(() => setSavedShown(false), 1600);

@@ -11,7 +11,7 @@ import json
 import urllib.request
 from typing import Any
 
-# 批量接口上限 100 个/批；一次请求解析太多会撞免费限额，每次统计最多补 2 批
+# 批量接口上限 100 个/批；一次请求解析太多会触发免费限额，每次统计最多补 2 批
 _BATCH_SIZE = 100
 GEO_API = "http://ip-api.com/batch?fields=status,country,regionName,city,lat,lon&lang=zh-CN"
 

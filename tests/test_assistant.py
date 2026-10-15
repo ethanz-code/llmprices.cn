@@ -582,7 +582,7 @@ def test_ask_retries_same_model_when_thinking_restricted(workspace: Path, monkey
     assert res.status_code == 200
     assert "demo-model" in res.json()["answer"]
     # 分类门控第一次 false 被 400 拒、翻 true 重发成功，并学会该模型思考不可关；
-    # 回答腿经 ai_request 直接按 true 构造，不再白发那次 400
+    # 回答链路经 ai_request 直接按 true 构造，不再白发那次 400
     assert [call["model"] for call in calls] == ["glm-5.3"] * 3
     assert [call["enable_thinking"] for call in calls] == [False, True, True]
     # 翻参重试在日志里记为独立的 param_retry 状态，不与换模型重试（fallback）混淆
@@ -593,7 +593,7 @@ def test_ask_retries_same_model_when_thinking_restricted(workspace: Path, monkey
 
 def test_ask_general_empty_answer_fails_without_consuming_quota(workspace: Path, monkeypatch):
     """general 通道模型 200 但零文本（内容过滤/思考烧尽）：按 AI 失败返回 502，
-    不产出空气泡、不扣当日配额——与 data 路径及「AI 失败不扣次数」口径一致。"""
+    不产出空气泡、不扣当日配额——与 data 路径及「AI 失败不扣次数」规则一致。"""
     gate_actions = ["general", "data"]
     stream_calls: list[list[Any] | None] = []
 

@@ -52,7 +52,7 @@ def _clip_ai_log_text(value: str | None) -> str | None:
 class AIStoreMixin:
     # ---------- AI 请求日志 ----------
 
-    # 日志保留天数兜底值：settings.retention_ai_log_days 未配置时生效；写入时顺带清理，超过即淘汰
+    # 日志保留天数后备值：settings.retention_ai_log_days 未配置时生效；写入时顺带清理，超过即淘汰
     AI_LOG_RETENTION_DAYS = 7
 
     def add_ai_log(
@@ -175,10 +175,10 @@ class AIStoreMixin:
 
         成功率 = ok / (total - transport - ignored)，即成功尝试占「有效尝试」的比例。每次请求尝试各记
         一条日志：报错后换模型（fallback）或换参数（param_retry）重试的尝试是失败的一种，重试成功的
-        另记一条 ok；模型池全部失败的整次失败记 error 行，同样计入失败。两类东西不算失败也从分母剔除：
+        另记一条 ok；模型备选池全部失败的整次失败记 error 行，同样计入失败。两类东西不算失败也从分母剔除：
         连接抖动（transport，超时/SSL 断开等未收到响应），以及「报错判定」里被勾掉不算的报错组
         （settings.ai_ignored_errors，分组键见 ai_error_kind）。
-        按天序列补零对齐，日期统一用本地时区（与 visit_summary 的口径一致）。
+        按天序列补零对齐，日期统一用本地时区（与 visit_summary 的规则一致）。
         """
         today0 = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         cutoff = today0 - (trend_days - 1) * 86400
@@ -269,7 +269,7 @@ class AIStoreMixin:
         answered = total - int(totals["transport"]) - ignored_rows
         return {
             "total": total,
-            # 成功率口径见 docstring：ok / (total - transport - ignored)，没有有效尝试时为 None
+            # 成功率标准见 docstring：ok / (total - transport - ignored)，没有有效尝试时为 None
             "success_rate": round(int(totals["ok"]) / answered * 100, 1) if answered else None,
             "ok": int(totals["ok"]),
             "fallback": int(totals["fallback"]),

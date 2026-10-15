@@ -112,7 +112,7 @@ def status_scan_job(config: MonitorConfig, store: Store) -> Callable[[], dict[st
     """渠道状态采集任务体：只拉 status.url，diff 变化写入状态事件。"""
     def _run() -> dict[str, Any]:
         scan = scan_statuses(config, store=store)
-        # 顺带执行保留清理：状态快照与变化事件同口径只留配置的天数
+        # 顺带执行保留清理：状态快照与变化事件同一套规则只留配置的天数
         cutoff = time.time() - config.settings.retention_status_days * 86400
         purged = store.purge_status(cutoff)
         if purged["records"] or purged["events"]:
@@ -158,7 +158,7 @@ def ordered_monitor_models(monitor: list[str], catalog: dict[str, Any]) -> list[
 
     厂商顺序用目录里厂商首次出现的顺序（与前端下拉同一数据源）；厂商内发布日期
     倒序、同日期按名称，没日期的国内条目按目录插入序垫在该厂商后部，
-    目录外自定义模型垫底。写清单的三处（自动补、清理、名字归正）统一走它。
+    目录外自定义模型排在最后。写清单的三处（自动补、清理、名字归正）统一走它。
     """
     entries = catalog.get("models") if isinstance(catalog, dict) else None
     if not isinstance(entries, dict) or not entries:
@@ -180,7 +180,7 @@ def ordered_monitor_models(monitor: list[str], catalog: dict[str, Any]) -> list[
         found = by_model.get(name)
         entry = (found or (None, None))[1] or entries.get(model_key(name))
         if not isinstance(entry, dict):
-            return (1 << 30, 2, name)  # 目录外自定义模型垫底
+            return (1 << 30, 2, name)  # 目录外自定义模型排在最后
         vendor = str(entry.get("vendor") or "")
         released = str(entry.get("release_date") or "")
         released_at = _release_timestamp(released) if released else None
@@ -250,7 +250,7 @@ def prune_stale_monitor_models(store: Store, catalog: dict[str, Any], max_age_mo
 def _vendor_source_model_names(store: Store) -> set[str]:
     """厂商定价源（vendor_sources 文档）里出现过的模型名：海外与国内厂商官方定价页抓到的
     条目都算「官方认识的名字」。目录文档偶尔会因某厂商抓取失败整片缺失（下一轮自愈），
-    只看目录会把真模型当成孤儿误清，这里以原始定价源兜底。"""
+    只看目录会把真模型当成孤儿误清，这里以原始定价源后备。"""
     doc = store.get_document("vendor_sources") or {}
     sources = doc.get("sources") if isinstance(doc, dict) else None
     names: set[str] = set()
@@ -269,7 +269,7 @@ def prune_orphan_monitor_models(store: Store, catalog: dict[str, Any]) -> list[s
     """清理既不在官方目录、又没有任何站点在售的池内条目（历史粘贴残留、价目表装饰名）。
 
     这类名字永远匹配不上站点（如「mimo-v2.6-flashmimo-v2.5」「…（即将下线）」），官方
-    目录的老化与国内滚动规则都管不到（不认识的名字一律不动），不清就永久占池、虚增
+    目录的老化与国内滚动规则都管不到（不认识的名字一律不动），不清就永久占清单、虚增
     「没采到价」计数。连续 ORPHAN_GRACE_ROUNDS 轮零覆盖才移出：新加的名字、站方即将
     上架的名字都有宽限期，一旦有价（或进了官方目录/厂商定价源）计数清零重来。
 
@@ -373,7 +373,7 @@ def catalog_refresh_job(store: Store) -> Callable[[], dict[str, Any]]:
             fetch_timeout = float(monitor_config.settings.timeout)
             max_age_months = int(monitor_config.settings.monitor_model_max_age_months)
         except ValueError:
-            ai_config = None  # 配置缺失或非法：目录照常落盘，只是没有中文简介
+            ai_config = None  # 配置缺失或非法：目录照常写盘，只是没有中文简介
             fetch_timeout = PAGE_FETCH_TIMEOUT
             max_age_months = 12
         tasklog.emit("开始刷新厂商定价：抓取 models.dev 快照")
@@ -431,7 +431,7 @@ def catalog_refresh_job(store: Store) -> Callable[[], dict[str, Any]]:
         store.set_document("catalog_all", full)
         tasklog.emit(f"厂商定价已更新：官方目录 {len(output['models'])} 个模型")
         # 先归正历史遗留的坏名字（旧版自动补模型存过归一化键），再按标准名补最新模型；
-        # 清理在补模型之前跑：本轮刚补进来的新模型不会被同一轮的老化清理误伤
+        # 清理在补模型之前跑：本轮刚补进来的新模型不会被同一轮的过期清理误伤
         renamed = canonicalize_monitor_models(store, output)
         if renamed:
             tasklog.emit("监控清单名字按目录修正：" + "；".join(renamed))
@@ -520,11 +520,11 @@ def popularity_scan_job(config: MonitorConfig, store: Store, *, force: bool = Fa
 
 
 def discovery_refresh_job(store: Store) -> Callable[[], dict[str, Any]]:
-    """新站发现任务体：拉默认聚合源合并进候选池，只拿站点与简介，不探测（秒级）。"""
+    """新站发现任务体：拉默认聚合源合并进候选站列表，只拿站点与简介，不探测（秒级）。"""
     def _run() -> dict[str, Any]:
         tasklog.emit("开始刷新新站发现：拉取 zuiquanapi 源更新站点清单…")
         stats = asyncio.run(discover.refresh_pool())
-        tasklog.emit(f"新站发现完成：池子 {stats['pool']}（新增 {stats['pool_added']}）")
+        tasklog.emit(f"新站发现完成：清单 {stats['pool']}（新增 {stats['pool_added']}）")
         return stats
 
     return _run

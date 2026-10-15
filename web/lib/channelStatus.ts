@@ -20,7 +20,7 @@ interface ChannelStatus {
 }
 
 /** 单个检测点：状态 + 检测时间（秒级时间戳，站点未提供时间时缺省）+ 自报延迟（ms）；
- *  指标型站点（无状态词、用数值成功率表达健康度）附带自报成功率（%）与出字速度（TPS）。 */
+ *  指标型站点（无状态词、用数值成功率表达健康度）附带自报成功率（%）与输出速度（TPS）。 */
 export interface ChannelDot {
   status: string;
   ok: boolean;
@@ -42,15 +42,15 @@ export interface ChannelDotRow extends ChannelStatus {
   recentRates?: number[];
 }
 
-/** 点阵行名归一：去首尾空格、忽略大小写，用于与计价分组名/在售监测集匹配。 */
+/** 点阵行名归一：去首尾空格、忽略大小写，用于与计价分组名/在售模型与分组集合匹配。 */
 export const normalizeChannelName = (name: string) => name.trim().toLowerCase();
 
-/** 在售监测集：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」）。
- *  渠道状态展示的在售口径匹配依据：渠道行只有对得上在售模型/分组，才与本站访客有关。 */
+/** 在售模型与分组集合：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」）。
+ *  渠道状态展示的在售范围匹配依据：渠道行只有对得上在售模型/分组，才与本站访客有关。 */
 export type MonitoredSets = Record<string, Set<string>>;
 
 /** 从最新价格行构建各站监测集：模型名与计价分组名都收——分组级状态页对分组名、
- *  模型级状态页（perf-metrics 系）对模型名；归一口径与点阵行名一致（去空格、忽略大小写）。 */
+ *  模型级状态页（perf-metrics 系）对模型名；归一规则与点阵行名一致（去空格、忽略大小写）。 */
 export function buildMonitoredSets(
   records: { site_id: string; model: string; metadata?: { group?: string | null } }[],
 ): MonitoredSets {
@@ -63,9 +63,9 @@ export function buildMonitoredSets(
   return sets;
 }
 
-/** 渠道行在售口径过滤：只留渠道名对得上监测集的行；监测集缺失（站没采到价格）
+/** 渠道行在售范围过滤：只留渠道名对得上监测集的行；监测集缺失（站没采到价格）
  *  或一条都对不上（站点状态页的产品线与在售完全错开，如 1xm 只挂 claude 渠道而在售全是
- *  GPT/Gemini 分组）时原样返回——与后端 filter_status_groups 的防清空兜底同哲学，
+ *  GPT/Gemini 分组）时原样返回——与后端 filter_status_groups 的防清空回退同哲学，
  *  别把详情页滤成白板。 */
 export function filterRowsByMonitored(rows: ChannelDotRow[], monitored: Set<string> | undefined): ChannelDotRow[] {
   if (!monitored || monitored.size === 0) return rows;
@@ -74,7 +74,7 @@ export function filterRowsByMonitored(rows: ChannelDotRow[], monitored: Set<stri
 }
 
 
-/** 分桶保峰抽稀：把时间升序序列按时间跨度等分成 max 桶，每桶保留一个代表点——
+/** 分桶最差值降采样：把时间升序序列按时间跨度等分成 max 桶，每桶保留一个代表点——
  *  worse 返回桶内更"坏"的那个（可用率取最低、延迟取最高），平稳桶自然只剩普通点；
  *  始终保留序列最后一个点。短暂故障不会被均匀抽稀跳过，点数上限稳定可控。 */
 export function downsampleWorst<T extends { at: number }>(points: T[], max: number, worse: (a: T, b: T) => T): T[] {
@@ -113,7 +113,7 @@ function latestAt(cursor: DotCursor, at: number): ChannelDot | null {
   return dot && dot.at <= at ? dot : null;
 }
 
-/** 成功率窗口：取最近 15 次检测，与总览渠道点阵单行展示的列数一致。 */
+/** 成功率窗口：取最近 15 次检测，与总览检测点阵单行展示的列数一致。 */
 const RECENT_DOT_WINDOW = 15;
 
 /** 一组检测点的成功率：最近检测的正常占比（0–1）；无数据返回 null。 */
@@ -182,7 +182,7 @@ function isNonChatChannel(name: string): boolean {
 /** 历史序列键名：不作为独立渠道递归，而是并成所属渠道的检测点 */
 const TIMELINE_KEYS = new Set(["timeline", "history", "checks", "events", "logs", "log", "uptime"]);
 const TIME_KEYS = ["checked_at", "checkedAt", "checked", "timestamp", "detected_at", "time", "at", "ts"];
-// 上限只防异常膨胀，不再是展示裁剪：展示量由在售口径过滤（filterRowsByMonitored）收窄，
+// 上限只防异常膨胀，不再是展示裁剪：展示量由在售范围过滤（filterRowsByMonitored）收窄，
 // 截断发生在过滤之前会误丢监测中的渠道（1-cnmz 91 条曾被截到 64）
 const MAX_CHANNELS = 256;
 const MAX_DOTS = 720;
@@ -216,7 +216,7 @@ function parseTime(value: unknown): number | undefined {
   return undefined;
 }
 
-/** 依次取第一个有限数值，用于同义字段兜底（如 availability_7d → availability）。 */
+/** 依次取第一个有限数值，用于同义字段回退（如 availability_7d → availability）。 */
 function numberOr(...values: unknown[]): number | undefined {
   for (const value of values) {
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -253,7 +253,7 @@ function findLatency(obj: Record<string, unknown>): number | undefined {
   return undefined;
 }
 
-/** 指标型站点的同义字段取值：成功率（%）、出字速度（TPS）与最近几轮成功率序列。 */
+/** 指标型站点的同义字段取值：成功率（%）、输出速度（TPS）与最近几轮成功率序列。 */
 const SUCCESS_RATE_KEYS = ["success_rate", "successRate"];
 const ERROR_RATE_KEYS = ["error_rate", "errorRate"];
 const TPS_KEYS = ["avg_tps", "tps"];
@@ -326,7 +326,7 @@ export function cacheMetricText(dot: ChannelDot | undefined): string | null {
 }
 
 /** 指标型渠道成功率三档：≥95 正常、≥80 偏低、更低异常。
- *  与站点级聚合的 rateLevel（80/60）口径不同：单渠道的成功率门槛理应更严。 */
+ *  与站点级聚合的 rateLevel（80/60）标准不同：单渠道的成功率门槛理应更严。 */
 export function successRateLevel(rate: number): RateLevel {
   if (rate >= 95) return "ok";
   if (rate >= 80) return "warn";
@@ -447,8 +447,8 @@ function dedupeDots(dots: ChannelDot[]): ChannelDot[] {
 /**
  * 按站点把状态时序合并成「渠道 → 检测点序列」：渠道快照里自带时间线时直接采用
  * （逐分钟，密度高），否则每次采集记一个点；异常渠道排在前面。
- * 传入 monitored（在售监测集）时按站做在售口径过滤：渠道视图、可用率/延迟序列、
- * 时段桶全部只落在售模型/分组上，站级 KPI 随之变成「在售口径」。
+ * 传入 monitored（在售模型与分组集合）时按站做在售范围过滤：渠道视图、可用率/延迟序列、
+ * 时段分桶全部只落在售模型/分组上，站级 KPI 随之变成「在售范围」。
  */
 export function channelDotsBySite(
   records: { site_id: string; captured_at: number; data: unknown }[],
@@ -530,7 +530,7 @@ export type RateLevel = "ok" | "warn" | "down";
 
 /** 按当次正常渠道占比归档；阈值与趋势图分段着色、KPI 数字着色共用。 */
 export function rateLevel(pct: number): RateLevel {
-  // 多分组聚合口径：平均可用率 80% 以上算优秀，60% 是及格线
+  // 多分组聚合规则：平均可用率 80% 以上算优秀，60% 是及格线
   if (pct >= 80) return "ok";
   if (pct >= 60) return "warn";
   return "down";
@@ -596,7 +596,7 @@ export function latencyLevel(ms: number): RateLevel {
   return "ok";
 }
 
-/** 全量可用率序列（不抽稀）：数字类展示（时段桶均值）从这里算，避免保峰抽稀把均值压悲观。 */
+/** 全量可用率序列（不抽稀）：数字类展示（时段分桶均值）从这里算，避免最差值降采样把均值压悲观。 */
 function fullAvailabilityFromDots(bySite: Record<string, ChannelDotRow[]>): Record<string, AvailabilityPoint[]> {
   const result: Record<string, AvailabilityPoint[]> = {};
   for (const [site, rows] of Object.entries(bySite)) {
@@ -627,7 +627,7 @@ function fullAvailabilityFromDots(bySite: Record<string, ChannelDotRow[]>): Reco
   return result;
 }
 
-/** 保峰抽稀到 ~1440 点（画图口径）：短暂故障不会被抽丢；数字类展示不要用它，
+/** 最差值降采样到 ~1440 点（画图标准）：短暂故障不会被抽丢；数字类展示不要用它，
  *  「每格只留最差点」会把均值压悲观，数字请走 buildSiteViews 的 uptimeBuckets（全量分桶）。 */
 function downsampleAvailability(full: Record<string, AvailabilityPoint[]>): Record<string, AvailabilityPoint[]> {
   const result: Record<string, AvailabilityPoint[]> = {};
@@ -723,7 +723,7 @@ export function buildChannelModel(
   return { times, series };
 }
 
-/** 站点检测视图集合：渠道行、可用率/延迟序列与时段桶。渠道统计展示处的统一数据形态。 */
+/** 站点检测视图集合：渠道行、可用率/延迟序列与时段分桶。渠道统计展示处的统一数据形态。 */
 export interface SiteViews {
   channels: Record<string, ChannelDotRow[]>;
   availability: Record<string, AvailabilityPoint[]>;
@@ -748,7 +748,7 @@ export interface ChannelStat {
 
 /** 列表页渠道视图（后端 /api/status/views 产出）：解析在后端算好，前端只消费。
  *  channels 无 dots、无 latency——列表页不画点阵与延迟趋势，点阵仍由 /api/channel-dots 按需拉。
- *  与 SiteViews 同源同口径（同一份快照、同一套启发式），可用率/时段桶数字必然一致。 */
+ *  与 SiteViews 同源同一套规则（同一份快照、同一套启发式），可用率/时段分桶数字必然一致。 */
 export interface SiteStats {
   channels: Record<string, ChannelStat[]>;
   availability: Record<string, AvailabilityPoint[]>;
@@ -757,8 +757,8 @@ export interface SiteStats {
 
 /** 详情页视图集合：渠道行、可用率序列、延迟序列共享同一次 channelDotsBySite 全量走查，
  *  避免页面把同一批记录解析三遍。
- *  两个口径：availability 是保峰抽稀后的序列（画图用，毛刺不丢）；uptimeBuckets 用抽稀前的
- *  全量序列分桶（数字用）——保峰抽稀「每格只留最差点」会把均值压悲观，区块平均率必须看全量。 */
+ *  两个规则：availability 是最差值降采样后的序列（画图用，毛刺不丢）；uptimeBuckets 用抽稀前的
+ *  全量序列分桶（数字用）——最差值降采样「每格只留最差点」会把均值压悲观，区块平均率必须看全量。 */
 export function buildSiteViews(
   records: { site_id: string; captured_at: number; data: unknown }[],
   monitored?: MonitoredSets,

@@ -21,7 +21,7 @@ def number_or_none(value: Any) -> float | None:
 
 
 def price_digit_forms(value: float) -> set[str]:
-    """价格数字在证据文本里的可匹配书写形态（AI 抽取与定价页兜底两处证据闸共用）。
+    """价格数字在证据文本里的可匹配书写形态（AI 抽取与定价页回退两处证据闸共用）。
 
     字面形态：原值、%g、千分位（页面常写「¥1,400」而 AI 回 1400）、整数去尾零、
     JS 省略前导零的小数（.7）。

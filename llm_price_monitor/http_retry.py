@@ -1,16 +1,16 @@
-"""采集链路的传输层退避重试与直连优先代理兜底：对端服务器/线路间歇性掐断 TLS、
+"""采集链路的传输层退避重试与直连优先代理后备：对端服务器/线路间歇性掐断 TLS、
 连接重置、超时这类偶发抖动，一次失败不该丢掉整轮采集。
 
 只包采集用的 httpx.Client 构建入口（build_client），重试发生在 transport 层，
 价格/状态/公告三类采集与其适配器无感知。重试只对幂等的 GET/HEAD 生效：
-token 续签、AI 兜底等 POST 不盲重试，避免续签凭证被消费两次。
+token 续签、AI 回退等 POST 不盲重试，避免续签凭证被消费两次。
 
-兜底代理地址按优先级取一处：系统设置里的 settings.fallback_proxy（面板「采集出口」）
+备用代理地址按优先级取一处：系统设置里的 settings.fallback_proxy（面板「采集出口」）
 优先，其次标准代理环境变量（HTTPS_PROXY 等）；配了哪个语义都一样——采集始终「直连优先、
-被墙兜底」：直连失败（连接类错误或 403/451）的域名记入失败记忆（egress.py），
-TTL 内直接走代理，TTL 过期放行一次直连重探。直连腿统一压短建连超时（国内站
+被墙回退」：直连失败（连接类错误或 403/451）的域名记入失败记忆（egress.py），
+TTL 内直接走代理，TTL 过期放行一次直连重探。直连请求统一压短建连超时（国内站
 建连是亚秒级，8 秒还建不起来基本就是黑洞式被墙），发现直连不通不必耗满整个
-采集超时；直连能通的站点（国内站等）永远不碰代理，兜底代理出口被目标站拒收
+采集超时；直连能通的站点（国内站等）永远不碰代理，备用代理出口被目标站拒收
 也拖不垮直连。代理地址在构建 client 时捕获，面板改动从下一轮采集生效。
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _is_waf_block(response: httpx.Response) -> bool:
         return True
     return "html" in str(response.headers.get("content-type") or "").lower()
 
-# 直连腿的建连超时：建连是 TCP+TLS 握手，国内直连站亚秒级完成，8 秒起不来就是
+# 直连请求的建连超时：建连是 TCP+TLS 握手，国内直连站亚秒级完成，8 秒起不来就是
 # 黑洞式被墙（SYN 有去无回，等满 45s 超时也等不来结果），快速失败才能快速切代理；
 # 只压 connect，读超时保持请求原值，慢服务器不受影响
 DIRECT_CONNECT_TIMEOUT_SECONDS = 8.0
@@ -50,10 +50,10 @@ _NO_FALLBACK_ERRORS = (httpx.LocalProtocolError, httpx.PoolTimeout, httpx.Unsupp
 
 
 class _DirectConnectCapTransport(httpx.BaseTransport):
-    """直连腿的建连超时上限：给经过的请求压短 connect 超时，其余超时保持原值。
+    """直连请求的建连超时上限：给经过的请求压短 connect 超时，其余超时保持原值。
 
-    请求对象是各腿共享的，直连腿失败后还要交给代理腿复用，用完必须还原，
-    否则压短的 connect 会泄漏到代理腿，把代理本身建连慢的合法请求也掐死。
+    请求对象是各链路共享的，直连请求失败后还要交给代理链路复用，用完必须还原，
+    否则压短的 connect 会泄漏到代理链路，把代理链路本身建连慢的合法请求也掐死。
     """
 
     def __init__(self, wrapped: httpx.BaseTransport) -> None:
@@ -103,7 +103,7 @@ class RetryingTransport(httpx.BaseTransport):
 
 
 class FallbackTransport(httpx.BaseTransport):
-    """直连优先、代理兜底：仅对幂等的 GET/HEAD 生效（与重试同一原则，避免续签等
+    """直连优先、代理后备：仅对幂等的 GET/HEAD 生效（与重试同一原则，避免续签等
     POST 被消费两次）。直连整体失败（内层退避重试耗尽）或返回 403/451 时记入失败
     记忆并换备用代理重试一次；代理出口同样被 403/451 拉黑时，自动换到对该站可达的
     节点再试一次。记忆 TTL 内的请求直接走代理，过期后放行一次短连接超时的直连重探，
@@ -121,8 +121,8 @@ class FallbackTransport(httpx.BaseTransport):
         decision = egress.plan(host)
         if decision.use_proxy:
             return self._via_proxy(request, host)
-        # 直连腿自带建连超时上限（_DirectConnectCapTransport），用完自行还原请求，
-        # 失败残留不会泄漏到代理腿
+        # 直连请求自带建连超时上限（_DirectConnectCapTransport），用完自行还原请求，
+        # 失败残留不会泄漏到代理链路
         try:
             response = self._direct.handle_request(request)
         except httpx.TransportError as exc:
@@ -178,7 +178,7 @@ def build_client(
             follow_redirects=follow_redirects,
             transport=transport,
         )
-    # 面板备用代理优先、环境变量兜底：面板的「备用代理 + 节点自动切换」是同一条
+    # 面板备用代理优先、环境变量后备：面板的「备用代理 + 节点自动切换」是同一条
     # 出口链路的整体配置，环境变量只带得走代理地址、切换功能对它无从生效；
     # 两处都不配则纯直连。直连优先的语义与顺序无关，本机 shell 常驻代理时
     # 国内可直连站点不会被代理出口的抖动连累

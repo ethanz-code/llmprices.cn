@@ -1,4 +1,4 @@
-/** 模型清单下拉的目录口径排序：厂商分块（目录序）→ 厂商内发布倒序 → 名称，目录外垫底。 */
+/** 模型清单下拉的目录排序排序：厂商分块（目录序）→ 厂商内发布倒序 → 名称，目录外排最后。 */
 import { describe, expect, it } from "vitest";
 
 import { canonicalModel, catalogModelOrderIndex, modelOrderCompare } from "@/lib/modelOrder";
@@ -28,7 +28,7 @@ describe("catalogModelOrderIndex", () => {
 });
 
 describe("modelOrderCompare", () => {
-  it("厂商块按目录序，厂商内发布倒序，目录外垫底按名称", () => {
+  it("厂商块按目录序，厂商内发布倒序，目录外排在最后按名称", () => {
     const compare = modelOrderCompare(catalogModelOrderIndex(catalog));
     const ordered = [item("自定义-model"), item("glm-5"), item("glm-5.3"), item("GPT_5.5"), item("gpt-6")];
     expect([...ordered].sort((a, b) => compare(a, b)).map((x) => x.name)).toEqual([
@@ -40,7 +40,7 @@ describe("modelOrderCompare", () => {
     ]);
   });
 
-  it("没传索引时全部垫底，退化为纯名称序", () => {
+  it("没传索引时全部排最后，退化为纯名称序", () => {
     const compare = modelOrderCompare({});
     const ordered = [item("b"), item("a")];
     expect([...ordered].sort((a, b) => compare(a, b)).map((x) => x.name)).toEqual(["a", "b"]);

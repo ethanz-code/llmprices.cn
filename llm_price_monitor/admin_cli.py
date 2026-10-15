@@ -4,8 +4,8 @@
 
     uv run price-admin                        # 交互式：输入新密码并确认，重置管理员
     uv run price-admin --username ethan --password s3cret
-    uv run price-admin tidy-sites             # 把库内站点配置整理成当前结构（瘦身＋认证收口）
-    uv run price-admin prune-noop-events      # 预览：按当前指纹口径复判出"价格没变的变更"事件
+    uv run price-admin tidy-sites             # 把库内站点配置整理成当前结构（瘦身＋认证收敛）
+    uv run price-admin prune-noop-events      # 预览：按当前指纹规则复判出"价格没变的变更"事件
     uv run price-admin prune-noop-events --apply  # 确认预览无误后真正删除这些假事件
     uv run price-admin import-sites var/discovery/importable.json --take 30 --apply  # 批量导入（默认预览）
 """
@@ -54,7 +54,7 @@ def reset_admin(args: argparse.Namespace) -> None:
 
 
 def tidy_sites() -> None:
-    """把库内每个站点配置整理成当前结构：瘦身＋认证收口，有改动的直接写回。"""
+    """把库内每个站点配置整理成当前结构：瘦身＋认证收敛，有改动的直接写回。"""
     store = Store(DB_PATH)
     changed = 0
     for config in store.list_site_configs():
@@ -70,9 +70,9 @@ def tidy_sites() -> None:
 
 
 def prune_noop_events(store: Store, apply: bool) -> None:
-    """按当前指纹口径复判历史价格事件，找出"前后价格完全一致"的假变更事件。
+    """按当前指纹规则复判历史价格事件，找出"前后价格完全一致"的假变更事件。
 
-    指纹口径升级（如把 null 值键与键缺失归一）后，库里已落的假事件不会自愈，
+    指纹规则升级（如把 null 值键与键缺失归一）后，库里已落的假事件不会自愈，
     需要此命令复判清理。默认只预览，--apply 才真删——删事件属于不可逆操作。
     """
     from llm_price_monitor.report import fingerprint  # 指纹依赖采集侧模块，避免不带子命令时也拉起整条依赖链
@@ -85,9 +85,9 @@ def prune_noop_events(store: Store, apply: bool) -> None:
         if fingerprint(previous) == fingerprint(current):
             stale.append(event)
     if not stale:
-        print("没有需要清理的事件：所有变更事件的前后价格口径都确有差异。")
+        print("没有需要清理的事件：所有变更事件的前后价格标准都确有差异。")
         return
-    print(f"发现 {len(stale)} 条假变更事件（前后价格口径完全一致）：")
+    print(f"发现 {len(stale)} 条假变更事件（前后价格标准完全一致）：")
     for event in stale:
         detected = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(event.get("detected_at") or 0)))
         print(f"  #{event['id']} [{detected}] {event.get('site_id')} {event.get('model')} kind={event.get('kind')}")
@@ -137,8 +137,8 @@ def main() -> None:
     reset = sub.add_parser("reset-admin", help="重置管理员账号")
     reset.add_argument("--username", help="新用户名（默认保留现有用户名，无账号时默认 admin）")
     reset.add_argument("--password", help="新密码；省略时交互式输入并确认")
-    sub.add_parser("tidy-sites", help="把库内站点配置整理成当前结构（瘦身＋认证收口），改动直接写库")
-    prune = sub.add_parser("prune-noop-events", help="按当前指纹口径复判并清理'价格没变的变更'事件（默认预览）")
+    sub.add_parser("tidy-sites", help="把库内站点配置整理成当前结构（瘦身＋认证收敛），改动直接写库")
+    prune = sub.add_parser("prune-noop-events", help="按当前指纹规则复判并清理'价格没变的变更'事件（默认预览）")
     prune.add_argument("--apply", action="store_true", help="真正执行删除；省略时只预览")
     imp = sub.add_parser("import-sites", help="批量导入 price-discover 产出的站点配置（默认预览）")
     imp.add_argument("file", help="importable.json 路径（price-discover probe 生成）")

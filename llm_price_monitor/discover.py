@@ -69,7 +69,7 @@ def is_noise_host(host: str) -> bool:
 
 
 def normalize_host(host: str) -> str:
-    """域名比对口径：剥掉 www/api/console 等基础设施前缀后整体比较（cun.ai == www.cun.ai）。"""
+    """域名比对规则：剥掉 www/api/console 等基础设施前缀后整体比较（cun.ai == www.cun.ai）。"""
     labels = [label for label in host.lower().split(".") if label]
     while labels and labels[0] in INFRA_LABELS:
         labels = labels[1:]
@@ -92,7 +92,7 @@ def origin_of(url: str) -> str | None:
 
 
 def host_to_id(host: str, taken: set[str]) -> str:
-    """域名 → 站点 id：去掉基础设施前缀与末级 TLD，点连字改连字符，撞名追加序号。"""
+    """域名 → 站点 id：去掉基础设施前缀与末级 TLD，点连字改连字符，重名时追加序号号。"""
     labels = [label for label in urlsplit(f"https://{host}").hostname.split(".") if label]
     if len(labels) >= 3 and labels[0] in INFRA_LABELS:
         labels = labels[1:]
@@ -223,7 +223,7 @@ def sweep(engine: str, panel: str, query: str | None, size: int) -> list[Candida
 
 # ---------- 聚合源 ----------
 
-# raw.githubusercontent.com 国内直连经常超时，全部 jsDelivr 镜像优先、raw 兜底
+# raw.githubusercontent.com 国内直连经常超时，全部 jsDelivr 镜像优先、raw 回退
 AWESOME_README_URLS = (
     "https://cdn.jsdelivr.net/gh/daheiai/awesome-api-proxy@main/README.md",
     "https://raw.githubusercontent.com/daheiai/awesome-api-proxy/main/README.md",
@@ -326,7 +326,7 @@ def harvest_zuiquan(text: str) -> list[Candidate]:
     """解析 zuiquanapi.com（awesome-api-proxy 的在线版）。
 
     页面 RSC payload 里有结构化站点条目（name/url/description/tag），优先按结构解；
-    结构没命中的再用裸链接兜底，保证覆盖不缩水。
+    结构没命中的再用裸链接后备，保证覆盖不缩水。
     """
     out: list[Candidate] = []
     seen_urls: set[str] = set()
@@ -532,7 +532,7 @@ def classify_pricing(payload: object) -> tuple[int, bool]:
 
 
 async def probe_one(client: httpx.AsyncClient, cand: Candidate) -> dict:
-    """探测一个候选站。判「可用」的口径是站在线（公开接口响应正常）即可，
+    """探测一个候选站。判「可用」的规则是站在线（公开接口响应正常）即可，
     价格接口只是顺带探明：有没有、公开还是需登录、多少模型——供展示与导入参考，
     不作为筛站门槛（价格接口不可用可以走网页模式或 AI 提取采集）。"""
     result: dict = {
@@ -594,9 +594,9 @@ async def probe(candidates: list[Candidate], concurrency: int, timeout: float, p
 def build_importable(cands_by_host: dict[str, Candidate], probed: list[dict], exclude_hosts: set[str] | None = None) -> list[dict]:
     """探测通过的站点生成配置（默认停用，导入后在面板按批启用）。
 
-    「通过」的口径是站在线即可——价格接口不可用的站照样能导（网页模式/AI 提取兜底），
+    「通过」的规则是站在线即可——价格接口不可用的站照样能导（网页模式/AI 提取回退），
     排序时价格接口公开可用的排前面。exclude_hosts 是库内已有站点的归一化域名：
-    候选池可能收录了你手动加过的站，且池子按域名生成的 id 与手填 id 可能只差大小写，
+    候选站列表可能收录了你手动加过的站，且清单按域名生成的 id 与手填 id 可能只差大小写，
     导入前必须排除防重复。
     """
     excluded = {normalize_host(host) for host in (exclude_hosts or set())}
@@ -639,20 +639,20 @@ def existing_site_hosts() -> dict[str, str]:
 
 
 def _merge_into_pool(fresh: list[Candidate]) -> tuple[int, int]:
-    """把本轮结果与已有候选池增量合并并落盘，返回（合并后总数, 新增数）。"""
+    """把本轮结果与已有候选站列表增量合并并写盘，返回（合并后总数, 新增数）。"""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out_file = OUT_DIR / "candidates.json"
-    # 与已有候选池增量合并：某源拉挂只影响本轮新拉到的站，不会把上轮的站从池子里挤掉
+    # 与已有候选站列表增量合并：某源拉挂只影响本轮新拉到的站，不会把上轮的站从清单里挤掉
     previous: list[Candidate] = []
     if out_file.exists():
         try:
             for item in json.loads(out_file.read_text(encoding="utf-8"))["candidates"]:
                 cand = Candidate(**item)
-                origin = origin_of(cand.url)  # 顺带清洗：旧池里可能有带转义反斜杠的 host/url
+                origin = origin_of(cand.url)  # 顺带清洗：旧清单里可能有带转义反斜杠的 host/url
                 if origin is not None:
                     previous.append(Candidate(urlsplit(origin).hostname or cand.host, origin, cand.name, cand.sources, cand.note, cand.meta))
         except Exception as exc:
-            print(f"  已有 {out_file} 解析失败，按空池处理：{type(exc).__name__} {exc}")
+            print(f"  已有 {out_file} 解析失败，按空列表处理：{type(exc).__name__} {exc}")
     candidates = merge_candidates([fresh, previous])
     payload = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -683,11 +683,11 @@ def run_sweep(engine: str, panel: str, query: str | None, size: int) -> None:
     print(f"正在用 {engine} 搜 {panel} 实例（{query or PANEL_FINGERPRINTS[panel]}，取 {size} 条）…")
     candidates = sweep(engine, panel, query, size)
     total, added = _merge_into_pool(candidates)
-    print(f"引擎返回 {len(candidates)} 条有效站点，合并去重后池子 {total}（新增 {added}）→ {OUT_DIR / 'candidates.json'}；跑 probe 检测价格接口。")
+    print(f"引擎返回 {len(candidates)} 条有效站点，合并去重后清单 {total}（新增 {added}）→ {OUT_DIR / 'candidates.json'}；跑 probe 检测价格接口。")
 
 
 async def refresh_pool(proxy: str | None = None) -> dict:
-    """管理台「刷新发现」任务体：拉默认源（zuiquanapi）合并进候选池，只拿站点与简介，不探测。
+    """管理台「刷新发现」任务体：拉默认源（zuiquanapi）合并进候选站列表，只拿站点与简介，不探测。
 
     刷新的定位是「拿站点清单与简介」：秒级完成，定时跑零负担。探测（在线/价格接口可用性/
     模型数）是可选的富化，只走 CLI probe（--retry-failed 给失联站翻案），结果落 probed.json
@@ -753,7 +753,7 @@ async def run_probe(take: int, concurrency: int, timeout: float, proxy: str | No
         f"（其中价格接口公开可用 {len([r for r in online if r['pricing_ok']])}、需登录 {len(auth)}）"
         f"、失联/不可达 {len(probed) - len(online)}"
     )
-    # 重测模式下与上轮已通过的合并落盘，importable 始终基于全量结果生成
+    # 重测模式下与上轮已通过的合并写盘，importable 始终基于全量结果生成
     merged = list(stale_by_url.values()) + probed
     recovered = len([r for r in probed if r["online"]]) if retry_failed else 0
     if retry_failed:
@@ -761,7 +761,7 @@ async def run_probe(take: int, concurrency: int, timeout: float, proxy: str | No
 
     # --take 部分探测只预览：别拿 20 个站的结果覆盖全量 probed.json/importable.json
     if take > 0 and not retry_failed:
-        print(f"部分探测只预览，不落盘；全量结果文件原样保留（{OUT_DIR / 'probed.json'}）")
+        print(f"部分探测只预览，不写盘；全量结果文件原样保留（{OUT_DIR / 'probed.json'}）")
         for row in sorted(online, key=lambda r: -r["models"])[:10]:
             print(f"  {urlsplit(row['url']).hostname:32} new-api={row['new_api']} 模型数={row['models']}")
         return
@@ -779,12 +779,12 @@ async def run_probe(take: int, concurrency: int, timeout: float, proxy: str | No
 
 
 def run_diff() -> None:
-    """只比对不探测：候选池 vs 库内已有站点，看哪些收录重合、哪些是纯新增。"""
+    """只比对不探测：候选站列表 vs 库内已有站点，看哪些收录重合、哪些是纯新增。"""
     raw = json.loads((OUT_DIR / "candidates.json").read_text(encoding="utf-8"))
     pool_by_norm: dict[str, Candidate] = {normalize_host(cand.host): cand for cand in (Candidate(**item) for item in raw["candidates"])}
     in_library = existing_site_hosts()
     if not in_library:
-        print("库读不到或没有站点，只统计候选池。")
+        print("库读不到或没有站点，只统计候选站列表。")
     overlap = 0
     for norm_host, site_id in sorted(in_library.items(), key=lambda kv: kv[1]):
         cand = pool_by_norm.get(norm_host)
@@ -792,8 +792,8 @@ def run_diff() -> None:
             overlap += 1
             print(f"  已收录 {site_id:24} {cand.host:30} 来源：{'、'.join(cand.sources)}")
         else:
-            print(f"  不在池 {site_id:24} {norm_host:30}（聚合源没收录，仅你手动加的）")
-    print(f"候选池 {len(pool_by_norm)} 站：库内已有 {len(in_library)} 站中重合 {overlap} 个，纯新增候选 {len(pool_by_norm) - overlap} 个（只发现未探测，跑 probe 才会检测）。")
+            print(f"  不在候选站列表 {site_id:24} {norm_host:30}（聚合源没收录，仅你手动加的）")
+    print(f"候选站列表 {len(pool_by_norm)} 站：库内已有 {len(in_library)} 站中重合 {overlap} 个，纯新增候选 {len(pool_by_norm) - overlap} 个（只发现未探测，跑 probe 才会检测）。")
 
 
 def main() -> None:
@@ -808,7 +808,7 @@ def main() -> None:
     p_probe.add_argument("--timeout", type=float, default=10.0)
     p_probe.add_argument("--proxy", help="可选代理，http://127.0.0.1:7890 或 auto=自动探测本机常见代理端口")
     p_probe.add_argument("--retry-failed", action="store_true", help="只重测上轮未通过的站（配 --proxy auto 给被墙站翻案）")
-    sub.add_parser("diff", help="只比对不探测：候选池里哪些站库里已有、哪些是新增")
+    sub.add_parser("diff", help="只比对不探测：候选站列表里哪些站库里已有、哪些是新增")
     sw = sub.add_parser("sweep", help="网络空间测绘检索面板实例（不依赖收录名单，需引擎 API key 环境变量）")
     sw.add_argument("--engine", default="fofa", choices=sorted(ENGINE_KEYS), help="测绘引擎（key 从环境变量读）")
     sw.add_argument("--panel", default="new-api", choices=sorted(PANEL_FINGERPRINTS), help="面板指纹")

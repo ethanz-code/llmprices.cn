@@ -19,7 +19,7 @@ class StatusStoreMixin(StoreBase):
     # ---------- 渠道状态时序与变化事件 ----------
 
     def purge_status(self, before_ts: float) -> dict[str, int]:
-        """过期状态数据清理：快照与变化事件同口径按保留天数淘汰（事件原先永不清理，会无限累积）。"""
+        """过期状态数据清理：快照与变化事件同一套规则按保留天数淘汰（事件原先永不清理，会无限累积）。"""
         with self._conn() as conn:
             records = conn.execute("DELETE FROM status_records WHERE captured_at < ?", (before_ts,))
             events = conn.execute("DELETE FROM status_events WHERE detected_at < ?", (before_ts,))
@@ -100,7 +100,7 @@ class StatusStoreMixin(StoreBase):
         return stats
 
     def prune_status_history(self, site_id: str, groups: list[str]) -> dict[str, int]:
-        """按分组过滤口径清理该站点已入库的状态历史：快照与参照快照里未选中分组的渠道条目
+        """按分组过滤标准清理该站点已入库的状态历史：快照与参照快照里未选中分组的渠道条目
         直接裁掉；状态事件里指向已裁剪渠道的变化逐条剔除，剔完无变化的整条删除。
         供保存站点分组过滤配置时调用，幂等；返回清理统计。"""
         stats = {"records": 0, "ref": 0, "events": 0, "events_removed": 0}
@@ -193,7 +193,7 @@ class StatusStoreMixin(StoreBase):
             ).fetchall()
         if max_records is not None and len(rows) > max_records:
             max_records = max(1, min(max_records, _store_pkg._MAX_ROW_LIMIT))
-            # 与 _read_rows 同口径按 id 取模均匀抽样（stride 由行数推出，保留分布形状）；
+            # 与 _read_rows 同一套规则按 id 取模均匀抽样（stride 由行数推出，保留分布形状）；
             # 每站最新一条无条件保留——首页/详情页的「最新时段」直接消费它，不能被抽走
             stride = -(-len(rows) // max_records)
             keep: dict[int, Any] = {row["id"]: row for row in rows if row["id"] % stride == 0}

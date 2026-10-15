@@ -32,7 +32,7 @@ def build_router(store: Store) -> APIRouter:
         sort: str | None = None,
         dir: str = "ascend",
     ) -> dict[str, Any]:
-        """模型榜单单页读取：q 搜索（模型/厂商/slug，与前端同口径）、sort/dir 排序、limit/offset 分页。
+        """模型榜单单页读取：q 搜索（模型/厂商/slug，与前端同一套规则）、sort/dir 排序、limit/offset 分页。
 
         total 为全量条数（页面摘要用），filtered_total 为 q 过滤后的条数（分页器用）。"""
         doc = store.get_document("rankings")

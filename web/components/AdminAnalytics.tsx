@@ -165,7 +165,7 @@ export function AdminAnalytics() {
   const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
 
-  // 汇总口径是近 30 天全量，与下方明细页码无关，只在进入页面（与清空后）取
+  // 汇总范围是近 30 天全量，与下方明细页码无关，只在进入页面（与清空后）取
   const loadSummary = useCallback(async () => {
     try {
       setSummary(await apiSend<AnalyticsSummary>("/api/analytics/summary", "GET"));

@@ -1,6 +1,6 @@
 "use client";
 
-/** AI 请求日志：上方为调用统计（一行轻量数字 + 按天趋势/分布图表 + 用量推演 Popover，口径为全部保留记录），
+/** AI 请求日志：上方为调用统计（一行轻量数字 + 按天趋势/分布图表 + 用量推演 Popover，范围为全部保留记录），
  *  下方为明细表（场景/模型/耗时/token 用量/错误），一次拉全量由表格本地分页，详情按需取摘要全文。 */
 
 import { useEffect, useState, type ReactNode } from "react";
@@ -333,7 +333,7 @@ export function AdminAiLogs() {
     setPage(1);
   }
 
-  // 统计口径固定为全部保留记录，不随下方筛选联动，只在进入页面时取一次
+  // 统计规则固定为全部保留记录，不随下方筛选联动，只在进入页面时取一次
   useEffect(() => {
     let alive = true;
     apiSend<AiLogSummary>("/api/ai-logs/summary", "GET")
@@ -479,7 +479,7 @@ export function AdminAiLogs() {
             ))}
           </div>
           <p style={{ color: "var(--text-3)", fontSize: 12, margin: 0 }}>
-            统计口径：保留期内每次请求尝试各记一条，成功率 = 成功尝试 ÷ 有效尝试。报错后自动换模型、换参数的尝试计入失败，误判的报错组可在「报错判定」里关掉；连接抖动（超时、SSL 断开）不算失败也不进分母；模型池全部报错记一条「整次失败」。
+            统计规则：保留期内每次请求尝试各记一条，成功率 = 成功尝试 ÷ 有效尝试。报错后自动换模型、换参数的尝试计入失败，误判的报错组可在「报错判定」里关掉；连接抖动（超时、SSL 断开）不算失败也不进分母；监控模型清单全部报错记一条「整次失败」。
           </p>
           <div className="panel" style={{ padding: "16px 20px 18px", display: "grid", gap: 28, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
             <div>

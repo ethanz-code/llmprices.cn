@@ -312,7 +312,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     }},
     {"type": "function", "function": {
         "name": "get_official_prices",
-        "description": "查询模型的原厂官方定价（厂商目录基准价），美元/人民币双口径，含缓存价与长上下文分档价。用户问“原厂价/官方价”或要对比站点价与原厂价时用它。",
+        "description": "查询模型的原厂官方定价（厂商目录基准价），美元/人民币双标准，含缓存价与长上下文分档价。用户问“原厂价/官方价”或要对比站点价与原厂价时用它。",
         "parameters": {"type": "object", "properties": {
             "model": {"type": "string", "description": "模型名的一部分，如 glm-5"},
             "vendor": {"type": "string", "description": "厂商名的一部分，如 Zhipu"},
@@ -578,7 +578,7 @@ def _general_events(config: Any, question: str, turns: list[HistoryTurn]) -> Ite
         if event["type"] == "delta":
             parts.append(event["text"])
             yield ("delta", event["text"])
-    # 与 data 路径同口径：空回答按 AI 失败处理（502/错误帧），不产出 answer 也不扣配额
+    # 与 data 路径同一套规则：空回答按 AI 失败处理（502/错误帧），不产出 answer 也不扣配额
     answer = "".join(parts)
     if not answer.strip():
         raise AIExtractionError("AI 返回了空回答")

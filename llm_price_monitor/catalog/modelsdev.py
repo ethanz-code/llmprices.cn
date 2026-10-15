@@ -27,7 +27,7 @@ from ..http_retry import build_client
 
 MODELSDEV_API_URL = "https://models.dev/api.json"
 
-# 厂商显示顺序（与前端厂商清单一致）由元组顺序决定；region 标注条目口径，
+# 厂商显示顺序（与前端厂商清单一致）由元组顺序决定；region 标注条目标准，
 # 白名单只收国际站条目（global）：models.dev 的国内站条目不进目录，国内基准
 # 由「厂商定价源」抓官方定价页后合并覆盖，原国际价退居 list_global 参考价
 # （同行双价）。deepseek 无国际站条目，配国内定价源前官方目录暂缺该厂商。
@@ -44,7 +44,7 @@ DEFAULT_PROVIDERS: tuple[tuple[str, str, str], ...] = (
 
 # 国内渠道 id 清单（与 vendor_sources.DOMESTIC_BRANDS 的 cn_provider_ids 人工
 # 对齐，models.dev 很多国内平台渠道没有 -cn 后缀）：models.dev 的国内价格不进
-# 系统，全量渠道目录靠这份清单整体剔除国内渠道；-cn 后缀兜底快照未来新增的
+# 系统，全量渠道目录靠这份清单整体剔除国内渠道；-cn 后缀回退快照未来新增的
 # 国内站渠道。
 DOMESTIC_PROVIDER_IDS: frozenset[str] = frozenset({
     "deepseek", "moonshotai-cn",
@@ -58,7 +58,7 @@ DOMESTIC_PROVIDER_IDS: frozenset[str] = frozenset({
 
 
 def _is_domestic_provider(provider_id: str) -> bool:
-    """models.dev 渠道 id 是否国内口径：精确清单命中或 -cn 后缀。"""
+    """models.dev 渠道 id 是否国内标准：精确清单命中或 -cn 后缀。"""
     return provider_id.endswith("-cn") or provider_id in DOMESTIC_PROVIDER_IDS
 
 
@@ -118,7 +118,7 @@ def _entry(
     """models.dev 模型条目 → 目录条目（价格统一 USD，人民币按快照汇率换算）。
 
     长上下文分档（list_tiers）与音频价（list_audio）上游仅部分模型带：基础档
-    照常入库，分档/音频缺失时对应字段为 null，与 cache 字段同口径。
+    照常入库，分档/音频缺失时对应字段为 null，与 cache 字段同一套规则。
     """
     cost = model.get("cost") or {}
     input_price, output_price = cost.get("input"), cost.get("output")
@@ -222,7 +222,7 @@ def fetch_catalogs(
                     continue
                 existing = official.get(key)
                 if existing is not None:
-                    # 白名单渠道已全部是国际站口径，同名条目按厂商块顺序先到先得；
+                    # 白名单渠道已全部是国际站标准，同名条目按厂商块顺序先到先得；
                     # 国内价覆盖（含 list_global 参考价回填）在厂商定价源合并时做
                     continue
                 official[key] = _entry(str(model_id), model, vendor, region, rate, source_url)
@@ -270,6 +270,6 @@ def fetch_catalog(
     *,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """拉取 models.dev api.json 并映射为官方价目录 dict；不落盘，持久化由调用方决定。"""
+    """拉取 models.dev api.json 并映射为官方价目录 dict；不写盘，持久化由调用方决定。"""
     official, _ = fetch_catalogs(transport=transport)
     return official

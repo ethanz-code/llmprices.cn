@@ -1,6 +1,6 @@
 /** 花费计算：单价（每 100 万 token）× 用量 → 各档小计与总价。
  *  与 React 无关的纯函数：便于单测，也供 URL 编解码复用。文案不在此文件，统一放 copy.ts。
- *  用量口径：一个总用量 + 两个拆分假设（输出占比、缓存命中率），拆分规则见 calcCost。 */
+ *  用量结构：一个总用量 + 两个拆分假设（输出占比、缓存命中率），拆分规则见 calcCost。 */
 export type PriceKey = "input" | "output" | "cacheRead" | "cacheWrite";
 
 export type CalcPrices = Record<PriceKey, number | null>;
@@ -24,7 +24,7 @@ export interface CalcResult {
 
 export const PRICE_KEYS: PriceKey[] = ["input", "output", "cacheRead", "cacheWrite"];
 
-/** 单价口径：目录与站点价统一按每 100 万 token 标价。 */
+/** 单价规则：目录与站点价统一按每 100 万 token 标价。 */
 const TOKENS_PER_UNIT = 1_000_000;
 
 /** 缓存命中率默认 96%：反复带同一段前缀的调用（多轮对话、agent）实测命中率就在 96–97%
@@ -40,7 +40,7 @@ export const DEFAULT_TOTAL_TOKENS: number = TOKEN_PRESET_VALUES[1];
  *  用法（输出常占 10–40%）把命中率改 0、这个数往上调到 20 上下更贴近账单。 */
 export const DEFAULT_OUTPUT_SHARE = 2;
 
-/** 用量口径：一个总量（快捷档位）+ 两个拆分假设（缓存命中率、输出占比），不按计费档分别填。 */
+/** 用量结构：一个总量（快捷档位）+ 两个拆分假设（缓存命中率、输出占比），不按计费档分别填。 */
 export interface CalcUsage {
   total: number | null;
   hitRate: number | null;

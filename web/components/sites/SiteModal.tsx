@@ -209,7 +209,7 @@ function applyRefreshResult(base: SiteConfig, result: RefreshTestResult): SiteCo
   };
 }
 
-/** 认证统一收口后，各接口 headers 里写死的 Authorization 全部移除：
+/** 认证统一收敛后，各接口 headers 里写死的 Authorization 全部移除：
  *  认证只走站点级 auth_token 一处（价格/状态/公告自动带上），避免哪个接口残留旧 token 把请求头盖回旧值。 */
 function stripHardcodedAuth(base: SiteConfig): { config: SiteConfig; removed: boolean } {
   let removed = false;
@@ -586,7 +586,7 @@ function SiteModal({
         setAuthToken(rotation.access_token);
         syncAdvanced((base) => ({ ...base, auth_token: rotation.access_token }));
       }
-      // 服务端已按新 token 落库，草稿跟着同步，下次保存才不会又写回旧值
+      // 服务端已按新 token 写库，草稿跟着同步，下次保存才不会又写回旧值
       if (rotatedRefresh || rotatedAccess) toast("测试换新的 token 已接住，保存站点后生效");
     }
     setActiveSub(null);
@@ -777,7 +777,7 @@ function SiteModal({
     if (rotation) syncAdvanced((base) => applyRefreshResult(base, rotation));
     // Access Token 落在站点级 auth_token 上，凭证注入规则决定它怎么带进三处采集请求
     syncAdvanced((base) => ({ ...base, auth_token: fields.authToken.trim() || null, auth_inject: injectRules(fields.inject) }));
-    // 认证统一收口：刚换新过 token，各接口里手写的 Authorization 就没有存在意义了，
+    // 认证统一收敛：刚换新过 token，各接口里手写的 Authorization 就没有存在意义了，
     // 移除后认证只走站点级一处；留着的话旧值会覆盖站点令牌，换新也追不上
     if (rotation) {
       let removed = false;

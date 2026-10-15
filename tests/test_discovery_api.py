@@ -1,4 +1,4 @@
-"""站点发现接口：/api/discovery 直接下发候选池（站点、简介与监测源监控指标），
+"""站点发现接口：/api/discovery 直接下发候选站列表（站点、简介与监测源监控指标），
 监控判离线的站忽略；管理操作（刷新任务、勾选导入）走 POST。"""
 import json
 from pathlib import Path
@@ -135,10 +135,10 @@ def test_discovery_ignore_marks_sink_and_unmarks(workspace: Path, monkeypatch):
     # 默认视图里看不到被忽略的站
     assert [row["host"] for row in client.get("/api/discovery").json()["stations"]] == ["plain.example.com"]
 
-    # 候选池里不存在的域名进 unknown，不误入标记清单
+    # 候选站列表里不存在的域名进 unknown，不误入标记清单
     resp = client.post("/api/discovery/ignore", json={"hosts": ["ghost.example.io"], "ignored": True})
     assert resp.json()["unknown"] == ["ghost.example.io"]
-    # ghost 不在候选池进 unknown；meh 的忽略不受影响
+    # ghost 不在候选站列表进 unknown；meh 的忽略不受影响
     assert client.get("/api/discovery").json()["summary"]["ignored"] == 1
 
 

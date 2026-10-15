@@ -1,5 +1,5 @@
-/** 花费计算口径单测：用量拆分（输出占比 × 缓存命中率 → 四档 token）、缓存档缺价时的回落、
- *  没填价的档不进总价、默认口径（会话式：输出 2% / 命中率 96%）、单价文本收敛、URL 编解码往返。 */
+/** 花费计算规则单测：用量拆分（输出占比 × 缓存命中率 → 四档 token）、缓存档缺价时的回落、
+ *  没填价的档不进总价、默认规则（会话式：输出 2% / 命中率 96%）、单价文本收敛、URL 编解码往返。 */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -27,10 +27,10 @@ function lineOf(result: ReturnType<typeof calcCost>, key: string) {
 
 const TOTAL = 100_000_000; // 1 亿
 
-/** 一条显式的重缓存口径：1 亿总量、命中率 96%、输出占比 0.4%（旧默认那套，用来钉住拆分公式）。 */
+/** 一条显式的重缓存规则：1 亿总量、命中率 96%、输出占比 0.4%（旧默认那套，用来钉住拆分公式）。 */
 const USAGE = { total: TOTAL, hitRate: 96, outputShare: 0.4 };
 
-describe("默认口径", () => {
+describe("默认规则", () => {
   it("按「反复带同一段前缀的会话式用法」给：输出 2%、命中率 96%", () => {
     expect(DEFAULT_OUTPUT_SHARE).toBe(2);
     expect(DEFAULT_HIT_RATE).toBe(96);
@@ -43,12 +43,12 @@ describe("默认口径", () => {
     expect(byDefault.total).toBeCloseTo(byExplicit.total, 6);
   });
 
-  it("完全没走缓存（命中率 0 / 输出 20）比默认口径贵近一个量级", () => {
+  it("完全没走缓存（命中率 0 / 输出 20）比默认规则贵近一个量级", () => {
     // 输入 1 / 输出 10 / 缓存读 0.1（元每百万 token），站点没报缓存写入价
     const prices: CalcPrices = { input: 1, output: 10, cacheRead: 0.1, cacheWrite: null };
     const byDefault = calcCost(prices, { total: TOTAL, hitRate: null, outputShare: null });
     const noCache = calcCost(prices, { total: TOTAL, hitRate: 0, outputShare: 20 });
-    // 默认口径：9800 万输入池里 9408 万走 0.1 的读价、剩下 392 万按输入价，输出 200 万
+    // 默认规则：9800 万输入池里 9408 万走 0.1 的读价、剩下 392 万按输入价，输出 200 万
     expect(byDefault.total).toBeCloseTo(9.408 + 3.92 + 20, 4);
     // 全按输入/输出价：8000 万输入 × 1 + 2000 万输出 × 10 = 280
     expect(noCache.total).toBeCloseTo(280, 4);

@@ -20,11 +20,11 @@ cookie 型站点（如 new-api）写成 "new_api_refresh=${refresh_token}" 即�
 触发时机：价格采集按"需认证占位记录"判定，渠道状态与公告按接口返回 401/403 判定，
 三者都用新 access_token 重试一次；access_token 落到站点级 auth_token，
 价格/状态/公告的请求头因此统一带上 Authorization。
-此外 token 是 JWT 且配了续签的站点会主动续签（ensure_fresh_token，三条采集腿每站开抓前调用）：
-轮换型 refresh_token 放着不用会被站方作废或被并发腿抢用，等 401 再续对 24h 短效 token
+此外 token 是 JWT 且配了续签的站点会主动续签（ensure_fresh_token，三条采集链路各自在每站开抓前调用）：
+轮换型 refresh_token 放着不用会被站方作废或被并发链路抢用，等 401 再续对 24h 短效 token
 意味着一天死一次。触发条件是"闲置满 REFRESH_IDLE_CAP_SECONDS"或"剩余寿命不足总寿命 1/6"，
 取先到者；闲置上限防的是机器休眠整段吞掉到期前窗口、醒来时 refresh_token 已超龄
-（2026-10-13 totokens/2btocken 实锤：睡 10 小时，醒来再续已闲置约 22 小时被站方判死）。
+（2026-10-13 totokens/2btocken 实证：睡 10 小时，醒来再续已闲置约 22 小时被站方判死）。
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from llm_price_monitor.tracker import PriceRecord
 T = TypeVar("T")
 
 # 主动续签的闲置上限：轮换型 rt_ 闲置约一天即被站方作废（实测闲置 20 小时可续、约 22 小时已拒）。
-# "到期前 1/6"的提前量一旦整段落在机器休眠期就会被跳过（2026-10-13 totokens/2btocken 实锤），
+# "到期前 1/6"的提前量一旦整段落在机器休眠期就会被跳过（2026-10-13 totokens/2btocken 实证），
 # 所以只要 token 用满 6 小时就先换新：即使机器连睡 10 余小时，醒来第一轮扫描补续时
 # 闲置也只有 16 小时上下，仍远小于 rt_ 约 22 小时的寿命。24h token 约每 6 小时换一次。
 REFRESH_IDLE_CAP_SECONDS = 6 * 3600.0
@@ -51,8 +51,8 @@ REFRESH_IDLE_CAP_SECONDS = 6 * 3600.0
 def refresh_due(auth_token: str | None, *, now: float | None = None) -> bool:
     """access_token 是否该主动续签：闲置满 6 小时（保链）或剩余寿命不足总寿命 1/6，取先到者。
 
-    24h token 由闲置上限主导（约每 6 小时换一次），提前量兜底；15 分钟 token 由 1/6 条主导
-    （提前 2.5 分钟），节奏不变；赶不上的由 401 后的被动续签兜底。非 JWT（无法判断过期时间）不主动续。
+    24h token 由闲置上限主导（约每 6 小时换一次），提前量后备；15 分钟 token 由 1/6 条主导
+    （提前 2.5 分钟），节奏不变；赶不上的由 401 后的被动续签后备。非 JWT（无法判断过期时间）不主动续。
     """
     token = str(auth_token or "")
     exp = jwt_claim(token, "exp")
@@ -71,7 +71,7 @@ def refresh_due(auth_token: str | None, *, now: float | None = None) -> bool:
 
 
 def _stored_tokens(store: Any, site_id: str) -> tuple[str, str] | None:
-    """读库里的 (access_token, refresh_token)；库里的 access 与 spec 持有的不同说明别的腿刚续签过。"""
+    """读库里的 (access_token, refresh_token)；库里的 access 与 spec 持有的不同说明别的链路刚续签过。"""
     config = store.get_site_config(site_id)
     if not isinstance(config, dict):
         return None
@@ -81,21 +81,21 @@ def _stored_tokens(store: Any, site_id: str) -> tuple[str, str] | None:
 
 
 # 站方响应里"凭据已作废、换再多也不会好"的判别词（大小写不敏感）。命中即触发熔断：
-# 这类失效不是时序问题，继续每轮打续签接口只会反复撞墙（且部分站方会把反复使用已作废
-# 凭据判为滥用，连带吊销整个会话家族），必须等人工重新登录接管。
+# 这类失效不是时序问题，继续每轮打续签接口只会反复失败（且部分站方会把反复使用已作废
+# 凭据判为滥用，连带吊销整个会话家族），必须等人工重新登录接入。
 REFRESH_DEAD_MARKERS = (
     "refresh_token_invalid",
     "invalid refresh token",
     "token revoked",
     "session_binding_mismatch",
 )
-# 熔断标记落库用的键：token_refresh.dead_since 有值 = 链已判死，采集侧跳过续签。
-# 重新接管（更新 refresh_token / 重建 token_refresh）时管理台保存会换掉该对象，标记自然清除。
+# 熔断标记写库用的键：token_refresh.dead_since 有值 = 链已判死，采集侧跳过续签。
+# 重新登录接入（更新 refresh_token / 重建 token_refresh）时管理台保存会换掉该对象，标记自然清除。
 REFRESH_DEAD_FIELD = "dead_since"
 
 
 class RefreshTokenRevokedError(PriceMonitorError):
-    """refresh_token 已被站方作废（REFRESH_TOKEN_INVALID 类）：续签无法自愈，必须人工重新接管。"""
+    """refresh_token 已被站方作废（REFRESH_TOKEN_INVALID 类）：续签无法自愈，必须人工重新登录接入。"""
 
 
 def _revoked_detail(response: httpx.Response) -> str:
@@ -112,12 +112,12 @@ def _revoked_detail(response: httpx.Response) -> str:
 
 
 def refresh_chain_dead(token_refresh: dict[str, Any] | None) -> bool:
-    """续签链是否已被熔断：dead_since 有值即死，等重新接管。"""
+    """续签流程是否已被熔断：dead_since 有值即死，等重新登录接入。"""
     return bool(token_refresh and token_refresh.get(REFRESH_DEAD_FIELD))
 
 
 def _mark_refresh_dead(store: Any, site_id: str, reason: str) -> None:
-    """把"续签链已死"写进站点配置：后续所有采集腿看到标记直接跳过续签，不再锤站方接口。"""
+    """把"续签流程已死"写进站点配置：后续所有采集链路看到标记直接跳过续签，不再请求站方接口。"""
     if store is None:
         return
     config = store.get_site_config(site_id)
@@ -162,8 +162,8 @@ def ensure_fresh_token(
     """每站采集开抓前的主动续签：token 快到期就先换新，别等 401。
 
     返回可直接用于本轮采集的 spec（未到期/没配续签时原样返回）。续签失败不在这里报错——
-    若是真失效，随后的采集会撞 401 并走被动续签链路给出用户可见的失败；若只是撞上并发
-    （别的采集腿刚续签过），直接采用库里已回写的新 token，本轮照常采，不刷瞬时错误。
+    若是真失效，随后的采集会遇到 401 并走被动续签给出用户可见的失败；若只是遇到并发
+    （别的采集链路刚续签过），直接采用库里已回写的新 token，本轮照常采，不刷瞬时错误。
     """
     if not spec.token_refresh or not str(spec.token_refresh.get("refresh_token") or "").strip():
         return spec
@@ -175,19 +175,19 @@ def ensure_fresh_token(
     try:
         access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
     except RefreshTokenRevokedError as exc:
-        # 凭据被站方作废（REFRESH_TOKEN_INVALID 类）：熔断落库，别让每轮×每腿继续锤站方接口。
-        # 库里若已有别的腿换上的新 rt_（spec 是旧快照），说明链其实活着，静默采用即可。
+        # 凭据被站方作废（REFRESH_TOKEN_INVALID 类）：熔断写库，别让每轮×每条链路继续请求站方接口。
+        # 库里若已有别的链路换上的新 rt_（spec 是旧快照），说明链其实活着，静默采用即可。
         newer = _stored_tokens(store, spec.id) if store is not None else None
         if newer and newer[1] and newer[1] != str(spec.token_refresh.get("refresh_token") or ""):
-            _emit(f"[{spec.id}] 主动续签撞上并发，采用库里的新 token")
+            _emit(f"[{spec.id}] 主动续签遇到并发，采用库里的新 token")
             return refreshed_spec(spec, *newer)
         _mark_refresh_dead(store, spec.id, str(exc))
-        _emit(f"[{spec.id}] 续签链已熔断：{exc}", "error")
+        _emit(f"[{spec.id}] 续签流程已熔断：{exc}", "error")
         return spec
     except (PriceMonitorError, httpx.HTTPError, ValueError):
         newer = _stored_tokens(store, spec.id) if store is not None else None
         if newer and newer[0] and newer[0] != str(spec.auth_token or ""):
-            _emit(f"[{spec.id}] 主动续签撞上并发，采用库里的新 token")
+            _emit(f"[{spec.id}] 主动续签遇到并发，采用库里的新 token")
             return refreshed_spec(spec, *newer)
         return spec
     if store is not None:
@@ -253,12 +253,12 @@ def refresh_site_token(spec: SiteSpec, client: httpx.Client, timeout: float, use
             raise RefreshTokenRevokedError(
                 f"续签接口返回 HTTP {response.status_code}：会话指纹失配"
                 f"（{detail}）——站方校验登录出口 IP 与请求出口一致，采集出口漂移即失配且连带吊销会话；"
-                f"请重新登录接管，并保持采集出口与登录时同一节点（force_proxy + 固定 Clash 节点）"
+                f"请重新登录接入，并保持采集出口与登录时同一节点（force_proxy + 固定 Clash 节点）"
             )
         if _is_refresh_dead_response(response):
             raise RefreshTokenRevokedError(
                 f"续签接口返回 HTTP {response.status_code}：refresh_token 已被站方作废"
-                f"（{detail}），续签无法自愈，需重新登录接管"
+                f"（{detail}），续签无法自愈，需重新登录接入"
             )
         raise PriceMonitorError(f"续签接口返回 HTTP {response.status_code}，refresh_token 可能已失效")
     response.raise_for_status()
@@ -361,13 +361,13 @@ def refresh_and_retry_once(
     """接口返回 401/403 时用续签换来的新 token 重试一次，供渠道状态/公告采集使用。
 
     与 refresh_and_recollect 的分工：那条链路按"需认证占位记录"判定并整体替换本轮价格；
-    这条只在真正撞上 auth 失败时才换新。返回 (结果, 错误说明)，两者恰好有一个为 None——
+    这条只在真正遇到 auth 失败时才换新。返回 (结果, 错误说明)，两者恰好有一个为 None——
     attempt 返回 None 是合法结果（公告接口不存在），调用方以错误说明区分成功与失败。
     """
     try:
         access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
     except RefreshTokenRevokedError as exc:
-        # 被动作废：熔断落库 + 并发护栏（别的腿可能刚续签成功、库里的 rt_ 已换新）。
+        # 被动作废：熔断写库 + 并发护栏（别的链路可能刚续签成功、库里的 rt_ 已换新）。
         newer = _stored_tokens(store, spec.id) if store is not None else None
         if newer and newer[1] and newer[1] != str(spec.token_refresh.get("refresh_token") or ""):
             try:
@@ -409,7 +409,7 @@ def refresh_and_recollect(
     try:
         access_token, refresh_token = refresh_site_token(spec, client, timeout, user_agent)
     except RefreshTokenRevokedError as exc:
-        # 被动作废：熔断落库 + 并发护栏，与 refresh_and_retry_once 同一套路。
+        # 被动作废：熔断写库 + 并发护栏，与 refresh_and_retry_once 同一套路。
         newer = _stored_tokens(store, spec.id) if store is not None else None
         if newer and newer[1] and newer[1] != str(spec.token_refresh.get("refresh_token") or ""):
             try:

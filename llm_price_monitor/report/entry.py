@@ -32,10 +32,10 @@ def scan_prices(
     latest = store.latest_all() if store is not None else {}
     try:
         records, events, errors, site_status = _scan_prices(config, client, selected_user_agent, store, latest, persist)
-        # price_status 在确认/规则/无数据之间抖动不代表价格真的变了，这类事件不落库
+        # price_status 在确认/规则/无数据之间抖动不代表价格真的变了，这类事件不写库
         changed_events = [event for event in events if event["kind"] not in ("unchanged", "status_changed")]
         if persist and store is not None:
-            # 价格已在 _scan_prices 内逐站落库，这里只合并渠道状态与健康档案
+            # 价格已在 _scan_prices 内逐站写库，这里只合并渠道状态与健康档案
             _merge_collect_status(store, config, site_status)
             _merge_price_health(store, config, site_status)
         return MonitorReport(started, time.time(), records, changed_events, errors, site_status=site_status)
@@ -122,7 +122,7 @@ def run_once(
         errors = [*errors, *status_scan.errors, *notice_scan.errors]
         changed_events = [event for event in events if event["kind"] not in ("unchanged", "status_changed")]
         if persist and store is not None:
-            # 价格已在 _scan_prices 内逐站落库；这里只补公告与渠道状态（公告与 scan_notices 同口径）
+            # 价格已在 _scan_prices 内逐站写库；这里只补公告与渠道状态（公告与 scan_notices 同一套规则）
             _persist_scan_results(
                 store,
                 latest={},

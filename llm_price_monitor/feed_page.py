@@ -1,10 +1,10 @@
-"""事件流下发口径：列表只带渲染用得到的字段，正文与采集溯源留在库里按需另取。
+"""事件流下发规则：列表只带渲染用得到的字段，正文与采集溯源留在库里按需另取。
 
 背景（2026-10-13 实测）：/api/feed 原先整份下发，历史页一次 1.3 MB，其中公告正文
 625 KB、价格事件 metadata 484 KB。这两块只有「点开详情」才用得到，列表侧只看标题、
 分组标签与摘要，所以在下发前裁掉：
 
-- 公告事件不带 content，改带同口径摘要 excerpt；完整正文按需取
+- 公告事件不带 content，改带同一套规则摘要 excerpt；完整正文按需取
   （GET /api/notice/event，见 routes/status.py，浏览器侧经 web 的转发路由）。
 - 价格事件 metadata 走白名单 EVENT_METADATA_KEYS，其余是采集溯源自证
   （network_evidence / denomination / enable_groups / billing_expr …），只在库里留档。
@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-# HTML 标签与 Markdown 标题井号：与前端 web/lib/format.ts 的 noticeExcerpt 同口径
+# HTML 标签与 Markdown 标题井号：与前端 web/lib/format.ts 的 noticeExcerpt 同一套规则
 _TAG_RE = re.compile(r"<[^>]*>")
 _HEADING_RE = re.compile(r"^#+\s*")
 
@@ -66,7 +66,7 @@ def slim_price_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def slim_notice_event(event: dict[str, Any]) -> dict[str, Any]:
-    """公告事件：正文换成同口径摘要（正文按需另取）。"""
+    """公告事件：正文换成同一套规则摘要（正文按需另取）。"""
     slimmed = {key: value for key, value in event.items() if key != "content"}
     slimmed["excerpt"] = notice_excerpt(str(event.get("content") or ""))
     return slimmed

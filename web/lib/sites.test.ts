@@ -1,4 +1,4 @@
-/** 站点信息解析：官网取「管理台配置的首页 > 内置映射 > 来源 URL 域名」三级兜底。 */
+/** 站点信息解析：官网取「管理台配置的首页 > 内置映射 > 来源 URL 域名」三级后备。 */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";

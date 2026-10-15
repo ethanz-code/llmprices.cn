@@ -72,7 +72,7 @@ def fetch_page_html(
     browser = None
     try:
         playwright = sync_playwright().start()
-        # 出口跟随直连失败记忆（只读不写）：被墙站的无头渲染直接带代理，不再白撞一次墙；
+        # 出口跟随直连失败记忆（只读不写）：被墙站的无头渲染直接带代理，不再白白失败一次；
         # 失败标记由 HTTP 直采链路维护，两条链路对同一域名的出口选择保持一致
         proxy_server = egress.fallback_proxy() if egress.plan(host).use_proxy else None
         browser = playwright.chromium.launch(

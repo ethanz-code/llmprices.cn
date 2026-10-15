@@ -2,7 +2,7 @@
 
 import { TimeSeriesChart, type TimeSeries } from "./TimeSeriesChart";
 
-/** 分组出字速度趋势：每个渠道一条线（TPS，每秒出多少 token），图例可点选隐藏；时间轴与可用率图联动。 */
+/** 分组输出速度趋势：每个渠道一条线（TPS，每秒出多少 token），图例可点选隐藏；时间轴与可用率图联动。 */
 export function StatusTpsChart({
   times,
   series,

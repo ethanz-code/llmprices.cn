@@ -61,15 +61,15 @@ interface LandingData {
   meta: MetaData | null;
   feed: FeedData | null;
   history: HistoryListData | null;
-  /** 渠道检测视图（与站点详情页同口径，lib/statusData.ts 统一取数） */
+  /** 渠道检测视图（与站点详情页同一套规则，lib/statusData.ts 统一取数） */
   statusViews: SiteStats;
   /** 站点 IP 归属地：服务端取好传给首屏地球，读接口封锁后浏览器不再直接调 */
   geo: Record<string, SiteGeo>;
   /** AA 榜单：首页速览用，拉取失败只影响榜单小节 */
   rankings: RankingsData | null;
-  /** 厂商目录：只取发布日期建排序索引，拉取失败只影响最新价格的排序口径 */
+  /** 厂商目录：只取发布日期建排序索引，拉取失败只影响最新价格的排序规则 */
   catalog: CatalogData | null;
-  /** 站点首页覆盖表：站名链接用，拉取失败退回内置映射/来源域名兜底 */
+  /** 站点首页覆盖表：站名链接用，拉取失败退回内置映射/来源域名后备 */
   homepages: SiteHomepages;
   error: string | null;
 }
@@ -88,7 +88,7 @@ async function loadLanding(): Promise<LandingData> {
       overviewPromise,
       apiGet<MetaData>("/api/meta"),
       apiGet<FeedData>("/api/feed?events_limit=8&notice_limit=8").catch(() => null),
-      // 渠道视图与站点检测详情页同口径：一个请求拿全站算好的可用率/时段桶（后端 /api/status/views）。
+      // 渠道视图与站点检测详情页同一套规则：一个请求拿全站算好的可用率/时段分桶（后端 /api/status/views）。
       // 曾经逐站拉 21 份原始快照共约 49MB 再在 Node 解析，瓶颈是体积不是请求数，现改由后端算好下发。
       loadStatusViews().catch(() => buildSiteViews([])),
 
@@ -96,9 +96,9 @@ async function loadLanding(): Promise<LandingData> {
       apiGet<{ geo: Record<string, SiteGeo> }>("/api/geo").catch(() => ({ geo: {} })),
       apiGet<RankingsData>("/api/rankings").catch(() => null),
       apiGet<CatalogData>("/api/catalog").catch(() => null),
-      // hero 折线是装饰位：拉取失败只影响图表兜底回插画，不阻塞整页报错
+      // hero 折线是装饰位：拉取失败只影响图表回退补插画，不阻塞整页报错
       apiGet<HistoryListData>("/api/history?limit=1000").catch(() => null),
-      // 站点首页覆盖表：站名外链用（loadSiteHomepages 自带兜底，取不到返回空表）
+      // 站点首页覆盖表：站名外链用（loadSiteHomepages 自带后备，取不到返回空表）
       loadSiteHomepages(),
     ]);
     return { overview, meta, feed, history, statusViews, geo: geo.geo, rankings, catalog, homepages, error: null };
@@ -245,16 +245,16 @@ function BentoDemo({
 
 export default async function LandingPage() {
   const { overview, meta, feed, history, statusViews, geo, rankings, catalog, homepages, error } = await loadLanding();
-  // JSON-LD 里的站点地址要绝对 URL，与 metadataBase 同一推导口径
+  // JSON-LD 里的站点地址要绝对 URL，与 metadataBase 同一推导方式
   const origin = await siteOrigin();
   const records = overview?.records ?? [];
   const sites = collectSites(overview, meta);
   // 首页榜单速览：基础模型去重后的 Top 5；数值条按榜首归一
   const rankingsTop = topBaseModels(rankings);
   const maxRankIndex = Math.max(0, ...rankingsTop.map((entry) => entry.intelligence_index ?? 0));
-  // 站点价统一按 RMB 展示：汇率取厂商价快照口径
+  // 站点价统一按 RMB 展示：汇率取厂厂商价快照标准
   const rate = overview?.catalog?.usd_cny_rate ?? null;
-  // 最新事件侧栏与事件追踪页同一套折叠口径（同站同模型同类 120s 内折一张卡），
+  // 最新事件侧栏与事件追踪页同一套折叠规则（同站同模型同类 120s 内折一张卡），
   // 原始事件按「站点+模型+分组」入库，不折叠会同模型并排出几条看起来一样的行；公告事件没有模型行，展示公告摘要
   const latestEventGroups = foldEvents(feed?.events ?? []).slice(0, LATEST_EVENTS_SHOWN);
   const historyRecords = history?.records ?? [];
@@ -267,8 +267,8 @@ export default async function LandingPage() {
   const globeSites: GlobeSite[] = sites.map((site) => {
     const series = availBySite[site.id] ?? [];
     const latestPoint = series[series.length - 1];
-    // 节点百分比与详情页顶部时段色块同口径：最新一个时段区块的平均正常率
-    // （uptimeBuckets 由服务端用抽稀前的全量序列分桶，均值不受「保峰抽稀只留最差」影响）
+    // 节点百分比与详情页顶部时段色块同一套规则：最新一个时段区块的平均正常率
+    // （uptimeBuckets 由服务端用抽稀前的全量序列分桶，均值不受「最差值降采样只留最差」影响）
     const siteBuckets = bucketsBySite[site.id] ?? [];
     const latestBucket = siteBuckets[siteBuckets.length - 1];
     const availability = latestBucket ? latestBucket.avg : null;
@@ -284,7 +284,7 @@ export default async function LandingPage() {
   });
   // 有检测档案但解析不出时间线的站点，文案与「未接入」区分开
 
-  // 行列表（Statuspage 模式）：down 站排最前、warn 次之、无数据其后、停用垫底，封顶取前 SITE_ROW_MAX 行；
+  // 行列表（Statuspage 模式）：down 站排最前、warn 次之、无数据其后、停用排最后，封顶取前 SITE_ROW_MAX 行；
   // 平均可用率只算启用且有检测数据的站点，停用站的旧数据不掺进来
   const LEVEL_RANK: Record<RateLevel | "none" | "off", number> = {
     down: 0,
@@ -309,8 +309,8 @@ export default async function LandingPage() {
         ? "var(--chart-warn)"
         : "var(--chart-down)";
 
-  // 首页精选：每个模型归一合并后只留综合价最低的一行，按目录发布日期倒序（新模型在前），
-  // 与总览页模型下拉同一套口径；目录没收录的模型垫底按名称
+  // 首页代表行规则：每个模型归一合并后只留加权单价最低的一行，按目录发布日期倒序（新模型在前），
+  // 与总览页模型下拉同一套规则；目录没收录的模型排在最后按名称
   const releaseByModel: Record<string, string> = {};
   for (const entry of Object.values(catalog?.models ?? {})) {
     if (entry?.model) releaseByModel[canonicalModel(entry.model)] = entry.release_date ?? "";
@@ -334,7 +334,7 @@ export default async function LandingPage() {
   const demoBucketName = demoBucketSite ? getSiteInfo(demoBucketSite.id, demoBucketSite.sourceUrl).name : null;
   const demoDiscount = parentRows[0]?.discount ?? null;
 
-  // 快照表附加口径：站点三档状态点（与站点墙同一套）+ 数据新鲜度
+  // 快照表附加规则：站点三档状态点（与站点墙同一套）+ 数据新鲜度
   const siteLevelBySite: Record<string, RateLevel | null> = {};
   for (const site of sites) {
     const latest = (availBySite[site.id] ?? []).slice(-1)[0];
@@ -631,7 +631,7 @@ export default async function LandingPage() {
                   <span />
                   <span>模型</span>
                   <span>厂商</span>
-                  <span>智能指数</span>
+                  <span>综合评分</span>
                 </div>
                 {rankingsTop.map((entry) => (
                   <Link key={entry.slug} href="/rankings" className="rank-row">

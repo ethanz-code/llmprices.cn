@@ -16,8 +16,8 @@ import httpx
 from llm_price_monitor.units import number_or_none as _number
 
 
-# new-api 通用口径：实售价 = model_ratio × 该基准价（CNY）。
-# 站点真实口径不是 2 时该站价格会按比例系统性错——report 的价格合理性校验是唯一防线，
+# new-api 通用规则：实售价 = model_ratio × 该基准价（CNY）。
+# 站点真实标准不是 2 时该站价格会按比例系统性错——report 的价格合理性校验是唯一防线，
 # 首次按此默认值定价时另有一次进程级告警提示核对。
 DEFAULT_NEWAPI_RATIO_BASE_PRICE = 2.0
 _RATIO_BASE_WARNED = False
@@ -296,7 +296,7 @@ def _tiered_pricing_rules(value: dict[str, Any], multiplier: float, unit: str) -
     return result
 
 def newapi_denomination_from_status(status_payload: Any) -> dict[str, Any] | None:
-    """new-api /api/status 的充值口径 → 人民币/倍率单位的基准价，拿不到就 None。
+    """new-api /api/status 的充值汇率 → 人民币/倍率单位的基准价，拿不到就 None。
 
     `price` 是站方「充值汇率」（1 美元额度卖多少人民币，充值页按它收款），
     `quota_per_unit` 是 1 美元额度对应的 quota；1 倍率 = 1e6/quota_per_unit 美元额度，
@@ -371,8 +371,8 @@ def newapi_price_record(
         else:
             currency_multiplier = cny_rate
     elif not denomination_v2 and denomination:
-        # v1 载荷不带计价声明，用 /api/status 的充值口径（price×quota_per_unit）修正基准；
-        # AIHub365 实锤：默认按 ¥2 算会把它这类美元充值站的价格整体低算 6.8 倍。
+        # v1 载荷不带计价声明，用 /api/status 的充值汇率（price×quota_per_unit）修正基准；
+        # AIHub365 实证：默认按 ¥2 算会把它这类美元充值站的价格整体低算 6.8 倍。
         # currency_type=USD 的站（4zapi）页面标的就是美元：倍率按 1 美元额度计，不乘充值价。
         if str(denomination.get("display_currency") or "").upper() == "USD":
             configured_currency = "USD"
@@ -383,7 +383,7 @@ def newapi_price_record(
     # 倍率价与显式价/阶梯价的量纲不同：倍率价按 基准价×倍率 折算，而 input_price、
     # pricing_rules.tiers 里的数值已经是"展示美元"（new-api 定价页直接显示的数），
     # 人民币实付 = 展示美元 × 充值汇率。v2 的显式价是 USD，乘 cny_rate；v1 未声明
-    # 充值口径的站按 1 处理（历史口径）。载落数值自 带 unit 的（官方参考价）不折算。
+    # 充值规则的站按 1 处理（历史标准）。载落数值自 带 unit 的（官方参考价）不折算。
     explicit_rate = currency_multiplier
     # 页面按人民币标价时，展示美元 × 充值汇率才是实付；页面本身标美元（currency_type=USD）则不折算
     if not denomination_v2 and denomination and configured_currency == "CNY":
@@ -414,7 +414,7 @@ def newapi_price_record(
     advertised = _number(item.get("input_price")) is not None and _number(item.get("output_price")) is not None
     if item.get("billing_mode") == "tiered_expr" and not advertised:
         expression = item.get("billing_expr")
-        # billing_multiplier 是站方对整个计费表达式的折扣/加价系数（sudocode 实锤：
+        # billing_multiplier 是站方对整个计费表达式的折扣/加价系数（sudocode 实证：
         # 0.2~2 不等，deepseek-v4-pro 标称基准价 ¥9 但站上现价 ¥4.5 = 9×0.5），漏乘会把
         # 官方基准价当成站价，误差最高 5 倍
         billing_multiplier = _number(item.get("billing_multiplier"))
@@ -443,7 +443,7 @@ def newapi_price_record(
     prefer_ratio = model_ratio is not None and (
         completion_ratio is not None or not has_explicit_price
     )
-    # billing_expr 描述的可能是官方价率的池子计费细节（subrouter 实锤：表达式 p*10+c*50
+    # billing_expr 描述的可能是官方价率的池计费细节（subrouter 实证：表达式 p*10+c*50
     # 是官价，站方挂牌价 input_price 0.6 = 官价 94% 折扣，页面展示的也是 0.6）——上面
     # tiered 分支已在挂牌价存在时让路，这里维持倍率对优先的既有语义
     if has_explicit_price and not prefer_ratio:
@@ -459,7 +459,7 @@ def newapi_price_record(
     if model_ratio is not None:
         # model_ratio=0 在 new-api 里表示该模型未定价/未启用（占位），不是"免费用它"：
         # 曾按公式算成 0 元 confirmed 上架成假免费价（123ai-ai-wx grok-4.6/4.7 站方接口
-        # 返回 model_ratio=0 且定价页根本不展示）；真免费档是显式 0 价，不走倍率分支。
+        # 返回 model_ratio=0 且定价页根本不展示）；真零价是显式 0 价，不走倍率分支。
         if model_ratio == 0:
             metadata["pricing_kind"] = "ratio_zero_placeholder"
             return PriceRecord(model, None, None, configured_unit, source_url, time.time(), metadata, "unavailable")
@@ -467,8 +467,8 @@ def newapi_price_record(
         if denomination is None and not denomination_v2 and not _RATIO_BASE_WARNED:
             _RATIO_BASE_WARNED = True
             logging.getLogger("llm_price_monitor.tracker").warning(
-                "正在按 new-api 默认基准价 %.1f 折算倍率定价（站点 /api/status 未提供充值口径）；"
-                "若该站点口径不是 %.1f，价格会成比例偏差，请在采集配置里核对",
+                "正在按 new-api 默认基准价 %.1f 折算倍率定价（站点 /api/status 未提供充值汇率）；"
+                "若该站点标准不是 %.1f，价格会成比例偏差，请在采集配置里核对",
                 DEFAULT_NEWAPI_RATIO_BASE_PRICE, DEFAULT_NEWAPI_RATIO_BASE_PRICE,
             )
         cache_ratio = _number(item.get("cache_ratio"))
@@ -480,7 +480,7 @@ def newapi_price_record(
             "cache_read_price": input_price * cache_ratio if cache_ratio is not None else None,
             "cache_create_price": input_price * create_cache_ratio if create_cache_ratio is not None else None,
         })
-        # 载荷带非标准字段 display_prices = 站方改过计费的 fork（heyroute/aheapi 实锤）：定价页把
+        # 载荷带非标准字段 display_prices = 站方改过计费的 fork（heyroute/aheapi 实证）：定价页把
         # 「官方参考价」与「本站实收价」并排显示，而 group_ratio 是「Nx 计费」额度倍率、不是价格
         # 折扣——标准倍率公式算出的恰是页面上被删除线划掉的参考价列，站方实收另有按充值/套餐汇率
         # 现算的折扣（不在任何 JSON 里，公式不可复现）。不拦价（可能只是图片模型带展示价），但降为

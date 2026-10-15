@@ -3,7 +3,7 @@
 间隔读自设置文档 settings.schedule（分钟，0 = 关闭该项定时），常驻线程每
 CHECK_INTERVAL_SECONDS 检查一轮：改配置下一轮即生效；到点且对应任务无运行中
 实例时提交任务注册表，正忙或提交失败等下一轮。上次提交时间持久化到
-schedule_state 文档，重启后按真实间隔计算，不会重启即全量打站点。
+schedule_state 文档，重启后按真实间隔计算，不会重启即全量请求站点点。
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def _run_due(store: Store) -> None:
 
 
 def start_scheduler(store: Store) -> None:
-    """启动常驻调度线程（应用创建时调用一次）；线程内兜底所有异常，保证不死掉。"""
+    """启动常驻调度线程（应用创建时调用一次）；线程内回退所有异常，保证不死掉。"""
     _STOP.clear()
 
     def _loop() -> None:

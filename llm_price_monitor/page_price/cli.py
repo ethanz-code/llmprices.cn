@@ -25,20 +25,20 @@ def resolve_ai_config(args: argparse.Namespace) -> tuple[AIConfig | None, str | 
             api_key=args.ai_api_key,
         )
         if not config.base_url:
-            return None, "命令行只给了密钥/模型，没有 --ai-base-url，AI 兜底已跳过"
+            return None, "命令行只给了密钥/模型，没有 --ai-base-url，AI 后备已跳过"
         return config, None
     if args.no_ai:
         return None, None
     db_path = Path(os.getenv("PRICE_MONITOR_DB") or "var/monitor.db")
     if not db_path.is_file():
-        return None, f"找不到数据库 {db_path}（PRICE_MONITOR_DB），AI 兜底已跳过；可用 --ai-base-url/--ai-api-key 显式配置"
+        return None, f"找不到数据库 {db_path}（PRICE_MONITOR_DB），AI 后备已跳过；可用 --ai-base-url/--ai-api-key 显式配置"
     try:
         from llm_price_monitor.config import config_from_store
         from llm_price_monitor.store import Store
 
         ai = config_from_store(Store(db_path)).ai
-    except Exception as exc:  # 库损坏或配置非法：不阻断拉取，只放弃 AI 兜底
-        return None, f"读取 AI 配置失败（{exc}），AI 兜底已跳过"
+    except Exception as exc:  # 库损坏或配置非法：不阻断拉取，只放弃 AI 回退
+        return None, f"读取 AI 配置失败（{exc}），AI 后备已跳过"
     return ai, None
 
 
@@ -48,10 +48,10 @@ def main() -> None:
     parser.add_argument("--out", help="结果写入的 JSON 文件；省略时打印到 stdout")
     parser.add_argument("--timeout", type=float, default=_pp.DEFAULT_TIMEOUT, help="抓取超时秒数（默认 45）")
     parser.add_argument("--headless", action="store_true", help="静态解析为空时尝试Headless 渲染（默认仅 JS 空壳页自动触发）")
-    parser.add_argument("--no-ai", action="store_true", help="禁用 AI 兜底")
-    parser.add_argument("--ai-base-url", help="AI 兜底的接口地址（默认读 PRICE_MONITOR_DB 库里的 ai 配置）")
-    parser.add_argument("--ai-api-key", help="AI 兜底的密钥")
-    parser.add_argument("--ai-model", help="AI 兜底使用的模型")
+    parser.add_argument("--no-ai", action="store_true", help="禁用 AI 回退")
+    parser.add_argument("--ai-base-url", help="AI 回退的接口地址（默认读 PRICE_MONITOR_DB 库里的 ai 配置）")
+    parser.add_argument("--ai-api-key", help="AI 回退的密钥")
+    parser.add_argument("--ai-model", help="AI 后备使用的模型")
     args = parser.parse_args()
 
     ai_config, ai_note = _pp.resolve_ai_config(args)

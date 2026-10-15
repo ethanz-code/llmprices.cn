@@ -334,7 +334,7 @@ def test_ai_error_kind_groups_same_shape_errors():
     quota_b = 'HTTP 403：{"error":{"message":"Free quota exhausted. To continue accessing","id":"chatcmpl-bbb"}}'
     thinking = "HTTP 400：<400> InternalError.Algo.InvalidParameter: The value of the enable_thinking parameter is restricted to True."
     assert ai_error_kind(quota_a) == ai_error_kind(quota_b) != ai_error_kind(thinking)
-    assert ai_error_kind("模型池全部失败，最后一次错误 ReadTimeout: timed out").startswith("模型池全部失败")
+    assert ai_error_kind("模型备选池全部失败，最后一次错误 ReadTimeout: timed out").startswith("模型备选池全部失败")
     assert ai_error_kind(None) == ""
 
 
@@ -434,7 +434,7 @@ def _noop_change_event() -> dict:
 
 
 def test_prune_noop_events_preview_then_apply(tmp_path: Path, capsys):
-    """假变更清理命令：默认预览不动库，--apply 只删前后口径等价的事件，真实变更保留。"""
+    """假变更清理命令：默认预览不动库，--apply 只删前后标准等价的事件，真实变更保留。"""
     from llm_price_monitor.admin_cli import prune_noop_events
     from llm_price_monitor.report import classify
 
@@ -442,7 +442,7 @@ def test_prune_noop_events_preview_then_apply(tmp_path: Path, capsys):
     noop = _noop_change_event()
     real = {**noop, "model": "gpt-6-luna", "kind": "changed",
             "current": {**noop["current"], "input_price": 3.0}}
-    # 防呆：构造的事件必须仍满足"假变更按当前口径 unchanged、真变更 changed"
+    # 防呆：构造的事件必须仍满足"假变更按当前标准 unchanged、真变更 changed"
     assert classify(noop["previous"], noop["current"]) == "unchanged"
     assert classify(real["previous"], real["current"]) == "changed"
 

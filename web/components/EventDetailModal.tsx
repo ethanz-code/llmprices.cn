@@ -31,7 +31,7 @@ interface ChangeLike {
   previous?: { input_price: number | null; output_price: number | null; unit?: string; metadata?: PriceRecord["metadata"] } | null;
 }
 
-/** 参与变化比对的价格字段：输入/输出价 + 缓存读/写价 + 计价单位/分组（后两者参与价格口径指纹）。 */
+/** 参与变化比对的价格字段：输入/输出价 + 缓存读/写价 + 计价单位/分组（后两者参与价格规则指纹）。 */
 type PricedField = "input_price" | "output_price" | CachePriceField | "unit" | "group";
 
 const PRICED_FIELDS = ["input_price", "output_price", "cache_read_price", "cache_create_price", "cache_create_1h_price", "unit", "group"] as const satisfies readonly PricedField[];
@@ -42,7 +42,7 @@ function pricedValue(record: PriceRecord, field: PricedField): string | number |
   return record.metadata?.[field] ?? null;
 }
 
-/** 前后记录都在时，列出价格口径上有差异的字段；任一侧缺记录（新增/下线）无从比对，返回空集。 */
+/** 前后记录都在时，列出价格标准上有差异的字段；任一侧缺记录（新增/下线）无从比对，返回空集。 */
 function changedPriceFields(previous?: PriceRecord | null, current?: PriceRecord | null): Set<PricedField> {
   const changed = new Set<PricedField>();
   if (!previous || !current) return changed;
@@ -233,7 +233,7 @@ export function EventDetailModal({
 }) {
   if (!event) return null;
   const meta = eventMeta(event.kind);
-  // 公告事件没有价格行、拿不到来源地址；价格事件用最近一次的来源地址兜底官网
+  // 公告事件没有价格行、拿不到来源地址；价格事件用最近一次的来源地址回退官网
   const sourceUrl = isNoticeEvent(event) ? undefined : event.current?.source_url ?? event.previous?.source_url;
   const site = getSiteInfo(event.site_id, sourceUrl, siteHomepages);
   if (isNoticeEvent(event)) {

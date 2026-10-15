@@ -5,7 +5,7 @@
 2. jsDelivr CDN 分发的 fawazahmed0 currency-api —— CDN 分发，国内可达性最好
 3. Frankfurter —— 欧央行数据
 
-全部在线源失败时回退本地缓存，再失败用 fallback 兜底值；`rate_source`
+全部在线源失败时回退本地缓存，再失败用 fallback 后备值；`rate_source`
 如实记录实际使用的源，方便排查部署环境的网络状况。
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ _SOURCES: tuple[tuple[str, Callable[[httpx.Client], float]], ...] = (
 
 
 def get_usd_cny_rate(client: httpx.Client, fallback: float | None = None) -> tuple[float, str]:
-    """返回 (汇率, 来源说明)。在线源按顺序探测，全部失败回退缓存或兜底值。"""
+    """返回 (汇率, 来源说明)。在线源按顺序探测，全部失败回退缓存或后备值。"""
     for source_name, fetch in _SOURCES:
         try:
             rate = fetch(client)
@@ -67,12 +67,12 @@ def get_usd_cny_rate(client: httpx.Client, fallback: float | None = None) -> tup
     if isinstance(cached, dict) and cached.get("rate"):
         return float(cached["rate"]), f"在线源均失败，使用缓存（原源：{cached.get('source', '未知')}）"
     if fallback is not None:
-        return fallback, "在线源均失败，使用 --usd-cny 兜底"
-    raise ValueError("所有汇率在线源均失败，且无缓存或 --usd-cny 兜底可用") from None
+        return fallback, "在线源均失败，使用 --usd-cny 回退"
+    raise ValueError("所有汇率在线源均失败，且无缓存或 --usd-cny 回退可用") from None
 
 
 def resolve_rate(snapshot_rate: Any, *, timeout: float = 10) -> tuple[Any, Any]:
-    """折扣与展示共用汇率：目录快照自带值优先（与快照同时刻，保证口径一致），缺失/非法时实时拉取兜底。
+    """折扣与展示共用汇率：目录快照自带值优先（与快照同时刻，保证规则一致），缺失/非法时实时拉取后备。
 
     返回 (rate, rate_source)；快照缺失且实时拉取失败返回 (None, 失败原因)。
     """

@@ -123,7 +123,7 @@ def test_feed_hides_group_removed_events(workspace: Path):
     feed = client.get("/api/feed").json()
     assert all(event["kind"] != "group_removed" for event in feed["events"])
     removed_total = store.read_events(limit=1, kind="group_removed")[1]
-    assert feed["price_total"] == store.read_events(limit=1)[1] - removed_total  # 总数与可见列表同口径
+    assert feed["price_total"] == store.read_events(limit=1)[1] - removed_total  # 总数与可见列表同一套规则
     assert "group_removed" in [event["kind"] for event in store.read_events(limit=50)[0]]  # 库里仍留档
 
 
@@ -137,7 +137,7 @@ def test_overview_attaches_discount_and_catalog_context(workspace: Path):
 
 
 def test_overview_site_id_filters_records(workspace: Path):
-    """site_id 参数只保留该站记录：站点检测详情页取本站在售监测集用，省全量序列化。"""
+    """site_id 参数只保留该站记录：站点检测详情页取本站在售模型与分组集合用，省全量序列化。"""
     (workspace / "var" / "latest.json").write_text(json.dumps({
         "demo:demo-model:default": _latest_record(),
         "other:other-model:vip": {
@@ -155,7 +155,7 @@ def test_overview_site_id_filters_records(workspace: Path):
 
 
 def test_status_views_endpoint_parses_and_filters_onsale(workspace: Path):
-    """列表页渠道视图：后端一次算好可用率/时段桶/渠道成功率并下发（不再逐站传原始快照）。"""
+    """列表页渠道视图：后端一次算好可用率/时段分桶/渠道成功率并下发（不再逐站传原始快照）。"""
     from llm_price_monitor.store import Store
 
     client = TestClient(create_app(_config(workspace)))
@@ -165,7 +165,7 @@ def test_status_views_endpoint_parses_and_filters_onsale(workspace: Path):
          "data": {"channels": [{"name": "demo-model", "state": "ok"}, {"name": "vip", "state": "down"}]}},
     ])
     views = client.get("/api/status/views").json()
-    # 在售监测集来自当前最新价格行：demo 只在售 demo-model，vip 渠道被过滤掉
+    # 在售模型与分组集合来自当前最新价格行：demo 只在售 demo-model，vip 渠道被过滤掉
     assert [row["name"] for row in views["channels"]["demo"]] == ["demo-model"]
     assert "dots" not in views["channels"]["demo"][0]  # 列表页不下发点阵
     assert views["availability"]["demo"][-1]["pct"] == 100
@@ -194,10 +194,10 @@ def test_rankings_endpoint_paginates_searches_sorts(workspace: Path):
     assert [m["slug"] for m in page["models"]] == ["gpt-a", "gpt-b"]
     second = client.get("/api/rankings", params={"limit": 2, "offset": 2}).json()
     assert [m["slug"] for m in second["models"]] == ["claude-c"]
-    # 搜索命中厂商/模型/slug（大小写与分隔符不敏感，与前端 looseSearchKey 同口径）
+    # 搜索命中厂商/模型/slug（大小写与分隔符不敏感，与前端 looseSearchKey 同一套规则）
     found = client.get("/api/rankings", params={"q": "anthropic"}).json()
     assert found["filtered_total"] == 1 and found["models"][0]["slug"] == "claude-c"
-    # 排序：智能指数降序
+    # 排序：综合评分降序
     ranked = client.get("/api/rankings", params={"sort": "intelligence_index", "dir": "descend"}).json()
     assert [m["slug"] for m in ranked["models"]] == ["gpt-b", "claude-c", "gpt-a"]
     # 无 limit 时回落全量（兼容旧调用）
@@ -249,7 +249,7 @@ def test_catalog_auto_syncs_on_first_start(workspace: Path, monkeypatch):
     from llm_price_monitor.webapi import tasks
 
     # 等上一个测试留下的后台采集线程全部退出：任务注册表是进程级共享的，
-    # 残留的 running 任务会让本测试启动时的 catalog-refresh 提交撞互斥被 409 拒绝
+    # 残留的 running 任务会让本测试启动时的 catalog-refresh 提交与互斥锁冲突被 409 拒绝
     for _ in range(500):
         if not any(t["status"] == "running" for t in tasks.recent(100)):
             break
@@ -624,7 +624,7 @@ def test_sites_crud_requires_admin_and_validates(workspace: Path):
 
 
 def test_site_update_with_group_filter_cleans_status_history(workspace: Path):
-    """编辑站点设置分组过滤时，库里未选中分组的历史状态与价格数据一并清理；口径不变或清空则不动。"""
+    """编辑站点设置分组过滤时，库里未选中分组的历史状态与价格数据一并清理；标准不变或清空则不动。"""
     from llm_price_monitor.store import Store
 
     client = _admin_client(workspace)
@@ -666,7 +666,7 @@ def test_site_update_with_group_filter_cleans_status_history(workspace: Path):
 
 
 def test_site_groups_endpoint_lists_collected_groups(workspace: Path):
-    """分组白名单下拉的数据源接口：该站点已入库价格数据的去重分组名；读路径按管理台口径鉴权。"""
+    """分组白名单下拉的数据源接口：该站点已入库价格数据的去重分组名；读路径按管理台标准鉴权。"""
     from llm_price_monitor.store import Store
 
     assert TestClient(create_app(_config(workspace))).get("/api/sites/demo/groups").status_code == 401
@@ -759,7 +759,7 @@ def test_proxy_groups_route_reads_controller_with_form_values(workspace: Path, m
 
     client = _admin_client(workspace)
 
-    # 没填控制接口地址：给人话提示，不落库
+    # 没填控制接口地址：给人话提示，不写库
     missing = client.post("/api/settings/proxy-groups", json={"settings": {}})
     assert missing.status_code == 400 and "控制接口地址" in missing.json()["detail"]
 
@@ -885,7 +885,7 @@ def test_probe_proxy_connectivity_with_best_effort_exit_ip():
 
 
 def test_settings_test_models_probes_pool_and_persists(workspace: Path, monkeypatch) -> None:
-    """模型池批量体检：逐模型返回可用状态与报错原文，结果落库可回看；reset 开新轮。"""
+    """模型备选池批量体检：逐模型返回可用状态与报错原文，结果写库可回看；reset 开新轮。"""
     import llm_price_monitor.webapi.routes.settings as settings_routes
 
     client = _admin_client(workspace)
@@ -916,7 +916,7 @@ def test_settings_test_models_probes_pool_and_persists(workspace: Path, monkeypa
     # 用的是已保存配置 + 短超时（不拖住整轮）
     assert seen == [("good-a", settings_routes.PROBE_TIMEOUT_SECONDS), ("bad-model", settings_routes.PROBE_TIMEOUT_SECONDS)]
 
-    # 第二批不 reset：结果合并进同一轮，落库可回看
+    # 第二批不 reset：结果合并进同一轮，写库可回看
     client.post("/api/settings/test-models", json={"models": ["good-b"]}).json()
     report = client.get("/api/settings/test-models").json()
     assert set(report["results"].keys()) == {"good-a", "bad-model", "good-b"}
@@ -931,7 +931,7 @@ def test_settings_test_models_probes_pool_and_persists(workspace: Path, monkeypa
 def test_settings_probe_marks_unusable_models_only_for_permanent_failures(workspace: Path, monkeypatch) -> None:
     """体检结果带 status/unusable：额度用尽/没权限/模型不存在才算"确定不可用"，限流超时不算。
 
-    unusable 是前端"一键清掉不可用模型"的唯一依据，判错会误删模型池，所以两种都要钉住；
+    unusable 是前端"一键清掉不可用模型"的唯一依据，判错会误删模型备选池，所以两种都要钉住；
     老库结果没存 status，从报错原文的 HTTP 状态回推，历史数据升级后也能直接清理。
     """
     import llm_price_monitor.webapi.routes.settings as settings_routes
@@ -970,11 +970,11 @@ def test_settings_probe_marks_unusable_models_only_for_permanent_failures(worksp
     assert results["ok-model"]["ok"] is True and results["ok-model"]["unusable"] is False
     assert (results["quota-model"]["status"], results["quota-model"]["unusable"]) == (403, True)
     assert (results["gone-model"]["status"], results["gone-model"]["unusable"]) == (404, True)
-    # 限流与网络超时是临时的：留在模型池里下次再试，不给清理入口
+    # 限流与网络超时是临时的：留在模型备选池里下次再试，不给清理入口
     assert (results["busy-model"]["status"], results["busy-model"]["unusable"]) == (429, False)
     assert (results["timeout-model"]["status"], results["timeout-model"]["unusable"]) == (None, False)
 
-    # 落库后回看同样带判定（前端刷新页面靠 GET 这份）
+    # 写库后回看同样带判定（前端刷新页面靠 GET 这份）
     report = client.get("/api/settings/test-models").json()
     assert report["results"]["quota-model"]["unusable"] is True
     assert report["results"]["busy-model"]["unusable"] is False
@@ -1229,7 +1229,7 @@ def test_collect_section_endpoints_submit_split_tasks(workspace: Path, monkeypat
 
 
 def test_settings_validates_schedule(workspace: Path):
-    """schedule 间隔必须是 >= 0 的数字；打站三项（price/status/notice）上限 12 小时；合法值保存后可读回。"""
+    """schedule 间隔必须是 >= 0 的数字；请求站点三项（price/status/notice）上限 12 小时；合法值保存后可读回。"""
     client = _admin_client(workspace)
     assert client.put("/api/settings", json={"settings": {"schedule": {"price": -5}}}).status_code == 400
     assert client.put("/api/settings", json={"settings": {"schedule": {"price": True}}}).status_code == 400
@@ -1237,7 +1237,7 @@ def test_settings_validates_schedule(workspace: Path):
     assert client.put("/api/settings", json={"settings": {"schedule": {"price": 721}}}).status_code == 400
     assert client.put("/api/settings", json={"settings": {"schedule": {"status": 1440}}}).status_code == 400
     assert client.put("/api/settings", json={"settings": {"schedule": {"notice": 721}}}).status_code == 400
-    # 不打站接口的项不受上限约束（catalog 等本地/低频源）
+    # 不请求站点接口的项不受上限约束（catalog 等本地/低频源）
     assert client.put("/api/settings", json={"settings": {"schedule": {"catalog": 2880}}}).status_code == 200
     ok = client.put("/api/settings", json={"settings": {"schedule": {"price": 720, "status": 0, "notice": 10, "catalog": 720, "rankings": 0, "discovery": 0}}})
     assert ok.status_code == 200
@@ -1290,7 +1290,7 @@ def test_scheduler_run_due_submits_due_jobs_and_persists_state(tmp_path: Path, m
 
 
 def test_scheduler_run_due_disabled_all_and_invalid_config(tmp_path: Path):
-    """全部间隔为 0 时不提交任何任务；非法 schedule 抛 ValueError（由调度线程兜底）。"""
+    """全部间隔为 0 时不提交任何任务；非法 schedule 抛 ValueError（由调度线程回退）。"""
     import llm_price_monitor.webapi.scheduler as scheduler_mod
     from llm_price_monitor.store import Store
     from llm_price_monitor.webapi import tasks
@@ -1311,7 +1311,7 @@ def test_reseed_modes(workspace: Path):
     admin = _admin_client(workspace)
     seed_path = workspace / "config.json"  # _config 写入、create_app 记住的种子路径
 
-    # skip_existing：启动时默认值已把 settings 全字段落库，种子声明值不再视为"缺失"；
+    # skip_existing：启动时默认值已把 settings 全字段写库，种子声明值不再视为"缺失"；
     # 手动删掉 timeout 后才重新可补
     seed_path.write_text(json.dumps({
         "settings": {"timeout": 99, "schedule": {"price": 123, "status": 0, "notice": 0, "catalog": 0, "rankings": 0}},
@@ -1388,7 +1388,7 @@ def test_default_seed_ships_ai_without_key(workspace: Path, monkeypatch):
 
 
 def test_settings_defaults_written_to_db(workspace: Path):
-    """启动时把 settings 里缺失的字段按默认值落库：设置页每项都有数可显，老库升级也能补齐。"""
+    """启动时把 settings 里缺失的字段按默认值写库：设置页每项都有数可显，老库升级也能补齐。"""
     from llm_price_monitor.config import MonitorSettings
 
     client = _admin_client(workspace)
@@ -1561,7 +1561,7 @@ def test_task_error_stream_dismiss_and_clear(workspace: Path, monkeypatch):
 
     run_collect()
     entries = client.get("/api/tasks/errors").json()["entries"]
-    # 传输层抖动的 warn 已自愈，与健康档案同口径不进卡片；业务 warn 与 error 照常
+    # 传输层抖动的 warn 已自愈，与健康档案同一套规则不进卡片；业务 warn 与 error 照常
     assert [entry["level"] for entry in entries] == ["error", "warn"]  # 新日志在前，info 不进卡片
     assert all("价格采集失败" in entry["message"] or "渠道状态被跳过" in entry["message"] for entry in entries)
 
@@ -1610,7 +1610,7 @@ def test_task_error_stream_persisted_across_restart_and_archive(tmp_path: Path):
         raise AssertionError(f"任务 {kind} 超时未结束")
 
     collect_id = run_to_done("collect", flaky)
-    for index in range(12):  # 堆后续任务把采集任务挤出 KEEP_LOGGED_RUNS 窗口，下次落盘即归档
+    for index in range(12):  # 堆后续任务把采集任务挤出 KEEP_LOGGED_RUNS 窗口，下次写盘即归档
         run_to_done(f"pad-{index}", lambda: {})
 
     tasks.reset()  # 模拟重启：内存清空，持久化文档保留
@@ -1718,7 +1718,7 @@ def test_site_geo_endpoint_mocked(workspace: Path, monkeypatch):
 
 
 def test_site_token_refresh_sample_analyzed_on_save(workspace: Path, monkeypatch):
-    """保存站点时响应案例交给 AI 分析字段路径：成功写入路径，失败降级保存；案例本身不落库。"""
+    """保存站点时响应案例交给 AI 分析字段路径：成功写入路径，失败降级保存；案例本身不写库。"""
     import llm_price_monitor.webapi.routes.sites as sites_routes
 
     client = _admin_client(workspace)
@@ -1755,7 +1755,7 @@ def test_site_token_refresh_sample_analyzed_on_save(workspace: Path, monkeypatch
 
 
 def test_persist_refresh_updates_hardcoded_auth_header(workspace: Path):
-    """续签落盘时，写死在 network/networks/status/notice headers 里的 Authorization 要换成新 token（保留前缀）；Cookie 不动，手动维护。"""
+    """续签写盘时，写死在 network/networks/status/notice headers 里的 Authorization 要换成新 token（保留前缀）；Cookie 不动，手动维护。"""
     from llm_price_monitor.store import Store
     from llm_price_monitor.token_refresh import persist_refreshed_config
 
@@ -1796,7 +1796,7 @@ def test_persist_refresh_updates_hardcoded_auth_header(workspace: Path):
 
 
 def test_site_auth_inject_round_trips_through_api(workspace: Path):
-    """凭证注入走完整保存链路：前端写的 auth_inject 结构能被校验、落库、原样读回并驱动注入。"""
+    """凭证注入走完整保存链路：前端写的 auth_inject 结构能被校验、写库、原样读回并驱动注入。"""
     from llm_price_monitor.adapters import auth_inject_headers
     from llm_price_monitor.config import sites_from_raw
 
@@ -1827,7 +1827,7 @@ def test_site_auth_inject_round_trips_through_api(workspace: Path):
     failed = client.post("/api/sites", json={"config": bad})
     assert failed.status_code == 400 and "auth_inject.price.value" in failed.json()["detail"]
 
-    # 空 auth_inject 保存时瘦身掉，不落库
+    # 空 auth_inject 保存时瘦身掉，不写库
     slimmed = client.put("/api/sites/inject", json={"config": {**stored, "auth_inject": {}}})
     assert slimmed.status_code == 200
     reloaded = next(site for site in client.get("/api/sites").json()["sites"] if site["id"] == "inject")
@@ -1835,7 +1835,7 @@ def test_site_auth_inject_round_trips_through_api(workspace: Path):
 
 
 def test_site_config_slimmed_on_save(workspace: Path):
-    """保存时去掉空值、默认值与已废弃字段（adapter/auth_header/auth_prefix/cookie/cookies 等）：不再落库，行为由 SiteSpec 兜底。enabled 例外：始终落库，管理台行内判断直接读它。"""
+    """保存时去掉空值、默认值与已废弃字段（adapter/auth_header/auth_prefix/cookie/cookies 等）：不再写库，行为由 SiteSpec 后备。enabled 例外：始终写库，管理台行内判断直接读它。"""
     client = _admin_client(workspace)
     fat = {
         "id": "slim",
@@ -1853,7 +1853,7 @@ def test_site_config_slimmed_on_save(workspace: Path):
     assert created.status_code == 200
     assert created.json()["site"] == {
         "id": "slim",
-        "enabled": True,  # 启用态始终落库：管理台行内判断直接读它
+        "enabled": True,  # 启用态始终写库：管理台行内判断直接读它
         "network": {"url": "https://slim.test/api/pricing"},
     }
 
@@ -1891,8 +1891,8 @@ def test_token_refresh_test_endpoint(workspace: Path, monkeypatch):
 
 
 def test_token_refresh_test_endpoint_persists_refreshed_tokens(workspace: Path, monkeypatch):
-    """轮换型凭据测试一次就作废旧值：换新的 refresh_token 要立即落库，编辑中途取消也不丢凭证链；
-    access_token 一并落库，取消后站点上的采集请求头也还是刚验过有效的那个。"""
+    """轮换型凭据测试一次就作废旧值：换新的 refresh_token 要立即写库，编辑中途取消也不丢凭证链；
+    access_token 一并写库，取消后站点上的采集请求头也还是刚验过有效的那个。"""
     import llm_price_monitor.webapi.routes.sites as sites_routes
 
     client = _admin_client(workspace)
@@ -1913,7 +1913,7 @@ def test_token_refresh_test_endpoint_persists_refreshed_tokens(workspace: Path, 
     assert rotate["token_refresh"]["refresh_token"] == "rt_new"
     assert rotate["auth_token"] == "at_rotated0000"
 
-    # 未换新的站点：access_token 照样落库，其余字段保持不动
+    # 未换新的站点：access_token 照样写库，其余字段保持不动
     monkeypatch.setattr(sites_routes, "refresh_site_token", lambda spec, http, timeout, ua: ("at_x", "rt_new"))
     client.post("/api/sites/test-token-refresh", json={"config": {**stored, "token_refresh": {**stored["token_refresh"], "refresh_token": "rt_new"}}})
     rotate = next(site for site in client.get("/api/sites").json()["sites"] if site["id"] == "rotate")
@@ -2154,7 +2154,7 @@ def test_auto_append_latest_models(tmp_path: Path):
     # 白名单线：OpenAI 家 9-30 两个通用模型都进、特殊领域同日发布不进、旧日期不进；
     # Anthropic 家最新是被移除的 m-gone，跳过；Google 家月粒度日期照常参与。
     # 国内线：DeepSeek 取插入序前 4（vl 被名字黑名单挡掉且不占名额，d-fifth 排第 5 滚出）、
-    # Baidu 取 1。清单落库按厂商分组排序：OpenAI 在前（发布倒序），Google、DeepSeek（目录序）、
+    # Baidu 取 1。清单写库按厂商分组排序：OpenAI 在前（发布倒序），Google、DeepSeek（目录序）、
     # Baidu 依次随后。
     assert auto_append_latest_models(store, catalog) == [
         "b-first", "d-first", "d-fourth", "d-second", "d-third", "m-c", "m-new", "m-new-2",
@@ -2189,7 +2189,7 @@ def test_prune_stale_monitor_models(tmp_path: Path):
 
     # 超期的按发布日期清；国内厂商条目滚出前 N 的清；无日期无归属（自定义）与白名单厂商的不动
     assert prune_stale_monitor_models(store, catalog, 12) == ["stale", "monthly-old", "cn-5"]
-    # 保留项落库按厂商分组排序：DeepSeek 在前，无厂商归属的按目录序垫底，自定义最后
+    # 保留项写库按厂商分组排序：DeepSeek 在前，无厂商归属的按目录序排最后，自定义最后
     assert store.get_document("settings")["monitor_models"] == ["cn-1", "fresh", "no-date", "custom"]
     # 时限设 0 表示关闭自动清理
     assert prune_stale_monitor_models(store, catalog, 0) == []

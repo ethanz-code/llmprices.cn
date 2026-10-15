@@ -11,7 +11,7 @@ const RATE_LEVEL_LABELS: Record<RateLevel, string> = {
   down: "<60% 不及格",
 };
 
-/** 整站可用率趋势（原来的口径）：每个检测点一个样本，Y = 正常渠道占比（0–100%），
+/** 整站可用率趋势（原来的规则）：每个检测点一个样本，Y = 正常渠道占比（0–100%），
  *  线与填充按三档着色，值越低颜色越警示；图下有色档说明。 */
 export function StatusTrendChart({
   times,

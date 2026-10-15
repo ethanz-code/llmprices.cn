@@ -194,7 +194,7 @@ export function HistoryView({
   /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
   siteHomepages?: SiteHomepages;
 }) {
-  // 站点价统一按 RMB 展示：汇率由历史接口附带（厂商价快照口径）
+  // 站点价统一按 RMB 展示：汇率由历史接口附带（厂厂商价快照标准）
   const rate = history.rate ?? null;
 
   const sites = useMemo(

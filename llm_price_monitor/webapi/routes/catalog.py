@@ -38,7 +38,7 @@ def build_router(store: Store) -> APIRouter:
 
         带 limit/q/vendor/sort/offset 任一参数时走分页（只回当前页 + 总数 + 厂商清单）；
         一个参数都不带时仍是整份文档，保持既有调用方的行为不变。limit=0 只回计数。
-        sort 只认白名单里的列键（见 catalog.all_page.SORT_KEYS），其余值按目录口径排序。
+        sort 只认白名单里的列键（见 catalog.all_page.SORT_KEYS），其余值按目录排序排序。
         """
         report = store.get_document("catalog_all")
         if not report:

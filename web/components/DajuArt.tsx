@@ -7,7 +7,7 @@
 
 /**
  * 探头的橘猫：猫头从底色块的下缘探出来，下半身被裁掉——品牌主形象（logo 与助手球同源）。
- * shape=square 用于 LogoMark：奶油暖白圆角方块底（--logo-bg，2026-09-28 拍板，favicon 同底；
+ * shape=square 用于 LogoMark：奶油暖白圆角方块底（--logo-bg，2026-09-28 定案，favicon 同底；
  * 橙底与猫毛色相近弃用）；circle 用于助手悬浮球/抽屉头像：品牌橙圆底。
  * 探头好奇表情（睁眼），带 .daju-peek-head 类供悬停探更高。
  * 裁剪用嵌套 svg 的视口裁切（默认 overflow hidden），不用 clipPath id——

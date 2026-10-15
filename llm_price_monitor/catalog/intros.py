@@ -69,7 +69,7 @@ def _generate_batch(
     batch: list[tuple[str, dict[str, Any]]],
     client: httpx.Client | None,
 ) -> int:
-    """一个批次的 AI 简介：返回成功落盘的条数；失败抛异常由调用方兜底。"""
+    """一个批次的 AI 简介：返回成功写盘的条数；失败抛异常由调用方后备。"""
     payload = [
         {"model": key, "name": entry.get("name") or key, "vendor": entry.get("vendor") or ""}
         for key, entry in batch

@@ -115,12 +115,12 @@ def resolve_site_names(
     site_names: Sequence[str],
     accepted: Mapping[str, Sequence[str]],
 ) -> dict[str, str]:
-    """站点侧模型名 → 目标模型名：精确命中优先，其次"去掉分隔符后同名"，再"一侧省略版本号"，歧义宁缺勿猜。
+    """站点侧模型名 → 目标模型名：精确命中优先，其次"去掉分隔符后同名"，再"一侧省略版本号"，歧义歧义即弃权。
 
     `accepted` 是 目标模型名 → 该目标可接受的名字（目标名本身 + AI 解析出的别名）。
     第一趟别名同样算精确名（含分隔符归一后的同名），但一个目标命中站点多个不同模型时放弃
-    ——AIHub365 实锤：目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash
-    两个模型时，按 payload 顺序挑一个就是把两个模型的价格张冠李戴，必须宁缺勿猜。
+    ——AIHub365 实证：目标 deepseek-flash 的别名同时命中站上 v4-flash 与 v4.1-flash
+    两个模型时，按 payload 顺序挑一个就是把两个模型的价格错配，必须歧义即弃权。
     第二趟只在唯一候选时采信。第三趟同族只有带版本号的若干候选时取最新那一版
     （deepseek-flash 对上 deepseek-v4.1-flash，即便同站还挂着更旧的 v4-flash），
     新版上架后自动跟上。
@@ -138,7 +138,7 @@ def resolve_site_names(
         hits = [original for key, original in unique.items() if key in wanted]
         if not hits:
             # 精确名没人接：再按「去掉分隔符后完全同名」找一次（空格/连字符/点差异，
-            # 如池内目标 "ERNIE 5.0" 对站点 ernie-5.0），仍要求唯一命中，多命中照旧宁缺勿猜
+            # 如清单内目标 "ERNIE 5.0" 对站点 ernie-5.0），仍要求唯一命中，多命中照旧歧义即弃权
             compact_wanted = {compact_model_text(name) for name in names if compact_model_text(name)}
             hits = [
                 original
@@ -146,7 +146,7 @@ def resolve_site_names(
                 if compact_model_text(original) in compact_wanted
             ]
         if len(hits) > 1:
-            # 多命中本身就是歧义，第二趟"版本号省略"兜底也不许再猜
+            # 多命中本身就是歧义，第二趟"版本号省略"后备也不许再猜
             ambiguous.add(target)
         elif len(hits) == 1 and hits[0].casefold() not in claimed:
             resolved[target] = hits[0]

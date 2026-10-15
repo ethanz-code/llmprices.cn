@@ -48,7 +48,7 @@ class SiteStoreMixin(StoreBase):
                 prefix = latest_site_prefix(site_id)
                 conn.execute("DELETE FROM latest WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
                 conn.execute("DELETE FROM documents WHERE name = ?", (f"status_ref:{site_id}",))
-                # collect_status 与 site_collect_health 都是 site_id → 状态 的文档，删站点时同步摘除
+                # collect_status 与 site_collect_health 都是 site_id → 状态 的文档，删站点时同步移除
                 for doc_name in ("collect_status", "site_collect_health", "site_popularity"):
                     row = conn.execute("SELECT content FROM documents WHERE name = ?", (doc_name,)).fetchone()
                     if row:

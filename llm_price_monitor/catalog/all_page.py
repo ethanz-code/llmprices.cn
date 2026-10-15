@@ -1,12 +1,12 @@
-"""全量渠道价目录（models.dev 全网渠道）的浏览分页：关键词/厂商筛选 + 目录口径排序 + 分页。
+"""全量渠道价目录（models.dev 全网渠道）的浏览分页：关键词/厂商筛选 + 目录排序排序 + 分页。
 
 这份目录有 8000+ 条、约 8 MB JSON，原先整份下发给浏览器、在浏览器里筛选排序；这里把同一套
-筛选与排序口径搬到后端，接口只回当前页。
+筛选与排序规则搬到后端，接口只回当前页。
 
-排序口径与前端 `web/lib/modelOrder.ts`（latestReleaseByVendor / vendorBlockCompare /
+排序规则与前端 `web/lib/modelOrder.ts`（latestReleaseByVendor / vendorBlockCompare /
 compareByReleaseDesc）和 `web/components/CatalogAllTable.tsx` 的表格一致：厂商块按各家最新
-发布日期倒序（并列按厂商名升序），块内按发布日期倒序、再按模型名升序，没日期的条目垫底。
-关键词口径与 `llm_price_monitor.text_search.loose_key` 一致（去分隔符后小写比较），搜索文本
+发布日期倒序（并列按厂商名升序），块内按发布日期倒序、再按模型名升序，没日期的条目排最后。
+关键词规则与 `llm_price_monitor.text_search.loose_key` 一致（去分隔符后小写比较），搜索文本
 含厂商显示名，所以"腾讯"也能命中 Tencent 的条目。
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ PAGE_SIZE_MAX = 500
 DEFAULT_PAGE_SIZE = 100
 
 # 可排序字段白名单：键就是前端列的标识（价格列 key=list、上下文列 key=limit、发布列 dataIndex=release_date）。
-# 排序值口径与前端列的 sorter 一致：缺值按 0（发布日期按空串），升序时排在最前。
+# 排序值规则与前端列的 sorter 一致：缺值按 0（发布日期按空串），升序时排在最前。
 SORT_KEYS: dict[str, tuple[str, str | None]] = {
     "list": ("list", "input"),
     "limit": ("limit", "context"),
@@ -50,13 +50,13 @@ SORT_KEYS: dict[str, tuple[str, str | None]] = {
 
 
 def vendor_display(vendor: Any) -> str:
-    """厂商显示名；未收录的厂商回落原始名（与前端同口径）。"""
+    """厂商显示名；未收录的厂商回落原始名（与前端同一套规则）。"""
     text = str(vendor)
     return VENDOR_DISPLAY.get(text.strip().lower(), text)
 
 
 def _name_key(text: str) -> tuple[str, str]:
-    """厂商/模型名排序键：对齐浏览器 `localeCompare` 的两条口径。
+    """厂商/模型名排序键：对齐浏览器 `localeCompare` 的两条标准。
 
     1) 大小写只是次要差异——`"nanogpt".localeCompare("NanoGPT") < 0`，小写在前；
     2) 标点排在任何字母数字之前——`"~openai/x"` 排在 `"sakana/x"` 前。
@@ -108,7 +108,7 @@ def ordered_vendors(entries: Iterable[tuple[str, dict[str, Any]]]) -> list[str]:
 
 
 def sort_entries(entries: Iterable[tuple[str, dict[str, Any]]]) -> list[tuple[str, dict[str, Any]]]:
-    """目录口径行序：厂商块 → 块内发布日期倒序 → 模型名升序（三趟稳定排序实现）。"""
+    """目录排序行序：厂商块 → 块内发布日期倒序 → 模型名升序（三趟稳定排序实现）。"""
     rows = list(entries)
     rank = {vendor: index for index, vendor in enumerate(ordered_vendors(rows))}
     rows.sort(key=lambda row: _name_key(str(row[1].get("model") or "")))
@@ -131,7 +131,7 @@ def filter_entries(
 
 
 def _sort_value(entry: dict[str, Any], key: str) -> str | float:
-    """列排序值：缺值按 0（发布日期按空串），与前端列 sorter 的 `?? 0` 同口径。"""
+    """列排序值：缺值按 0（发布日期按空串），与前端列 sorter 的 `?? 0` 同一套规则。"""
     parent, child = SORT_KEYS[key]
     if child is None:
         return str(entry.get(parent) or "")
@@ -150,9 +150,9 @@ def _sort_value(entry: dict[str, Any], key: str) -> str | float:
 def apply_sort(
     rows: list[tuple[str, dict[str, Any]]], sort: str | None, direction: str = "ascend"
 ) -> list[tuple[str, dict[str, Any]]]:
-    """按列排序（不传 sort 或不在白名单里就保持目录口径的行序）。
+    """按列排序（不传 sort 或不在白名单里就保持目录排序的行序）。
 
-    稳定排序，所以并列项保持目录口径的次序（厂商块 + 发布日期），与前端在原整份数据上
+    稳定排序，所以并列项保持目录排序的次序（厂商块 + 发布日期），与前端在原整份数据上
     排序后的观感一致。"""
     if sort not in SORT_KEYS:
         return rows

@@ -21,7 +21,7 @@ import type { SettingsData, SiteConfig } from "@/lib/types";
 /** 八类采集任务的后台定时间隔（分钟），与后端 settings.schedule 默认值保持一致；0 = 关闭定时。 */
 const DEFAULT_SCHEDULE_MINUTES: Record<string, number> = { price: 180, status: 5, notice: 30, catalog: 1440, rankings: 1440, discovery: 1440, screenshot: 1440, popularity: 1440 };
 
-/** 打站点接口的三项与后端 SCHEDULE_MAX_MINUTES 对齐：间隔超过 12 小时，续签接口时效短（部分站仅 24h）的站点凭证会过期失效 */
+/** 请求站点点接口的三项与后端 SCHEDULE_MAX_MINUTES 对齐：间隔超过 12 小时，续签接口时效短（部分站仅 24h）的站点凭证会过期失效 */
 const SCHEDULE_MAX_MINUTES: Record<string, number> = { price: 720, status: 720, notice: 720 };
 
 const SCHEDULE_ITEMS: { key: string; label: string; hint: string; tip?: React.ReactNode }[] = [
@@ -29,7 +29,7 @@ const SCHEDULE_ITEMS: { key: string; label: string; hint: string; tip?: React.Re
   { key: "status", label: "渠道状态", hint: "定时检查开了状态监测的站点，渠道有变化就记事件", tip: "这是请求量最大的一项：每 5 分钟对所有站点各发一次请求，想给站点减压优先调它" },
   { key: "notice", label: "站点公告", hint: "定时看站点公告，内容有变化就记下来" },
   { key: "catalog", label: "厂商定价", hint: "定时更新厂商原价目录，并重新抓取所有已启用的厂商定价源（默认 24 小时一次）" },
-  { key: "rankings", label: "模型榜单", hint: "定时更新第三方评测的模型智能指数榜单（默认 24 小时一次）" },
+  { key: "rankings", label: "模型榜单", hint: "定时更新第三方评测的模型综合评分榜单（默认 24 小时一次）" },
   { key: "discovery", label: "新站发现", hint: "定时更新站点清单与简介（秒级，不探测）；结果进「从新站发现导入」弹窗（默认 24 小时一次）" },
   { key: "screenshot", label: "站点截图", hint: "定时拍下各站点首页的样子，展示在站点详情页（默认 24 小时一次）" },
   { key: "popularity", label: "站点人气", hint: "定时查看各站点的交流群、访问量与全网排名，展示在站点详情页与列表（默认 24 小时一次）" },
@@ -55,7 +55,7 @@ function modelsToText(models: SiteConfig["models"]): string {
   return (models ?? []).join(", ");
 }
 
-/** 解析模型列表输入框：逗号/换行分隔，去空白、去重、保序；体检与保存共用同一口径。 */
+/** 解析模型列表输入框：逗号/换行分隔，去空白、去重、保序；体检与保存共用同一规则。 */
 function parsePoolText(text: string): string[] {
   return [...new Set(text.split(/[,\n]/).map((item) => item.trim()).filter(Boolean))];
 }
@@ -417,7 +417,7 @@ export function AdminSettings() {
     }
   }
 
-  /** 一键体检模型池：先弹费用确认，确认后分批交给后端实测，边测边出结果。 */
+  /** 一键体检模型备选池：先弹费用确认，确认后分批交给后端实测，边测边出结果。 */
   function runProbeAll() {
     const pool = parsePoolText(aiModels);
     if (!pool.length) {
@@ -442,7 +442,7 @@ export function AdminSettings() {
         setProbeResults({ ...acc });
       }
       const okCount = Object.values(acc).filter((item) => item.ok).length;
-      toast(`模型池体检完成：${okCount} 个可用，${pool.length - okCount} 个不可用`);
+      toast(`监控模型清单体检完成：${okCount} 个可用，${pool.length - okCount} 个不可用`);
     } catch (error) {
       toast(`体检中断：${errorText(error)}`);
     } finally {
@@ -458,7 +458,7 @@ export function AdminSettings() {
     void navigator.clipboard.writeText(list.join(", ")).then(() => toast("可用模型列表已复制，粘贴回模型列表保存即可"));
   }
 
-  /** 一键清掉"确定不可用"的模型（额度用尽/没权限/模型不存在）：只改表单不落库，点保存才生效；
+  /** 一键清掉"确定不可用"的模型（额度用尽/没权限/模型不存在）：只改表单不写库，点保存才生效；
    *  临时失败的（限流/超时/网络）留在列表里，下次体检还能试出来。 */
   function cleanUnusable(unusableModels: string[]) {
     const bad = new Set(unusableModels);
@@ -663,7 +663,7 @@ export function AdminSettings() {
             </SettingRow>
             <SettingRow
               label="AI 模型列表"
-              hint="逗号分隔的候选池，请求失败自动换下一个。建议配新一代通用对话模型的轻量档（qwen3.8-flash、qwen3.7-flash、glm-5.3-flash 这类，认准 flash / mini / turbo 命名）；OCR、分析型等专用模型输出上限小，价格抽取会失败——系统会自动记住每个模型的输出上限，装不下的自动跳过"
+              hint="逗号分隔的候选站列表，请求失败自动换下一个。建议配新一代通用对话模型的轻量档（qwen3.8-flash、qwen3.7-flash、glm-5.3-flash 这类，认准 flash / mini / turbo 命名）；OCR、分析型等专用模型输出上限小，价格抽取会失败——系统会自动记住每个模型的输出上限，装不下的自动跳过"
             >
               <Input value={aiModels} onChange={setAiModels} placeholder="model-a, model-b" style={{ width: "min(360px, 100%)" }} />
             </SettingRow>
@@ -699,7 +699,7 @@ export function AdminSettings() {
               </div>
             </SettingRow>
             <SettingRow
-              label="模型池体检"
+              label="监控模型清单体检"
               hint="对列表里每个模型各发一次最小请求（15 秒内没回话按失败计），用已保存的配置实测，会产生少量 token 费用；改过配置先保存再测。测完能一键清掉不可用的（额度用尽、没权限、模型不存在），临时失败的会留着下次再试"
             >
               <Btn size="sm" loading={probing} onClick={runProbeAll}>

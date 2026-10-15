@@ -49,7 +49,6 @@ export function SiteFooter() {
       <div className="site-footer-meta">
         <span>© 2026 {site.name}</span>
         <span className="site-footer-meta-links">
-          <Link href="/calculator">{footer.links.calculator}</Link>
           <Link href="/history">{footer.links.history}</Link>
           <Link href="/articles">{footer.links.articles}</Link>
           <a href={CONTACT_WECOM_URL} target="_blank" rel="noreferrer">{footer.links.feedback}</a>

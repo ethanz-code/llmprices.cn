@@ -110,7 +110,7 @@ export function SiteTestButton({ site, onDone }: { site: SiteConfig; onDone?: ()
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(Date.now());
 
-  // 轮询兜底：价格腿单站硬上限 900s + 状态/公告两腿，16 分钟足够覆盖最坏情况；
+  // 轮询后备：价格链路单站硬上限 900s + 状态/公告两条链路，16 分钟足够覆盖最坏情况；
   // 超时后不再锁死弹窗，真实任务状态以后台任务列表为准
   const POLL_MAX_MS = 16 * 60 * 1000;
 
@@ -322,7 +322,7 @@ export function SiteTestButton({ site, onDone }: { site: SiteConfig; onDone?: ()
                     <p style={{ color: "var(--text-2)", margin: 0, fontSize: 13 }}>
                       {sitePriceStatus?.error
                         ? `没有解析到价格：${sitePriceStatus.error}。请确认目标模型名与站点返回的数据一致后重试。`
-                        : "没有解析到价格：请确认目标模型名与站点返回的数据一致后重试；本地解析失败时会自动交给 AI 兜底。"}
+                        : "没有解析到价格：请确认目标模型名与站点返回的数据一致后重试；本地解析失败时会自动交给 AI 后备。"}
                     </p>
                   )
                 )}

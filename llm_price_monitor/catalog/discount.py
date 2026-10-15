@@ -2,7 +2,7 @@
 
 计算为纯函数，输入输出都是 dict/list；文件 IO 由 CLI 层完成。
 站点价按记录 unit 折算 CNY，官方价按条目 currency 折算 CNY 后相除，
-汇率在分子分母同时出现，因此折扣率与汇率口径无关。
+汇率在分子分母同时出现，因此折扣率与汇率标准无关。
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ class DiscountEntry:
     official_input_cny: Any
     official_output_cny: Any
     source_url: str
-    region: str | None = None  # 折扣基准口径：cn=国内站官方价 / global=国际站官方价
+    region: str | None = None  # 折扣基准规则：cn=国内站官方价 / global=国际站官方价
     # 未取整的原始比值：sanity 判界专用。input_discount 为展示用的两位小数，
-    # 低于 0.005 的折扣会被取整成 0，判界必须用原始值（model101 x0.01 折扣组实锤）
+    # 低于 0.005 的折扣会被取整成 0，判界必须用原始值（model101 x0.01 折扣组实证）
     input_ratio: float | None = None
     output_ratio: float | None = None
 
@@ -98,13 +98,13 @@ def build_discount(
 # 下界拦"两百万/1M tokens"这类放大百万倍的换算事故；0 元价不在数值上判真伪。
 SANITY_MIN_RATIO = 0.01
 SANITY_MAX_RATIO = 20.0
-# 结构化 API 字段直采（explicit_price + network adapter）无"提取"环节，只剩单位口径
-# 风险——错位量级是千倍/百万倍，上界放宽到 500 以放行订阅池转售真价（totokens CC-MAX
+# 结构化 API 字段直采（explicit_price + network adapter）无"提取"环节，只剩单位标准
+# 风险——错位量级是千倍/百万倍，上界放宽到 500 以放行订阅套餐转售真价（totokens CC-MAX
 # 组实测约 149 倍官价，站方页面明码），千倍以上的单位错位仍拦。
 SANITY_DIRECT_MAX_RATIO = 500.0
 # 结构直采行的下界同步放宽：倍率/表达式/显式价直读同样没有提取环节，站方把某个分组
 # 定到官价 1% 以下是真事——2026-10-14 model101「限时折扣测试组」x0.01 实价 ¥0.04
-# （页面明码）撞 1% 下界被判"提取错误"两轮作废。放宽到 1e-4：÷1e6 级换算事故（1e-6）
+# （页面明码）触发 1% 下界被判"提取错误"两轮作废。放宽到 1e-4：÷1e6 级换算事故（1e-6）
 # 仍拦得住，实测真实在售最低值 1.5e-3 留 15 倍余量；页面/AI 提取行维持 1e-2 严格下界。
 SANITY_DIRECT_MIN_RATIO = 0.0001
 # 无提取环节的行按 adapter 判定（network=JSON 直采解析、browser_network=直采成功）；
@@ -113,7 +113,7 @@ _SANITY_STRUCTURED_ADAPTERS = frozenset({"network", "browser_network"})
 _SANITY_EXTRACTED_KINDS = frozenset({"page_table"})
 
 
-# 产品口径（与上面的提取校验分开）：站点价折合后**高于官方价**（折扣 > 100%）对用户没有
+# 产品决策（与上面的提取校验分开）：站点价折合后**高于官方价**（折扣 > 100%）对用户没有
 # 参考意义——「比官价还贵」中转站没有选择价值。这类行不展示、采集侧也不入快照。
 # 判定要有官方基准才成立：目录没收录/没价的条目无法比较，放行。
 ABOVE_OFFICIAL_MAX_RATIO = 1.0
@@ -144,10 +144,10 @@ def structured_direct_row(row: dict[str, Any]) -> bool:
 def sanity_violation(row: dict[str, Any], official_models: dict[str, Any], rate: float) -> str | None:
     """价格合理性校验：站点价与厂商价的比例超出可信边界时返回中文原因，正常或无法判据返回 None。
 
-    无法判据包括目录无该模型、站点无价；0 元价同样不拦——可能是真免费档，数值上分不清真伪。
+    无法判据包括目录无该模型、站点无价；0 元价同样不拦——可能是真零价，数值上分不清真伪。
     结构化直采的价（explicit_price + network adapter）数值直接来自站方接口字段，上界放宽；
     结构直采（adapter=network/browser_network、非 page_table 文本解析）的下界同样放宽——
-    这类行只有单位口径风险，站方真把某分组定到官价 0.15% 也属真价；
+    这类行只有单位标准风险，站方真把某分组定到官价 0.15% 也属真价；
     页面文本/AI 提取的价维持严格上下界。
     """
     entry, _reason = build_discount(row, official_models, rate)

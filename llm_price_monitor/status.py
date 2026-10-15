@@ -33,7 +33,7 @@ _JSON_START_PATTERN = re.compile(r"[=:=(]\s*([\[{])")
 # 状态语义键名片段：决定内嵌 JSON 候选的优先级
 _STATUS_KEY_HINTS = ("status", "state", "channel", "health", "available", "online", "可用", "渠道", "状态")
 _MAX_JSON_CANDIDATES = 50
-# 渠道条目的名字候选键：与前端 channelStatus.ts 的 NAME_KEYS 口径一致
+# 渠道条目的名字候选键：与前端 channelStatus.ts 的 NAME_KEYS 规则一致
 _CHANNEL_NAME_KEYS = ("name", "channel", "model", "model_name", "id", "title", "key")
 
 # Uptime Kuma 心跳状态码 → 状态词（前端 UP_WORDS 认 up，其余按非正常渲染）
@@ -84,7 +84,7 @@ def _kuma_transform(
     """Uptime Kuma 状态页 → 标准渠道形状（前端通用提取器直接可渲染，diff 免噪）。
 
     心跳接口只有监控 id，监控名与分组在同源 `/api/status-page/<slug>` 的
-    publicGroupList 里；配置页拉不到时降级用监控 id 兜底，心跳数据照常出。
+    publicGroupList 里；配置页拉不到时降级用监控 id 后备，心跳数据照常出。
     timeline 挂在 TIMELINE_KEYS 认识的键下，滚动窗口不进 diff；
     availability 取整为整数百分比，滚动窗口的小数漂移不刷状态事件。
     """
@@ -123,7 +123,7 @@ def _kuma_transform(
                     uptime_list,
                 )
             )
-    # 配置页没覆盖的监控（新挂/漏分组）：按 id 兜底补齐，不丢渠道
+    # 配置页没覆盖的监控（新挂/漏分组）：按 id 回退补齐，不丢渠道
     for monitor_id, beats in heartbeat_list.items():
         if monitor_id in used_ids:
             continue
@@ -182,7 +182,7 @@ def _status_from_text(text: str) -> dict[str, Any] | None:
 def ai_extract_status(
     config: AIConfig, text: str, url: str, client: httpx.Client | None = None
 ) -> dict[str, Any]:
-    """AI 兜底：把 HTML/JS 文本整理成状态 JSON 对象；页面原文不变时直接复用缓存结果。
+    """AI 后备：把 HTML/JS 文本整理成状态 JSON 对象；页面原文不变时直接复用缓存结果。
 
     走统一的换模型回退链路：抽中的模型失败自动换下一个，成败都写 AI 日志（scene=渠道状态）。
     """
@@ -280,7 +280,7 @@ def fetch_site_status(
 
 # 状态接口里时间戳类字段（滑动窗口游标等）每次轮询必变，diff 时跳过，避免噪音变化刷屏
 VOLATILE_TIME_KEYS = {"time", "timestamp", "ts", "datetime", "updated", "last_update"}
-# 数据新鲜度/覆盖窗口元数据（sub2api v2 监控的 coverage：请求窗口、落库滞后秒数、计算时刻）：
+# 数据新鲜度/覆盖窗口元数据（sub2api v2 监控的 coverage：请求窗口、写库滞后秒数、计算时刻）：
 # 随每轮滑动必变但不代表渠道状态，不进 diff，否则每轮刷「状态变化」
 VOLATILE_METADATA_KEYS = {"coverage"}
 

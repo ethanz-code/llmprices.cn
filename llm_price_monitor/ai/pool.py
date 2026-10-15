@@ -1,4 +1,4 @@
-"""模型池随机抽取与换模型降级：冷却名单、翻参重试、截断放大与 max_tokens 上限联动。"""
+"""AI 模型备选池：随机抽取与换模型降级：冷却名单、翻参重试、截断放大与 max_tokens 上限联动。"""
 from __future__ import annotations
 
 import logging
@@ -24,8 +24,8 @@ from .state import (
 
 logger = logging.getLogger(__name__)
 
-# 校验失败（空正文/坏 JSON/输出非对象）的模型短期冷却：随机抽池会让同一个惯犯模型反复被选中
-# 反复失败，纯烧时间；冷却期内选模型直接跳过，全冷却时回退全池不拒服。截断（预算问题）与
+# 校验失败（空正文/坏 JSON/输出非对象）的模型短期冷却：随机抽取备选池会让同一个惯犯模型反复被选中
+# 反复失败，纯烧时间；冷却期内选模型直接跳过，全冷却时回退全量备选池不拒服。截断（预算问题）与
 # 传输抖动（渠道问题）不冷却——那不是模型的错。进程重启清零；助手路径另有存库版 24h 冷却。
 _MODEL_COOLDOWN: dict[str, float] = {}
 _MODEL_COOLDOWN_TTL = 2 * 3600
@@ -33,10 +33,10 @@ _MODEL_COOLDOWN_TTL = 2 * 3600
 _RESPONSE_TAIL_CHARS = 500
 
 def model_pool(config: AIConfig) -> list[str]:
-    """去重后的候选模型池。"""
+    """去重后的候选模型备选池。"""
     return list(config.models)
 
-# 这类状态码多半是单个模型的问题（不支持参数、无权限、限流、上游抖动），换池子里下一个模型重试；
+# 这类状态码多半是单个模型的问题（不支持参数、无权限、限流、上游抖动），换清单里下一个模型重试；
 # 401 是密钥问题，换模型没用，直接抛。
 _MODEL_FALLBACK_STATUSES = frozenset({400, 402, 403, 404, 408, 422, 429, 500, 502, 503, 504})
 
@@ -57,9 +57,9 @@ def _max_tokens_range_error(response: httpx.Response) -> int | None:
     return int(match.group(1)) if match else None
 
 def _fallback_pool(config: AIConfig, preferred_model: str = "") -> list[str]:
-    """换模型重试共用的起点：模型池为空直接抛配置错误；返回打乱后的副本供调用方再过滤。
+    """换模型重试共用的起点：模型备选池为空直接抛配置错误；返回打乱后的副本供调用方再过滤。
 
-    preferred_model 非空时固定排在首位（不在池里也照样排，池子只作其后备），其余随机乱序。
+    preferred_model 非空时固定排在首位（不在池里也照样排，清单只作其后备），其余随机乱序。
     """
     pool = model_pool(config)
     if not pool:
@@ -70,10 +70,10 @@ def _fallback_pool(config: AIConfig, preferred_model: str = "") -> list[str]:
 
 
 def _log_pool_exhausted(scene: str, model: str, last_error_text: str, prompt_excerpt: str) -> None:
-    """模型池全部失败的整次失败补一条 error 行：成功率按最终结果统计时才不会漏掉这种失败。"""
+    """模型备选池全部失败的整次失败补一条 error 行：成功率按最终结果统计时才不会漏掉这种失败。"""
     log_ai_request(
         scene=scene, model=model, status="error", duration_ms=0,
-        error="模型池全部失败，最后一次错误 " + last_error_text, prompt_excerpt=prompt_excerpt,
+        error="模型备选池全部失败，最后一次错误 " + last_error_text, prompt_excerpt=prompt_excerpt,
     )
 
 
@@ -143,7 +143,7 @@ def request_with_model_fallback(
     deadline: float | None = None,
     preferred_model: str = "",
 ) -> tuple[str, httpx.Response]:
-    """从模型池随机抽一个开始请求，模型自身报错（见 _MODEL_FALLBACK_STATUSES）自动换下一个。
+    """从模型备选池随机抽一个开始请求，模型自身报错（见 _MODEL_FALLBACK_STATUSES）自动换下一个。
 
     preferred_model 非空时固定用它开头（价格提取用：同一站点每轮同一模型读数，避免轮间漂移），
     池内其余模型作后备。最近校验失败进冷却名单的模型先跳过（全冷却时回退全池，不拒服）。思考不可关的模型拒收
@@ -154,8 +154,8 @@ def request_with_model_fallback(
     说明是预算截断（思考 token 与正文共享 max_tokens），同模型放大预算重试一次再考虑换，
     不冷却；空正文与没顶格的坏输出才是模型的产出质量问题，进冷却名单。冷却与截断判定的
     依据都随
-    fallback 日志落库（token 用量 + finish 原因），日志里能直接看到模型实际回了什么。
-    401 属于配置级问题原样抛出；prompt 超出单模型上下文按模型级故障换下一个——池内模型上下文差异大，一个装不下不代表全部装不下；max_tokens 超出模型上限时解析上限同模型降额重试并缓存，之后的请求经 ai_request 直接按上限构造。池子耗尽时抛最后一个错误。
+    fallback 日志写库（token 用量 + finish 原因），日志里能直接看到模型实际回了什么。
+    401 属于配置级问题原样抛出；prompt 超出单模型上下文按模型级故障换下一个——清单内模型上下文差异大，一个装不下不代表全部装不下；max_tokens 超出模型上限时解析上限同模型降额重试并缓存，之后的请求经 ai_request 直接按上限构造。清单耗尽时抛最后一个错误。
     返回 (实际使用的模型, 响应)。每次尝试都写入 AI 请求日志。timeout 可覆盖配置的单次请求超时
     （如助手场景收紧死线），不传用 config.timeout。deadline 为换模型重试的总时长上界
     （time.monotonic() 时刻），超出即抛 AIExtractionError，价格提取用它与单站预算挂钩。
@@ -277,7 +277,7 @@ def request_with_model_fallback(
                     clamped = _max_tokens_range_error(exc.response)
                     current_budget = _body_token_budget(config.api_format, body, request_limit)
                     if clamped is not None and current_budget > clamped and not token_clamped:
-                        # max_tokens 超出模型上限（含截断放大后撞上限）：解析上限同模型降额重试一次并
+                        # max_tokens 超出模型上限（含截断放大后达到上限）：解析上限同模型降额重试一次并
                         # 持久化缓存；池里其他路径经 ai_request 直接按上限构造。token_clamped 防同类错死循环
                         learn_model_limit(model, clamped)
                         token_clamped = True

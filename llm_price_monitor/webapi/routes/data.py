@@ -50,7 +50,7 @@ def collect_alerts(store: Store, site_ids: set[str]) -> list[dict[str, Any]]:
 def site_config_flags(sites: Iterable[Any]) -> dict[str, dict[str, bool]]:
     """各站采集配置的布尔标志：前端「站点综合分·配置完整」一项的输入，逐项表示是否已配置。
 
-    与 /api/overview 里的 site_completeness（只剩兼容用途）是两套口径，新增项以这份为准。
+    与 /api/overview 里的 site_completeness（只剩兼容用途）是两套规则，新增项以这份为准。
     """
     return {
         site.id: {
@@ -73,7 +73,7 @@ def build_router(store: Store) -> APIRouter:
     def overview(site_id: str | None = None) -> dict[str, Any]:
         """首页数据：最新快照逐条附加官方价折扣；采集异常站点清单对访客同样公开。
 
-        site_id 可选：只保留该站的记录（站点检测详情页用它取本站在售监测集，省全量序列化）。"""
+        site_id 可选：只保留该站的记录（站点检测详情页用它取本站在售模型与分组集合，省全量序列化）。"""
         report = store.get_document("catalog")
         models, meta = catalog_models(report)
         discount_of: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
@@ -126,14 +126,14 @@ def build_router(store: Store) -> APIRouter:
             for site in load_config(store).sites
         }
         # 站点配置标志（结构化）：站点综合分里「配置完整」一项的输入，逐项布尔、前端定清单与权重。
-        # 与上面的 site_completeness 是两套口径（那一套只剩兼容用途），新增项以这份为准
+        # 与上面的 site_completeness 是两套规则（那一套只剩兼容用途），新增项以这份为准
         site_flags = site_config_flags(load_config(store).sites)
         return {
             "records": records,
             "notices": notices,
             "site_completeness": site_completeness,
             "site_flags": site_flags,
-            # 汇率口径与折扣页一致：优先实时值（拉取失败回落官方价目录缓存并标注）
+            # 汇率标准与折扣页一致：优先实时值（拉取失败回落官方价目录缓存并标注）
             "catalog": {
                 **meta,
                 **live_rate,
@@ -148,7 +148,7 @@ def build_router(store: Store) -> APIRouter:
         return store.latest_all()
 
     def display_rate() -> dict[str, Any]:
-        """事件/历史端点附带的展示汇率：快照优先、实时兜底；拿不到就不附，前端回落原币展示。"""
+        """事件/历史端点附带的展示汇率：快照优先、实时后备；拿不到就不附，前端回落原币展示。"""
         report = store.get_document("catalog")
         snapshot_rate = report.get("usd_cny_rate") if isinstance(report, dict) else None
         rate, source = fx.resolve_rate(snapshot_rate)

@@ -1741,6 +1741,94 @@ body > main {
   background: var(--tone-blue-bg);
 }
 
+/* 采集异常站点提示（价格表上方）：内容列宽内的告警条，站名 + 状态徽标逐站一座，
+   站多时在条内换行折叠——不学页面级通栏色带横穿内容区。
+   徽标底色换成面板色：黄底上再叠黄徽标会糊成一片，状态就看不出来了 */
+.collect-alert-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin-top: 6px;
+}
+
+.collect-alert-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.collect-alert-chip:hover .collect-alert-name {
+  color: var(--accent-text);
+}
+
+/* 长站名截断，悬停提示给全名（外层 <a> 的 title 用来看检测档案） */
+.collect-alert-name {
+  overflow: hidden;
+  max-width: 160px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collect-alerts .tag {
+  background: var(--panel);
+}
+
+/* 超量站点只报个数，不再继续铺徽标 */
+.collect-alert-rest {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+/* 常态风险提示条（站位建议 / 榜单口径 / 消费免责）：与出错告警分开。
+   出错告警是黄底通栏的「报警」，这里只是提醒，用白卡浮在浅灰页底上分层——
+   不加彩色条、不加描边，也不抢数据表本身的注意力。 */
+.risk-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 16px;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.75;
+  /* 与后续内容拉开一档，提示不贴着表格/表单（与 .alert 同值） */
+  margin-bottom: 20px;
+}
+
+.risk-notice-icon {
+  flex-shrink: 0;
+  margin-top: 4px;
+  color: var(--text-3);
+}
+
+.risk-notice-title {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.risk-notice-desc {
+  line-height: 1.65;
+}
+
+.risk-notice-desc:not(:first-child) {
+  margin-top: 2px;
+}
+
+/* 分行提示：每行一句，行间距小一档，读起来是并列的三条而不是一整段 */
+.risk-notice-desc p {
+  margin: 0;
+}
+
+.risk-notice-desc p + p {
+  margin-top: 3px;
+}
+
 .skel {
   border-radius: 6px;
   background: linear-gradient(

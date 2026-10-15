@@ -17,7 +17,7 @@ const TONE_TEXT: Record<"ok" | "warn" | "down", string> = {
   down: "var(--tone-red-text)",
 };
 
-/** 排序权重：异常的站浮到最前面，健康的沉底，未知/停用垫底。 */
+/** 排序权重：异常的站浮到最前面，健康的沉底，未知/停用排最后。 */
 function sortWeight(site: GlobeSite): number {
   if (site.availability != null) {
     const level = rateLevel(site.availability);

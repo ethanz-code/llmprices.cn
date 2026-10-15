@@ -1,4 +1,4 @@
-"""采集结果落库：历史/事件/快照的复查-写入原子写入与并发轮次去重。"""
+"""采集结果写库：历史/事件/快照的复查-写入原子写入与并发轮次去重。"""
 from __future__ import annotations
 
 from typing import Any
@@ -18,11 +18,11 @@ def _persist_latest(
     removed_keys: set[str] | None = None,
     touched_keys: set[str] | None = None,
 ) -> None:
-    """写回最新快照；replace_latest 只做 upsert，分组下线摘除的 key 需要显式删行。
+    """写回最新快照；replace_latest 只做 upsert，分组下线移除的 key 需要显式删行。
     顺带清理历史遗留的无价占位行——现行采集不再产出占位记录，
     快照里残留的无价行都是旧版本（或旧库）留下的，保留只会在定价页造成同模型重复。
     touched_keys 限定本轮真正写过的 key：本轮开始时读到的其他站点行可能已被并行采集更新，
-    拿旧值比对"内容变了"会把这些行回写覆盖，也可能把并发轮次刚摘除的分组复活。"""
+    拿旧值比对"内容变了"会把这些行回写覆盖，也可能把并发轮次刚移除的分组复活。"""
     # 订阅套餐行（套餐制站）本身无 token 价，不属于要清的占位行
     stale_keys = [
         key
@@ -63,9 +63,9 @@ def _event_snapshot_key(event: dict[str, Any]) -> str:
 def _drop_persisted_events(
     events: list[dict[str, Any]], fresh_latest: dict[str, dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """丢掉已被并发轮次落库的价格事件：测试采集与全量采集并行时（tasks.COLLECT_KINDS 特意放行），
+    """丢掉已被并发轮次写库的价格事件：测试采集与全量采集并行时（tasks.COLLECT_KINDS 特意放行），
     两路可能对同一份旧快照各自检出同一变化——快照里该 key 的指纹已经等于事件 current，
-    或分组下线时 key 已被摘除，都说明另一路记录过同一变化，再写只会在事件流里出重复卡片。"""
+    或分组下线时 key 已被移除，都说明另一路记录过同一变化，再写只会在事件流里出重复卡片。"""
     kept: list[dict[str, Any]] = []
     for event in events:
         key = _event_snapshot_key(event)
@@ -80,7 +80,7 @@ def _drop_persisted_events(
 
 
 def _drop_persisted_notice_events(events: list[dict[str, Any]], store: Store) -> list[dict[str, Any]]:
-    """公告事件同口径去重：库里该站点最新公告正文已等于事件正文，说明并发轮次已记录。"""
+    """公告事件同一套规则去重：库里该站点最新公告正文已等于事件正文，说明并发轮次已记录。"""
     kept: list[dict[str, Any]] = []
     for event in events:
         notice = store.latest_notice(event["site_id"])
@@ -101,8 +101,8 @@ def _persist_scan_results(
     notice_records: list[dict[str, Any]] | None = None,
     notice_events: list[dict[str, Any]] | None = None,
 ) -> None:
-    """价格/公告采集结果统一落库。
-    复查与写入在同一把锁内完成：后落库的一路必然看到先落库一路的快照与事件，
+    """价格/公告采集结果统一写库。
+    复查与写入在同一把锁内完成：后写库的一路必然看到先写库一路的快照与事件，
     同一变化只入库一次；锁外再做的只有 collect_status / 健康档案合并（自有锁）。
     入参 events 只被去重后的结果写入库里，报告仍带本轮原始观测（弹窗如实回显）。"""
     with _PERSIST_LOCK:

@@ -6,9 +6,9 @@ AA 榜单页是服务端渲染的 Next.js 页面，269 行模型数据全部内�
 Median Tokens/s、Latency First Chunk、Total Response、Further Analysis。
 
 行序即排名（按指数降序）；同一基础模型的推理档位变体（-xhigh / -high / -low
-后缀）各占一行、slug 唯一。Cost per Task 是 AA 的复合任务成本口径，不是每百
+后缀）各占一行、slug 唯一。Cost per Task 是 AA 的复合任务成本规则，不是每百
 万 token 价，榜单仅作展示、不与目录价格混用。解析对结构严格：缺列/多余行一
-律报错，不兜底。
+律报错，不后备。
 """
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def parse_leaderboard(html: str) -> dict[str, Any]:
 
 
 def fetch_rankings(*, transport: httpx.BaseTransport | None = None) -> dict[str, Any]:
-    """抓取 AA 榜单页并解析为排名文档；不落盘，持久化由调用方决定。"""
+    """抓取 AA 榜单页并解析为排名文档；不写盘，持久化由调用方决定。"""
     with build_client(timeout=30, transport=transport) as client:
         response = client.get(AA_LEADERBOARD_URL)
         response.raise_for_status()

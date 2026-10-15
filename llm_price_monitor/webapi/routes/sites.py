@@ -21,10 +21,10 @@ class SiteBody(BaseModel):
 
 
 def _persist_refreshed_tokens(store: Store, site_id: str, access_token: str, refresh_token: str) -> None:
-    """测试续签也会真实消耗一次轮换凭据（旧值已作废）：换新的两个 token 立即落库。
+    """测试续签也会真实消耗一次轮换凭据（旧值已作废）：换新的两个 token 立即写库。
 
     否则用户在编辑弹窗里点测试后中途取消，新凭证只留在浏览器内存里，下次续签
-    拿着已作废的旧值去撞必然 401，只能回浏览器重新抓。access_token 与 refresh_token
+    拿着已作废的旧值去请求必然 401，只能回浏览器重新抓。access_token 与 refresh_token
     一起写：取消后站点上的采集请求头也还是刚验过有效的那个，而不是旧到期的。
     其余字段仍以用户点保存的草稿为准。
     """
@@ -49,7 +49,7 @@ def _validated_site_config(config: dict[str, Any]) -> dict[str, Any]:
 def _apply_token_sample(store: Store, config: dict[str, Any]) -> str | None:
     """续签配置带响应案例时，保存现场用 AI 分析出新 token 的字段路径并写入配置。
 
-    案例（response_sample）只用于分析，不落库；分析失败不阻塞保存，返回提示语，续签时
+    案例（response_sample）只用于分析，不写库；分析失败不阻塞保存，返回提示语，续签时
     会退回按常见结构自动探测。返回 None 表示一切正常。
     """
     refresh = config.get("token_refresh")
@@ -114,7 +114,7 @@ def build_router(store: Store) -> APIRouter:
             store.rename_site(site_id, new_id)
         warning = _apply_token_sample(store, config)
         store.upsert_site(new_id, config)
-        # 分组过滤从无到有或口径变化时，把库里未选中分组的历史状态与价格数据一并清掉（不可逆）
+        # 分组过滤从无到有或标准变化时，把库里未选中分组的历史状态与价格数据一并清掉（不可逆）
         cleaned: dict[str, int] | None = None
         new_groups = _status_groups(config)
         if new_groups and new_groups != _status_groups(old_config):
@@ -135,7 +135,7 @@ def build_router(store: Store) -> APIRouter:
 
         成功返回完整的新 token，由前端回填编辑表单，保存后生效。
         注意轮换型站点的 refresh_token 一次性：测试这一下就把旧值作废了，
-        所以换新的 access_token 与 refresh_token 在这里立即落库（站点已存在时），
+        所以换新的 access_token 与 refresh_token 在这里立即写库（站点已存在时），
         前端取消也不丢凭证链。
         """
         try:
@@ -172,7 +172,7 @@ def build_router(store: Store) -> APIRouter:
     def site_homepages() -> dict[str, Any]:
         """站点首页覆盖表（site_id → 配置的首页地址，只含配过的站）。
 
-        公开页面的站名链接用它替换「来源 URL 域名」兜底：入口在 API 子域、
+        公开页面的站名链接用它替换「来源 URL 域名」后备：入口在 API 子域、
         来源域名不是可看页面的站点（如 4aicode）靠它链到真实首页。没配的站不进表。
         """
         config = config_from_store(store)
@@ -234,7 +234,7 @@ def build_router(store: Store) -> APIRouter:
             raise HTTPException(status_code=404, detail="这个站点还没有截图") from exc
         if not path.is_file():
             raise HTTPException(status_code=404, detail="这个站点还没有截图")
-        # 浏览器按地址缓存，地址里的版本参数变了才重新取；这里再标不可协商缓存兜底
+        # 浏览器按地址缓存，地址里的版本参数变了才重新取；这里再标不可协商缓存回退
         return FileResponse(path, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
     @router.delete("/api/sites/{site_id}")

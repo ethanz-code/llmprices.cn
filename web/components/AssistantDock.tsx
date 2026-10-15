@@ -16,7 +16,7 @@ type ChatSession = { id: string; title: string; updatedAt: number; messages: Cha
 
 /** 悬浮球与视口边缘的最小留白 */
 const FAB_EDGE = 12;
-/** 气泡尚未渲染时的兜底尺寸（首次夹取用），实际以量到的渲染尺寸为准 */
+/** 气泡尚未渲染时的后备尺寸（首次夹取用），实际以量到的渲染尺寸为准 */
 const FAB_FALLBACK_SIZE = { width: 42, height: 42 };
 
 /** 空态建议问题：按能力准备的三类示范，每批展示 3 条，可换一批 */

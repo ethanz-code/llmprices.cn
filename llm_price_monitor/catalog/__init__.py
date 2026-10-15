@@ -5,7 +5,7 @@
 
 - `jsonio`：JSON 文件读写缓存
 - `normalize`：模型名归一化与数值取整
-- `fx`：USD→CNY 汇率（实时获取 + 缓存兜底）
+- `fx`：USD→CNY 汇率（实时获取 + 缓存回退）
 - `modelsdev`：models.dev api.json 同步与官方价目录映射
 - `discount`：站点价格 vs 官方价的折扣计算
 """

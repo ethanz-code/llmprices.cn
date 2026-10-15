@@ -1,4 +1,4 @@
-/** 渠道点阵懒加载的服务端点：列表页不再内嵌渠道数据，行进入视口后由浏览器来这儿按需取。
+/** 检测点阵懒加载的服务端点：列表页不再内嵌渠道数据，行进入视口后由浏览器来这儿按需取。
  *  只拉「够画点阵」的条数（每站最近 45 条），按 站点+分组 短缓存，避免翻页/回退时反复拉。 */
 import { NextResponse, type NextRequest } from "next/server";
 import { fetchSiteStatus } from "@/lib/statusData";

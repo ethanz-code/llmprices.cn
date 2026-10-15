@@ -137,7 +137,7 @@ def _locate_ips(ips: list[str]) -> None:
 
 
 def _host_of(config: dict[str, Any]) -> str | None:
-    """从站点配置里取第一个可用域名：network.url 优先，source_url 兜底。"""
+    """从站点配置里取第一个可用域名：network.url 优先，source_url 后备。"""
     for url in (config.get("network", {}).get("url"), config.get("source_url")):
         if isinstance(url, str) and url.strip():
             host = urlsplit(url).hostname

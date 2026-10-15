@@ -22,7 +22,7 @@ _STATUS_CACHE_TTL = 60.0
 _STATUS_CACHE_MAX = 512
 
 # 列表页渠道视图：算一次要读 21 站原始快照（约 49MB）+ 解析，冷算 5–6 秒，不能放在请求路径上。
-# 改为算好落库、接口只读这份文档；过期（超过 TTL）时后台线程刷一次，请求永远拿现成的。
+# 改为算好写库、接口只读这份文档；过期（超过 TTL）时后台线程刷一次，请求永远拿现成的。
 _VIEWS_DOC = "site_views"
 _VIEWS_TTL = 300.0
 _VIEWS_PER_SITE = 400
@@ -33,8 +33,8 @@ _views_refreshing = False
 
 
 def _monitored_sets(store: Store) -> dict[str, set[str]]:
-    """在售监测集：从与 /api/overview 同口径的最新价格行（已剔除站价高于官价的记录）构建，
-    保证列表页的渠道过滤口径与详情页一致——渠道行只留对得上在售模型/分组的行。"""
+    """在售模型与分组集合：从与 /api/overview 同一套规则的最新价格行（已剔除站价高于官价的记录）构建，
+    保证列表页的渠道过滤规则与详情页一致——渠道行只留对得上在售模型/分组的行。"""
     report = store.get_document("catalog")
     models, _meta = catalog_models(report)
     rate: float | None = None
@@ -62,14 +62,14 @@ def _monitored_sets(store: Store) -> dict[str, set[str]]:
 
 
 def _compute_site_views(store: Store) -> dict[str, Any]:
-    """算一份全站列表视图：读近 7 天每站最近 400 条快照，解析成渠道行/可用率/时段桶。"""
+    """算一份全站列表视图：读近 7 天每站最近 400 条快照，解析成渠道行/可用率/时段分桶。"""
     since = int((time.time() - _VIEWS_WINDOW_SECONDS) // 60 * 60)
     records, _total = store.read_status(per_site=_VIEWS_PER_SITE, since=since)
     return build_site_views(records, _monitored_sets(store))
 
 
 def _refresh_site_views(store: Store) -> None:
-    """后台线程用：算好并落库，再放掉刷新中标志。"""
+    """后台线程用：算好并写库，再放掉刷新中标志。"""
     global _views_refreshing
     try:
         store.set_document(_VIEWS_DOC, {"at": time.time(), "views": _compute_site_views(store)})
@@ -103,7 +103,7 @@ def build_router(store: Store) -> APIRouter:
             site_id=site_id, limit=limit, per_site=per_site, since=since, max_records=max_records
         )
         payload = json.dumps({"records": records, "total": total}, ensure_ascii=False).encode("utf-8")
-        # 简单防膨胀：条目过多时整体清空（键数量本就有界，这里只是兜底）
+        # 简单防膨胀：条目过多时整体清空（键数量本就有界，这里只是回退）
         if len(_STATUS_CACHE) >= _STATUS_CACHE_MAX:
             _STATUS_CACHE.clear()
         _STATUS_CACHE[key] = (now, payload)
@@ -115,10 +115,10 @@ def build_router(store: Store) -> APIRouter:
 
     @router.get("/api/status/views")
     def status_views() -> dict[str, Any]:
-        """列表页渠道视图：读落库的算好结果，请求路径上不现算。
+        """列表页渠道视图：读写库的算好结果，请求路径上不现算。
 
         原先首页/总览要逐站拉最近 400 条原始快照（21 站合计约 49MB，内含站点上游整包 JSON）
-        再在 Node 里解析；这里把同样的解析搬到后端并落库缓存（口径见 llm_price_monitor/status_views.py），
+        再在 Node 里解析；这里把同样的解析搬到后端并写库缓存（标准见 llm_price_monitor/status_views.py），
         原始 JSON 不出后端、解析也不在请求路径上。首次（库还没这份文档）同步算一次，之后只读；
         超过 TTL 由后台线程刷新，请求永远拿现成结果。"""
         global _views_refreshing

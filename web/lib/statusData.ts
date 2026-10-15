@@ -1,10 +1,10 @@
 /** 渠道检测数据统一取数入口：凡是要展示渠道统计的页面（首页、总览、站点详情）都从这里取，
- *  口径只有一份——每站最近 400 条、近 7 天。
+ *  标准只有一份——每站最近 400 条、近 7 天。
  *
  *  列表页（首页/总览）走 /api/status/views：后端一次把各站的渠道行（不含点阵）、可用率序列与
- *  时段桶算好返回。曾经是逐站拉最近 400 条原始快照（21 站合计约 49MB，内含站点上游整包 JSON）
+ *  时段分桶算好返回。曾经是逐站拉最近 400 条原始快照（21 站合计约 49MB，内含站点上游整包 JSON）
  *  再在 Node 里解析——瓶颈是这 49MB 的传输与解析，不是请求个数，所以把解析搬到后端、原始 JSON
- *  一步不出后端。解析口径与 lib/channelStatus.ts 由 llm_price_monitor/status_views.py 对齐，
+ *  一步不出后端。解析规则与 lib/channelStatus.ts 由 llm_price_monitor/status_views.py 对齐，
  *  两边数字一致（后端 tests/test_status_views.py 与前端 channelStatus.test.ts 用例一一对应）。
  *  详情页仍拉单站原始快照、前端解析（fetchSiteStatus），因为详情页要画点阵与延迟趋势。 */
 import { apiGet } from "./api";
@@ -22,7 +22,7 @@ export function statusSince(): number {
   return Math.floor((Date.now() / 1000 - STATUS_WINDOW_SECONDS) / 60) * 60;
 }
 
-/** 单站拉取：参数与站点详情页逐字相同，是「详情页口径」的本体。
+/** 单站拉取：参数与站点详情页逐字相同，是「详情页标准」的本体。
  *  limit 可调小：只画最近几十个点的场景（总览点阵懒加载）没必要拉满 400 条。 */
 export async function fetchSiteStatus(
   siteId: string,
@@ -36,13 +36,13 @@ export async function fetchSiteStatus(
   return data.records ?? [];
 }
 
-/** 列表页渠道视图：一个请求拿全站算好的可用率/时段桶/渠道成功率。
+/** 列表页渠道视图：一个请求拿全站算好的可用率/时段分桶/渠道成功率。
  *
  *  进程内缓存 + stale-while-revalidate：渠道按采集周期（分钟级）才更新，几分钟内没必要重拉。
  *  有旧结果时永远直接给旧结果、后台刷新（刷新在飞时也不再重复开），于是任何一次访问都不等后端
  *  现算，最坏只差一个周期的新鲜度；只有进程刚起、还没有任何结果时才等一次。
  *  缓存的是「一次计算结果」而非 HTTP 响应，失败即弃缓存，不会把页面钉在旧数据上。
- *  第二个参数仅为兼容旧调用签名（在售监测集改由后端内部构建），此处忽略。 */
+ *  第二个参数仅为兼容旧调用签名（在售模型与分组集合改由后端内部构建），此处忽略。 */
 export async function loadStatusViews(headers?: HeadersInit, _overview?: unknown): Promise<SiteStats> {
   const now = Date.now();
   if ((now - viewsCache.at >= STATUS_VIEWS_TTL_MS || viewsCache.value === null) && !viewsCache.refreshing) {

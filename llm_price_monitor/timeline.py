@@ -146,7 +146,7 @@ def change_matches_groups(change: Any, reference_data: Any, groups: list[str]) -
 def strip_status_delta(previous: Any, current: Any, *, timeline_key: str | None = None) -> Any:
     """把 current 里与 previous 重复的时间线条目裁掉（按检测时间戳判定），返回裁剪后的结构。
 
-    结构并行走：普通列表按条目名字对齐（站点可能改分组顺序），名字缺失按位置兜底。
+    结构并行走：普通列表按条目名字对齐（站点可能改分组顺序），名字缺失败按位置回退。
     没有任何可裁内容时原对象返回（identity 相等），调用方据此跳过重写。"""
     if isinstance(current, dict):
         if not isinstance(previous, dict):

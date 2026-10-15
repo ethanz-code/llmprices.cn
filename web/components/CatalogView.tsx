@@ -36,7 +36,7 @@ export function CatalogView({
 }: {
   official: CatalogData | null;
   all: CatalogAllPage | null;
-  /** AA 榜单匹配索引：模型名 → 排名/智能指数，官方定价表里给条目挂徽标用 */
+  /** AA 榜单匹配索引：模型名 → 排名/综合评分，官方定价表里给条目挂徽标用 */
   rankingsIndex?: Record<string, RankingHit>;
   initialView?: CatalogViewKey;
   page: number;

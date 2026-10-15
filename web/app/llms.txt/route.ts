@@ -1,4 +1,4 @@
-/** /llms.txt：给大模型的站点索引（llmstxt.org 口径），内容构造见 lib/llms。 */
+/** /llms.txt：给大模型的站点索引（llmstxt.org 标准），内容构造见 lib/llms。 */
 import { apiGetOptional } from "@/lib/api";
 import { buildLlmsTxt } from "@/lib/llms";
 import { siteOrigin } from "@/lib/seo";

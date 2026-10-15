@@ -30,7 +30,7 @@ export function Reveal({ children }: { children: ReactNode }) {
       { threshold: 0.1, rootMargin: "0px 0px -48px" },
     );
     io.observe(el);
-    // 兜底：水合慢或 IO 迟迟不回调时强制显示——暗色下区块隐着就是整片黑，不能空太久
+    // 后备：水合慢或 IO 迟迟不回调时强制显示——暗色下区块隐着就是整片黑，不能空太久
     const failsafe = setTimeout(() => setInView(true), 2500);
     return () => {
       io.disconnect();

@@ -39,7 +39,7 @@ from .errors import (
     fit_text,
 )
 
-NEWAPI_ONEAPI_PRICING_GUIDANCE = """你正在分析中转站的价格接口响应（one-api/new-api 及各种自研结构）。自己判断响应的组织方式和价格字段：从原始 JSON 里找到目标模型的价格节点，按字段名和数量级判断单价口径（每 token 还是每 1M tokens，必要时换算成 CNY/1M tokens），同一模型的多份价格（分组/阶梯）逐个展开各输出一条。只使用证据里的数据，不得把倍率、余额或官方参考价冒充实际价格；拿不准口径就在 notes 写明推断依据并标 candidate，不要因此放弃。"""
+NEWAPI_ONEAPI_PRICING_GUIDANCE = """你正在分析中转站的价格接口响应（one-api/new-api 及各种自研结构）。自己判断响应的组织方式和价格字段：从原始 JSON 里找到目标模型的价格节点，按字段名和数量级判断单价标准（每 token 还是每 1M tokens，必要时换算成 CNY/1M tokens），同一模型的多份价格（分组/阶梯）逐个展开各输出一条。只使用证据里的数据，不得把倍率、余额或官方参考价冒充实际价格；拿不准标准就在 notes 写明推断依据并标 candidate，不要因此放弃。"""
 
 # 证据超长被供应商拒绝时，按阶梯收紧单条证据文本上限逐级重试；None 表示不限制。
 EVIDENCE_CHAR_LADDER: tuple[int | None, ...] = (None, 240_000, 96_000, 40_000, 16_000)
@@ -57,7 +57,7 @@ AI_EXTRACT_CONCURRENCY = 4
 # 整轮预算 = 600 × 并行波次数（批间 4 路并行，墙钟按波次算而不是按批次数线性放大），
 # 再钳到 SITE_AI_BUDGET_MAX_SECONDS 封顶：站点采集有 900s 硬上限（report.timeouts），
 # 预算若超过它，硬超时会先把整站连同已完成批次一起作废，「超预算保留已完成批次」
-# （直采兜底承接剩余模型）就永远没机会生效。一个批次都没成才按失败上报该站。
+# （直采回退承接剩余模型）就永远没机会生效。一个批次都没成才按失败上报该站。
 SITE_AI_BUDGET_SECONDS = 600
 SITE_AI_BUDGET_MAX_SECONDS = 840.0
 
@@ -90,7 +90,7 @@ def _alias_mappings(
     """对照结果收紧：只留目标集合内的标准名，原始名与别名都必须真实出现在站点名单里。
 
     对照表只用于和站点接口名单做匹配，名单外的值是模型幻觉——留着匹配不上是废料，
-    万一撞名还会把别的模型的价格挂到目标头上，必须丢弃。
+    万一重名还会把别的模型的价格挂到目标头上，必须丢弃。
     """
     details: dict[str, dict[str, Any]] = {}
     for item in mappings:
@@ -376,7 +376,7 @@ expected_models：
         # 批越大，每批重复发送的系统提示与规则（数 K tokens）和调用开销省得越多
         batch_size = max(AI_EXTRACT_BATCH_SIZE, min(12, _ai.AI_MAX_TOKENS // 1200))
         # 整轮预算按并行波次折算再封顶：批间 AI_EXTRACT_CONCURRENCY 路并行，墙钟预算
-        # 是「批次数 × 600s」串行口径的 1/并发数；封顶保证硬超时（900s）不抢先作废整站
+        # 是「批次数 × 600s」串行规则的 1/并发数；封顶保证硬超时（900s）不抢先作废整站
         batch_count = max(1, -(-len(expected) // batch_size))
         waves = max(1, -(-batch_count // AI_EXTRACT_CONCURRENCY))
         budget_seconds = min(_ai.SITE_AI_BUDGET_SECONDS * waves, _ai.SITE_AI_BUDGET_MAX_SECONDS)
@@ -658,7 +658,7 @@ expected_models：
                     break
             if input_price is not None or output_price is not None:
                 # 价格数字必须在证据文本中真实出现过：名字校验会被残留文案绕过（DaiTuAI 已下线的
-                # Kimi 分组描述里仍写着 kimi-k3），AI 还会张冠李戴（实测把 gpt-5.4-mini 的
+                # Kimi 分组描述里仍写着 kimi-k3），AI 还会价格错配（实测把 gpt-5.4-mini 的
                 # ¥0.11/¥0.68 安给页面上不存在的 step-3.5-flash）。证据里没有的数字一律作废；
                 # searchable 是系统侧证据原文（AI 事后补写的引用不算），编 quote 无法自证
                 searchable_cf = searchable.casefold()
@@ -696,8 +696,8 @@ expected_models：
                 item["notes"] = f"网络证据未同时包含模型列表中的模型和输入/输出价格；{item.get('notes', '')}".strip()
             if status == "unavailable" and (input_price is not None or output_price is not None):
                 # AI 自报"没有可靠价格"却照提示词模板把数值抄成 0（"0"字符几乎总在证据里，
-                # 数字在证闸门拦不住）：unavailable 是终态，占位行不得携带数值价格，
-                # 否则 0/0 会以 candidate 落库，首页最低价挑选把无数据模型渲染成 ¥0 假免费价
+                # 数字在证校验拦不住）：unavailable 是终态，占位行不得携带数值价格，
+                # 否则 0/0 会以 candidate 写库，首页最低价挑选把无数据模型渲染成 ¥0 假免费价
                 input_price = None
                 output_price = None
                 item.pop("pricing_rules", None)
@@ -726,7 +726,7 @@ expected_models：
             currency = item.get("currency")
             unit = str(item.get("unit") or "来源未说明单位")
             # 币种标识以系统侧证据原文为准（searchable=系统页面文本+响应体），AI 自报的
-            # quote 不算自证——与数字在证闸门同一信任边界
+            # quote 不算自证——与数字在证校验同一信任边界
             system_casefold = searchable.casefold()
             has_usd_marker = any(marker in system_casefold for marker in ("$", "usd", "美元", "dollar"))
             if (input_price is not None or output_price is not None) and (

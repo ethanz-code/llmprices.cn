@@ -142,9 +142,9 @@ export function OverviewTable({
         priced: true,
       });
     }
-    // 目录口径排序（厂商分块+发布倒序，与站点管理监控模型多选同一套）：同厂商的模型
-    // 挨在一起，目录没收录的模型（站点自有命名）垫底按名称；页面没传目录索引时退化为纯名称序。
-    // 订阅套餐统一项固定垫底（不是某个模型，入口性质）
+    // 目录排序排序（厂商分块+发布倒序，与站点管理监控模型多选同一套）：同厂商的模型
+    // 挨在一起，目录没收录的模型（站点自有命名）排在最后按名称；页面没传目录索引时退化为纯名称序。
+    // 订阅套餐统一项固定排最后（不是某个模型，入口性质）
     const compare = modelOrderCompare(modelOrder);
     groups.sort((a, b) => compare({ key: a.key, name: a.model }, { key: b.key, name: b.model }));
     groups.sort((a, b) => Number(a.key === SUBSCRIPTION_GROUP_KEY) - Number(b.key === SUBSCRIPTION_GROUP_KEY));
@@ -218,13 +218,13 @@ export function OverviewTable({
   }, [activeModel, modelReady, models]);
 
   // 默认行序：行综合分（价格按本模型内归一 + 站点级渠道稳定/配置完整/公告新鲜 − 数据滞后扣分；
-  // 见 lib/siteRanking）高者在前，同站或同分再按综合价、折扣、抓取时间破平。
+  // 见 lib/siteRanking）高者在前，同站或同分再按加权单价、折扣、抓取时间破平。
   // 点表头排序循环回"无排序"即回到此序。
   const parentRows = useMemo(
     () =>
       smartOrderRows(
         active?.rows ?? [],
-        // 数据滞后已并入行综合分（siteRanking.stalenessPenalty），这里不再重复扣，按纯综合价破平
+        // 数据滞后已并入行综合分（siteRanking.stalenessPenalty），这里不再重复扣，按纯加权单价破平
         () => 0,
         rate,
         (row) => rowRankScore(siteRanking, row),
@@ -256,11 +256,11 @@ export function OverviewTable({
       ),
       dataIndex: "site_id",
       // 固定宽度贴住内容（站名+分），不设宽会在 fixed 布局里与公告列平分剩余空间、
-      // 站名后面拖出一大段空白；富余宽度让公告列（文本）吸收，手机端由 mobileScrollX 兜底
+      // 站名后面拖出一大段空白；富余宽度让公告列（文本）吸收，手机端由 mobileScrollX 回退
       width: 150,
       render: (v: string, row) => {
         const site = getSiteInfo(v, row.source_url, siteHomepages);
-        // 状态列已去掉：确认/候选/规则价是常态不挂标签；需认证/无数据挂标签
+        // 状态列已去掉：确认/候选/推算价是常态不挂标签；需认证/无数据挂标签
         const statusKey = recordStatusKey(row);
         const showTag = statusKey === "auth_required" || statusKey === "unavailable";
         const meta = statusMeta(statusKey);
@@ -269,13 +269,13 @@ export function OverviewTable({
           .filter(Boolean)
           .join("\n") || undefined;
         // 行综合分只在每站首行显示：整表一次只展示一个模型，同站各分组行的分必然相同，
-        // 逐行重复是噪音（与公告列同口径）
+        // 逐行重复是噪音（与公告列同一套规则）
         const score =
           siteRanking && firstRowKeys.has(rowKeyOf(row)) ? rowScore(siteRanking, row) : null;
         return (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, maxWidth: "100%", flexWrap: "wrap" }}>
             <RiskLink href={site.homepage || row.source_url} variant="site" title={site.name}>
-              {/* 列宽固定后长名靠省略号兜底，完整名字走悬停提示 */}
+              {/* 列宽固定后长名靠省略号截断，完整名字走悬停提示 */}
               <span
                 className="mono"
                 style={{ display: "inline-block", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}
@@ -476,7 +476,7 @@ export function OverviewTable({
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <span className="mono" style={{ fontSize: 12, color: "var(--text-3)" }}>
                     评测排名 #{hit.rank}
-                    {hit.intelligence_index != null && ` · 智能指数 ${hit.intelligence_index}/100`}
+                    {hit.intelligence_index != null && ` · 综合评分 ${hit.intelligence_index}/100`}
                   </span>
                   <TermTip term="aa_rank" />
                 </span>

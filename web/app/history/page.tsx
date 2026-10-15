@@ -20,7 +20,7 @@ export default async function HistoryPage() {
   let feed: FeedData | null = null;
   let history: HistoryListData | null = null;
   let error: string | null = null;
-  // 站点首页覆盖表：事件卡站名外链用；拉取失败退回内置映射/来源域名兜底
+  // 站点首页覆盖表：事件卡站名外链用；拉取失败退回内置映射/来源域名后备
   let siteHomepages: SiteHomepages = {};
   try {
     // 事件流已由 /api/feed 统一合并（价格+公告），历史记录独立取

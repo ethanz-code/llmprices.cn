@@ -1,4 +1,4 @@
-"""站点截图：地址推导、落盘与元数据、失败保留旧图、读取接口与删站清理。
+"""站点截图：地址推导、写盘与元数据、失败保留旧图、读取接口与删站清理。
 
 不真启动浏览器：capture_screenshot 全部用 monkeypatch 替身。
 """
@@ -42,7 +42,7 @@ def test_site_homepage_derives_origin_root():
 
 
 def test_site_homepage_rejects_non_http_url():
-    """采集地址不是网页时（配置校验层会拦，这里兜底）不产出截图地址。"""
+    """采集地址不是网页时（配置校验层会拦，这里回退）不产出截图地址。"""
     from llm_price_monitor.config import SiteSpec
 
     spec = SiteSpec(id="a", network={"url": "ftp://a.test/x"})

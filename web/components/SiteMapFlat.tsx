@@ -17,7 +17,7 @@ export interface GlobeSite {
   name: string;
   models: number;
   enabled: boolean;
-  /** 最新时段区块平均正常率（0–100，与详情页时段色块同口径）；未接入渠道检测为 null */
+  /** 最新时段区块平均正常率（0–100，与详情页时段色块同一套规则）；未接入渠道检测为 null */
   availability: number | null;
   down: number;
   checks: number;

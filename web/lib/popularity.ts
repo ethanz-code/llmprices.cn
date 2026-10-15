@@ -15,7 +15,7 @@ export interface SiteGroup {
   label: string;
   /** Telegram 群/频道成员数（t.me 公开预览页，真实数字） */
   members?: number;
-  /** 成员数口径：members = 群成员，subscribers = 频道订阅（t.me 预览页原词） */
+  /** 成员数规则：members = 群成员，subscribers = 频道订阅（t.me 预览页原词） */
   members_kind?: "members" | "subscribers";
   online?: number;
   title?: string;
@@ -50,7 +50,7 @@ export async function loadSitePopularity(): Promise<SitePopularityMap> {
   }
 }
 
-/** 数量级缩写统一走 lib/format 的 formatCompact（9.5k / 134.7k / 1.2M），全站一套英文口径。 */
+/** 数量级缩写统一走 lib/format 的 formatCompact（9.5k / 134.7k / 1.2M），全站一套英文写法。 */
 
 /** 群平台展示名。 */
 export function groupPlatformLabel(type: string): string {
@@ -113,7 +113,7 @@ export function popularityBadge(popularity?: SitePopularity | null): PopularityB
   return { lines, title: parts.join("\n") };
 }
 
-/** 人气列的排序值：与 siteRanking 的 popularity 分项同口径（月访问量/群人数/排名取最优，0–1），
+/** 人气列的排序值：与 siteRanking 的 popularity 分项同一套规则（月访问量/群人数/排名取最优，0–1），
  *  让表格的列排序与综合分排序一致。 */
 export function popularitySortValue(popularity?: SitePopularity | null): number {
   if (!popularity) return 0;

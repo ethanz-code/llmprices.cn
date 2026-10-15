@@ -13,7 +13,7 @@ export function CatalogEmptyState() {
   const [gaveUp, setGaveUp] = useState(false);
 
   useEffect(() => {
-    // 首次启动后端会自动同步目录；这里轮询等它落库，就绪后刷新服务端页面。
+    // 首次启动后端会自动同步目录；这里轮询等它写库，就绪后刷新服务端页面。
     // 递归 setTimeout 而不是 setInterval：上一轮请求没返回时不叠新请求；
     // 重试到上限后停止并明说，别让「就绪后自动刷新」变成永远不来的承诺
     let alive = true;

@@ -26,7 +26,7 @@ def build_router(store: Store) -> APIRouter:
 
     @router.get("/api/ai-logs/summary")
     def ai_logs_summary() -> dict[str, Any]:
-        """AI 调用统计聚合（管理员）：KPI、按天趋势与场景/模型分布，口径为全部保留记录。"""
+        """AI 调用统计聚合（管理员）：KPI、按天趋势与场景/模型分布，范围为全部保留记录。"""
         return store.ai_logs_summary()
 
     @router.get("/api/ai-logs/{log_id}")

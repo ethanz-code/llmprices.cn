@@ -1,4 +1,4 @@
-/** llms.txt 出口：给大模型看的站点说明书（llmstxt.org v2 口径：H1 + blockquote + H2 链接清单）。
+/** llms.txt 出口：给大模型看的站点说明书（llmstxt.org v2 规则：H1 + blockquote + H2 链接清单）。
  *  llms.txt 保持小索引，llms-full.txt 是完整版；文案统一取自 lib/copy，避免与页面措辞漂移。 */
 import { getArticles } from "@/lib/articles";
 import { home, site } from "@/lib/copy";
@@ -10,7 +10,7 @@ const PAGES = [
   { path: "/", name: "首页", note: "最新价格速览、检测站点健康度、模型榜单与常见问题" },
   { path: "/overview", name: "中转站定价", note: "全部检测站点与模型的价格对照总表，每条价格附来源链接" },
   { path: "/catalog", name: "厂商定价", note: "AI 厂商官方目录价与全量渠道比价，可切换视图" },
-  { path: "/rankings", name: "模型榜单", note: "第三方评测的智能指数排名" },
+  { path: "/rankings", name: "模型榜单", note: "第三方评测的综合评分排名" },
   { path: "/history", name: "事件追踪", note: "价格变动与站点公告的时间线事件流" },
   { path: "/discover", name: "新站发现", note: "自动收录的中转站清单：站点简介、7 天可用率与响应耗时、是否已纳入监控" },
   { path: "/calculator", name: "花费计算", note: "按单价与用量估算花费，支持缓存命中率与厂商官方价对比" },
@@ -73,7 +73,7 @@ export function buildLlmsFullTxt(origin: string, sites: SiteMeta[]): string {
     "",
     `> ${site.name} 持续检测各家 API 中转站：${site.description}模型价格、公告和渠道可用性都在记录里，不推荐、不评分，只做对照。`,
     "",
-    "内容为简体中文（zh-CN）。价格表里的单价是站点公开标价，实际账单还受缓存命中率和各家计费口径影响，可能与按标价估算的数字有出入；数据仅供研究参考，不构成任何使用推荐。",
+    "内容为简体中文（zh-CN）。价格表里的单价是站点公开标价，实际账单还受缓存命中率和各家计费规则影响，可能与按标价估算的数字有出入；数据仅供研究参考，不构成任何使用推荐。",
     "",
     "## 数据是怎么来的",
     "",

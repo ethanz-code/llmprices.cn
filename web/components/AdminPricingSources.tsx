@@ -25,7 +25,7 @@ import { ToneTag, type Tone } from "./ToneTag";
 import { Btn, Empty, Input, Modal, Pick, Switch, toast, SettingRow, LoadingRows } from "./ui";
 import { errorText } from "@/lib/api";
 
-/** 覆盖检测统一口径：models.dev 的国内价一律不作基准，国内厂商都需要配置定价源。
+/** 覆盖检测统一规则：models.dev 的国内价一律不作基准，国内厂商都需要配置定价源。
  * 标签只表达「是否已配置国内定价源」，verdict（models.dev 收录情况）不参与展示。 */
 const TAG_PENDING: { label: string; tone: Tone; hint: string } = {
   label: "待添加",
@@ -421,7 +421,7 @@ export function AdminPricingSources() {
           }
         >
           <div style={{ display: "grid", gap: 8, fontSize: 13.5, color: "var(--text-2)" }}>
-            <span>删除后会自动在后台重新同步目录，该源合并的国内基准价会回落为 models.dev 国际站口径。</span>
+            <span>删除后会自动在后台重新同步目录，该源合并的国内基准价会回落为 models.dev 国际站标准。</span>
             <span className="mono" style={{ fontSize: 12, wordBreak: "break-all" }}>{removing.url}</span>
           </div>
         </Modal>
@@ -654,7 +654,7 @@ function SourceDetailModal({ vendor, onClose }: { vendor: string; onClose: () =>
             />
           )}
           <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-            以上价格按定价页标价币种展示；合并进官方目录时统一折算为美元口径，人民币价保留页面标价精度。
+            以上价格按定价页标价币种展示；合并进官方目录时统一折算为美元计价，人民币价保留页面标价精度。
           </span>
         </div>
       )}

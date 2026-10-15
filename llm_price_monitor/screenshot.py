@@ -1,6 +1,6 @@
-"""站点截图：用 headless Chromium 打开站点首页，把页面截成 PNG 落盘。
+"""站点截图：用 headless Chromium 打开站点首页，把页面截成 PNG 写盘。
 
-独立于价格/渠道状态/公告三条采集腿（第七类定时任务）：截图是重活，每站起一次浏览器，
+独立于价格/渠道状态/公告三条采集链路（第七类定时任务）：截图是重活，每站起一次浏览器，
 不该拖进高频的轻量采集。截的是站点首页而不是价格接口——接口地址不是给人看的页面。
 
 图片落 var/screenshots/<site_id>.png（原子写入：先写临时文件再替换，写到一半被打断
@@ -63,7 +63,7 @@ def site_homepage(spec: SiteSpec) -> str | None:
 
 
 def _chromium_proxy(proxy_url: str) -> dict[str, str]:
-    """代理地址 → Playwright proxy 形态：认证拆成独立 username/password（与 browser_fetch 同口径）。"""
+    """代理地址 → Playwright proxy 形态：认证拆成独立 username/password（与 browser_fetch 同一套规则）。"""
     parsed = urlsplit(proxy_url)
     proxy = {"server": f"{parsed.scheme}://{parsed.netloc.rsplit('@', 1)[-1]}"}
     if parsed.username:

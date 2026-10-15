@@ -55,7 +55,7 @@ def test_detect_verdicts_for_known_brands():
         _provider("alibaba", name="Alibaba", doc="https://alibabacloud.com", total=56, priced=50),
     ]
     records = {record["vendor"]: record for record in detect_vendor_coverage(providers)}
-    assert records["Zhipu AI"]["verdict"] == "missing_cn"  # 只有 z.ai 国际站口径
+    assert records["Zhipu AI"]["verdict"] == "missing_cn"  # 只有 z.ai 国际站标准
     assert records["Zhipu AI"]["suggestions"] == [
         {"kind": "web", "url": "https://docs.bigmodel.cn/cn/guide/start/pricing.md"}
     ]
@@ -112,7 +112,7 @@ def test_merge_cny_page_overrides_global_baseline():
     assert summary["matched"] == 1 and summary["added"] == 0 and summary["skipped"] == []
     entry = merged["models"]["glm5.3flash"]
     assert entry["region"] == "cn"
-    # 目录统一 USD 口径：list 按快照汇率折算，list_cny 是页面标价的精确人民币
+    # 目录统一 USD 规则：list 按快照汇率折算，list_cny 是页面标价的精确人民币
     assert entry["list"] == {"input": round(0.8 / 7.0, 6), "output": round(2.8 / 7.0, 6)}
     assert entry["list_cny"] == {"input": 0.8, "output": 2.8}
     assert entry["cache"]["read"] == round(0.23 / 7.0, 6) and entry["cache_cny"]["read"] == 0.23
@@ -134,7 +134,7 @@ def test_merge_adds_new_entry_with_source_vendor():
     assert entry["vendor"] == "Zhipu AI" and entry["region"] == "cn"
     assert entry["list_cny"] == {"input": 2.0, "output": 7.0}
     assert entry["cache"] == {"read": None, "write": None}
-    assert entry["price_status"] == "candidate"  # AI 兜底来源标记 candidate，透传给前端
+    assert entry["price_status"] == "candidate"  # AI 后备来源标记 candidate，透传给前端
 
 
 def test_merge_skips_column_misaligned_prices():
@@ -182,7 +182,7 @@ def test_merge_overrides_update_vendor_attribution():
 
 
 def test_merge_skips_hosted_resale_models():
-    """官方自研闸门：国内源页面上归属他家的托管/转售模型不进官方目录，自家模型照常入库。"""
+    """官方自研校验：国内源页面上归属他家的托管/转售模型不进官方目录，自家模型照常入库。"""
     catalog = _catalog()
     sources = {"Baidu": {"url": "https://cloud.baidu.com/doc/qianfan/s/wmh4sv6ya", "enabled": True, "models": [
         {"model": "DeepSeek-V4-Pro", "input_price": 1.79, "output_price": 3.57,
@@ -347,7 +347,7 @@ def test_merge_skips_disabled_and_resolves_collision_first_wins():
     merged, summary = merge_sources_into_catalog(catalog, sources, 7.0)
     assert summary["matched"] == 1
     assert any("已停用" in item for item in summary["skipped"])
-    assert any("撞模型键" in item for item in summary["skipped"])
+    assert any("与模型键冲突" in item for item in summary["skipped"])
     # 同源重复键先到先得：首条胜出；基准替换不污染 list_global（原基准已是 cn 时）
     assert merged["models"]["glm5.3flash"]["list_cny"] == {"input": 0.8, "output": 2.8}
 
@@ -378,7 +378,7 @@ def test_merge_global_source_skips_global_entry_and_unlisted():
     ]}}
     merged, summary = merge_sources_into_catalog(catalog, sources, 7.0)
     assert summary["referenced"] == 0 and summary["added"] == 0 and summary["matched"] == 0
-    assert any("已是国际口径" in item for item in summary["skipped"])
+    assert any("已是国际标准" in item for item in summary["skipped"])
     assert any("目录未收录" in item for item in summary["skipped"])
     assert "brandnewmodel" not in merged["models"]  # 海外源不新增条目
 
@@ -437,7 +437,7 @@ def test_upsert_region_defaults_cn_and_change_resets_results(tmp_path: Path):
     assert record["region"] == "cn"  # 未指定区域时缺省国内
     vs._record_fetch(store, "Anthropic", last_fetched_at=1.0, last_status="ok", last_error=None,
                      last_method="static-md", model_count=2, models=[{"model": "x"}])
-    # 换区域清空上次抓取结果（合并口径变了，必须重抓）
+    # 换区域清空上次抓取结果（合并标准变了，必须重抓）
     record = upsert_source(store, "Anthropic", "https://docs.anthropic.com/pricing", region="global")
     assert record["region"] == "global"
     assert record["last_status"] is None and record["models"] is None
@@ -472,14 +472,14 @@ def test_refresh_and_merge_updates_record_and_catalog(tmp_path: Path, monkeypatc
 
 
 def test_refresh_source_filters_specials_and_snapshots_at_storage(tmp_path: Path, monkeypatch):
-    """根源过滤：页面标注尾巴清洗、整行文案与并排共价行丢弃，特殊领域模型与日期后缀快照变体不落库。"""
+    """根源过滤：页面标注尾巴清洗、整行文案与并排共价行丢弃，特殊领域模型与日期后缀快照变体不写库。"""
     store = Store(tmp_path / "monitor.db")
     upsert_source(store, "Alibaba Cloud", "https://help.aliyun.com/zh/model-studio/models")
 
     def fake_fetch(url: str, **kwargs):
         return {"url": url, "final_url": url, "method": "static-md", "warnings": [], "models": [
             {"model": "qwen3.8-max", "input_price": 2.4, "output_price": 9.6, "currency": "CNY"},
-            # 日期后缀快照变体：不落库
+            # 日期后缀快照变体：不写库
             {"model": "qwen3.8-max-0902", "input_price": 2.4, "output_price": 9.6, "currency": "CNY"},
             {"model": "qwen-plus-2025-07-28", "input_price": 0.8, "output_price": 2.0, "currency": "CNY"},
             # 特殊领域：语音合成与角色扮演
@@ -487,7 +487,7 @@ def test_refresh_source_filters_specials_and_snapshots_at_storage(tmp_path: Path
             {"model": "qwen-flash-character", "input_price": 0.5, "output_price": 1.5, "currency": "CNY"},
             # 万相媒体生成：按名字拦
             {"model": "wan2.7-t2v", "input_price": 1.0, "output_price": 4.0, "currency": "CNY"},
-            # 页面标注尾巴：剥掉还原成模型 id 后照常落库
+            # 页面标注尾巴：剥掉还原成模型 id 后照常写库
             {"model": "kimi-k3上下文缓存享有折扣", "input_price": 20.0, "output_price": 100.0, "currency": "CNY"},
             # 整行页面文案与一行并排多模型共价：丢弃
             {"model": "参见模型列表", "input_price": None, "output_price": None, "currency": "CNY"},
@@ -514,7 +514,7 @@ def test_merge_cleans_stale_cache_names_and_blocks_media(tmp_path: Path):
                      ])
     sources = load_sources(store)
     merged, _summary = merge_sources_into_catalog({"usd_cny_rate": 7.0, "models": {}}, sources, 7.0)
-    # qwen 清洗后进官方目录；deepseek 是托管他厂模型被品牌闸门拦；万相媒体模型被准入拦
+    # qwen 清洗后进官方目录；deepseek 是托管他厂模型被品牌校验拦；万相媒体模型被准入拦
     assert set(merged["models"]) == {"qwen3.8max"}
     assert merged["models"]["qwen3.8max"]["model"] == "qwen3.8-max"
     full_merged, _summary = merge_sources_into_channel_catalog({"usd_cny_rate": 7.0, "models": {}}, sources, 7.0)

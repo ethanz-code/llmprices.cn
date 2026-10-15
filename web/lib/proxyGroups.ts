@@ -41,7 +41,7 @@ export function groupOptionLabel(group: ProxyGroupInfo): string {
   return `${group.name}（${parts.join(" · ")}）`;
 }
 
-/** 组下拉的候选项：接口读到的组 + 当前填写值兜底（值不在列表里时不至于看不见）。 */
+/** 组下拉的候选项：接口读到的组 + 当前填写值回退（值不在列表里时不至于看不见）。 */
 export function groupOptions(groups: ProxyGroupInfo[], current: string): { value: string; label: string }[] {
   const options = groups.map((group) => ({ value: group.name, label: groupOptionLabel(group) }));
   if (current && !groups.some((group) => group.name === current)) {

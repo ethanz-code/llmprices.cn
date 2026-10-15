@@ -8,7 +8,7 @@ export interface DiscountInfo {
   official_input_cny: number | null;
   official_output_cny: number | null;
   source_url: string;
-  /** 折扣基准口径：cn=国内站官方价 / global=国际站官方价；旧快照无此字段 */
+  /** 折扣基准规则：cn=国内站官方价 / global=国际站官方价；旧快照无此字段 */
   region?: "cn" | "global" | null;
 }
 
@@ -143,7 +143,7 @@ export interface TrendRecord {
 export interface HistoryListData {
   records: TrendRecord[];
   total: number;
-  /** 展示汇率（USD→CNY，快照优先实时兜底）；缺失时前端回落原币展示 */
+  /** 展示汇率（USD→CNY，快照优先实时后备）；缺失时前端回落原币展示 */
   rate?: number;
 }
 
@@ -169,15 +169,15 @@ export interface CatalogEntry {
   list_cny?: { input?: number | null; output?: number | null };
   /** 缓存读/写价（USD/1M tokens）。models.dev 只覆盖部分模型，缺失为 null */
   cache?: { read?: number | null; write?: number | null };
-  /** 缓存价的快照汇率人民币折算，口径与 list_cny 一致 */
+  /** 缓存价的快照汇率人民币折算，规则与 list_cny 一致 */
   cache_cny?: { read?: number | null; write?: number | null };
   /** 长上下文分档价（USD/1M tokens，models.dev tiers 原结构）：prompt 超过阈值后整请求按该档计费；上游仅部分模型带 */
   list_tiers?: PriceTier[] | null;
-  /** 分档价的快照汇率人民币折算，口径同 list_cny */
+  /** 分档价的快照汇率人民币折算，规则同 list_cny */
   list_tiers_cny?: PriceTier[] | null;
   /** 音频输入/输出价（USD/1M tokens）；仅音频模型带，缺失为 null */
   list_audio?: { input?: number | null; output?: number | null } | null;
-  /** 音频价的快照汇率人民币折算，口径同 list_cny */
+  /** 音频价的快照汇率人民币折算，规则同 list_cny */
   list_audio_cny?: { input?: number | null; output?: number | null } | null;
   source_url?: string;
   description?: string;
@@ -193,11 +193,11 @@ export interface CatalogEntry {
   limit?: { context?: number; input?: number; output?: number };
   /** models.dev 的发布日期（YYYY-MM-DD，可能为 null）：全量表展示，监控清单选项按它新→旧排 */
   release_date?: string | null;
-  /** 官方价基准口径：cn=国内站官方价（厂商定价源或 -cn 渠道），global=国际站官方价 */
+  /** 官方价基准规则：cn=国内站官方价（厂商定价源或 -cn 渠道），global=国际站官方价 */
   region?: "cn" | "global";
-  /** 同厂商国际站的列表价参考（国内基准确立后保留），口径同 list */
+  /** 同厂商国际站的列表价参考（国内基准确立后保留），规则同 list */
   list_global?: { input?: number; output?: number };
-  /** 国际参考价的快照汇率人民币折算，口径同 list_cny */
+  /** 国际参考价的快照汇率人民币折算，规则同 list_cny */
   list_global_cny?: { input?: number | null; output?: number | null };
 }
 
@@ -213,11 +213,11 @@ export interface CatalogData {
 
 /** AA 榜单单行（Artificial Analysis /leaderboards/models 的一行数据）。 */
 export interface RankingEntry {
-  /** 行序即排名（按智能指数降序，变体行各占一行） */
+  /** 行序即排名（按综合评分降序，变体行各占一行） */
   rank: number;
   /** AA 的模型 slug（如 gpt-6-5-sol），变体带 -xhigh/-low 后缀 */
   slug: string;
-  /** slug 与展示名归一化后的匹配键；后端 rankings_key 同口径 */
+  /** slug 与展示名归一化后的匹配键；后端 rankings_key 同一套规则 */
   key: string;
   name: string;
   creator: string | null;
@@ -225,7 +225,7 @@ export interface RankingEntry {
   context_window: string | null;
   /** Artificial Analysis Intelligence Index；榜单未测为 null */
   intelligence_index: number | null;
-  /** AA 的复合任务成本（USD），口径与每百万 token 价不同，仅展示 */
+  /** AA 的复合任务成本（USD），规则与每百万 token 价不同，仅展示 */
   cost_per_task_usd: number | null;
   median_output_tokens_per_second: number | null;
   latency_first_chunk_seconds: number | null;
@@ -339,7 +339,7 @@ export interface SiteConfig {
     headers?: Record<string, string>;
     /** 请求体模板，${refresh_token} 会替换成下面的 refresh_token */
     body?: string;
-    /** 响应数据结构案例：保存时交给 AI 分析出 token 字段路径，不落库 */
+    /** 响应数据结构案例：保存时交给 AI 分析出 token 字段路径，不写库 */
     response_sample?: string;
     /** 响应里 token 的字段路径（如 data.access_token）；留空自动探测 data.access_token / access_token */
     access_token_field?: string;
@@ -355,7 +355,7 @@ export interface SiteConfig {
   /** 站点首页地址（选填）：截站点截图时打开的页面；留空按采集地址推导。
    *  采集入口在 API 子域、根路径不是可看页面时（如 4aicode）填这里 */
   homepage?: string | null;
-  /** 后端保存时始终落库（slim_site_config 保留该字段），可放心用于行内启用判断 */
+  /** 后端保存时始终写库（slim_site_config 保留该字段），可放心用于行内启用判断 */
   enabled: boolean;
   [key: string]: unknown;
 }
@@ -421,7 +421,7 @@ export interface VendorPricingSource {
 /** models.dev 对国内厂商国内价的覆盖检测记录。 */
 export interface VendorSourceDetection {
   vendor: string;
-  /** has_cn=已覆盖 / missing_cn=仅国际口径（推荐添加）/ not_listed=未收录（推荐添加） */
+  /** has_cn=已覆盖 / missing_cn=仅国际标准（推荐添加）/ not_listed=未收录（推荐添加） */
   verdict: "has_cn" | "missing_cn" | "not_listed";
   providers: string[];
   models_total: number;
@@ -507,7 +507,7 @@ export interface NoticeEvent {
   site_id: string;
   kind: string;
   detected_at: number;
-  /** 公告正文摘要（与 noticeExcerpt 同口径）：列表侧只渲染它，正文不随列表下发 */
+  /** 公告正文摘要（与 noticeExcerpt 同一套规则）：列表侧只渲染它，正文不随列表下发 */
   excerpt?: string;
   /** 公告正文原文：列表接口已不下发（一份十几 KB），仅按需取详情时才有 */
   content?: string;
@@ -571,7 +571,7 @@ export interface AiLogDailyPoint {
   completion_tokens: number;
 }
 
-/** AI 调用统计（/api/ai-logs/summary 输出；口径为当前保留的全部调用尝试）。 */
+/** AI 调用统计（/api/ai-logs/summary 输出；范围为当前保留的全部调用尝试）。 */
 export interface AiLogSummary {
   total: number;
   /** 成功率（%）：ok / (total - transport - ignored)，报错重试计入失败，连接抖动与已忽略报错组不计入；无记录时为 null */

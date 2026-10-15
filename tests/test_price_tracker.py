@@ -176,7 +176,7 @@ def test_newapi_currency_can_be_explicitly_configured_as_usd():
 
 
 def test_newapi_denomination_from_status_derives_topup_base():
-    """充值口径 = (1e6/quota_per_unit) × price；price=1 的人民币站维持倍率×2。"""
+    """充值汇率 = (1e6/quota_per_unit) × price；price=1 的人民币站维持倍率×2。"""
     assert newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.8}}) == {
         "ratio_base_price": 13.6,
         "quota_per_unit": 500000,
@@ -200,7 +200,7 @@ def test_newapi_denomination_from_status_rejects_missing_or_absurd_values():
 
 
 def test_newapi_ratio_price_applies_topup_denomination():
-    """AIHub365 实锤：price=6.8 的站倍率基准是 ¥13.6，按默认 ¥2 会整体低算 6.8 倍。"""
+    """AIHub365 实证：price=6.8 的站倍率基准是 ¥13.6，按默认 ¥2 会整体低算 6.8 倍。"""
     payload = {
         "data": [{
             "model_name": "glm-5.3-flash", "model_ratio": 0.017647058824,
@@ -245,7 +245,7 @@ def test_newapi_usd_display_keeps_dollar_prices():
 
 
 def test_newapi_explicit_and_tiered_prices_scale_by_topup_rate():
-    """cun 实锤：显式价与阶梯价是展示美元（定价页直接显示的数），要乘充值汇率才是实付。"""
+    """cun 实证：显式价与阶梯价是展示美元（定价页直接显示的数），要乘充值汇率才是实付。"""
     denomination = newapi_denomination_from_status({"data": {"quota_per_unit": 500000, "price": 6.95}})
     explicit_payload = {
         "data": [{"model_name": "deepseek-v4-pro", "input_price": 0.6, "output_price": 1.8}],
@@ -289,7 +289,7 @@ def test_newapi_explicit_price_with_declared_unit_is_not_rescaled():
 
 
 def test_newapi_tiered_expr_applies_billing_multiplier():
-    """sudocode 实锤：billing_multiplier 是站方对计费表达式的折扣/加价系数，漏乘会把官方基准价当站价。"""
+    """sudocode 实证：billing_multiplier 是站方对计费表达式的折扣/加价系数，漏乘会把官方基准价当站价。"""
     payload = {
         "data": [{
             "model_name": "deepseek-v4-pro",
@@ -308,7 +308,7 @@ def test_newapi_tiered_expr_applies_billing_multiplier():
 
 
 def test_newapi_advertised_price_wins_over_official_rate_tier_expr():
-    """subrouter 实锤：billing_expr 里的 p*10+c*50 是官方价率的池子计费，站方挂牌价
+    """subrouter 实证：billing_expr 里的 p*10+c*50 是官方价率的池计费，站方挂牌价
     input_price 0.6（=官价 94% 折扣）才是页面展示的站价，挂牌价必须优先。"""
     payload = {
         "data": [{

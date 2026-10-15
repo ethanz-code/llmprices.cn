@@ -1,4 +1,4 @@
-"""主流水线：拉取一个定价页，静态解析 → 同名 .md 探测 → Headless 渲染 → AI 兜底。"""
+"""主流水线：拉取一个定价页，静态解析 → 同名 .md 探测 → Headless 渲染 → AI 后备。"""
 from __future__ import annotations
 
 import time
@@ -56,7 +56,7 @@ def fetch_page_prices(
                     if parsed:
                         text = probe.text  # 后续 AI 复核也优先看这份带表格结构的原文
             except httpx.HTTPError:
-                pass  # 探测只是兜底路径，失败照常走渲染/AI
+                pass  # 探测只是后备路径，失败照常走渲染/AI
         rendered: str | None = None
         if parsed is None and headless:
             try:
@@ -80,9 +80,9 @@ def fetch_page_prices(
                     parsed = (records, "ai")
                     suspect = False
             except (AIExtractionError, httpx.HTTPError, PriceMonitorError) as exc:
-                warnings.append(f"AI 兜底失败：{exc}")
+                warnings.append(f"AI 回退失败：{exc}")
         elif ai_config is not None and not ai_config.usable and (parsed is None or suspect):
-            warnings.append("AI 未配置完整（缺接口地址或模型池），跳过 AI 兜底")
+            warnings.append("AI 未配置完整（缺接口地址或模型备选池），跳过 AI 回退")
         if parsed is not None and suspect:
             for record in parsed[0]:
                 record["price_status"] = "candidate"
@@ -90,7 +90,7 @@ def fetch_page_prices(
 
     records, method = parsed if parsed else ([], "none")
     if parsed is None:
-        warnings.append("静态解析、Headless 渲染与 AI 兜底都没有拿到价格")
+        warnings.append("静态解析、Headless 渲染与 AI 回退都没有拿到价格")
     return {
         "url": url,
         "final_url": final_url,

@@ -14,7 +14,7 @@ function unitSuffix(unit: string | null | undefined): string {
   return unit?.split("/").pop()?.replace(/\s*tokens?$/i, "").trim() ?? "";
 }
 
-/** Landing 的最新快照预览表：每模型一行（综合价最低的代表行，见 priceRows.lowestPriceRowPerModel），列渲染含交互，需在客户端渲染。 */
+/** Landing 的最新快照预览表：每模型一行（加权单价最低的代表行，见 priceRows.lowestPriceRowPerModel），列渲染含交互，需在客户端渲染。 */
 export function SnapshotPreview({
   rows,
   rate,
@@ -25,7 +25,7 @@ export function SnapshotPreview({
   rows: OverviewRecord[];
   /** 展示汇率：站点价统一按 RMB 显示，缺失时回落原币数值 */
   rate?: number | null;
-  /** 站点当前三档状态（与首页站点墙同口径）：给站名前的小色点供色 */
+  /** 站点当前三档状态（与首页站点墙同一套规则）：给站名前的小色点供色 */
   siteLevels?: Record<string, RateLevel | null>;
   /** 快照数据新鲜度：全行最新一次采集时间（秒级时间戳） */
   snapshotAt?: number | null;

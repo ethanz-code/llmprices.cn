@@ -1,4 +1,4 @@
-/** 价格行的合并规则：OverviewTable 与首页最新快照共用，保证"同站点同模型合并为一行"的口径一致。 */
+/** 价格行的合并规则：OverviewTable 与首页最新快照共用，保证"同站点同模型合并为一行"的规则一致。 */
 
 import { effectiveCnyPrice, effectivePrice } from "./format";
 import { canonicalModel, compareByReleaseDesc } from "./modelOrder";
@@ -8,7 +8,7 @@ import type { OverviewRecord } from "./types";
 // 就是两个键，前端分组不擅自合并）已迁到 modelOrder.ts，这里保留导出给老引用方
 export { canonicalModel } from "./modelOrder";
 
-/** 有效价 = 顶层价格或阶梯档价任一可得；0/0 双零只有 confirmed（真免费档）算数——
+/** 有效价 = 顶层价格或阶梯档价任一可得；0/0 双零只有 confirmed（真零价）算数——
  *  无数据占位行被 AI 照提示词模板抄成 0 时不得当免费价，否则首页"最低价"会选中 ¥0 行；
  *  其余无效行（需认证/无数据）在时间排序中沉底。
  *  订阅套餐行（套餐制站）行本身代表套餐、无 token 价，视作有效内容参与展示。 */
@@ -22,8 +22,8 @@ export function hasUsablePrice(row: OverviewRecord): boolean {
   return effectivePrice(row, "input_price") != null || effectivePrice(row, "output_price") != null;
 }
 
-/** 首页精选行序：发布日期倒序（新模型在前），目录没收录的模型垫底按名称；
- *  模型下拉（监控多选/模型数据页）用厂商分块口径（modelOrder.modelOrderCompare），
+/** 首页代表行序：发布日期倒序（新模型在前），目录没收录的模型排在最后按名称；
+ *  模型下拉（监控多选/模型数据页）用厂商分块规则（modelOrder.modelOrderCompare），
  *  首页是平铺的最新价格流，保持纯发布倒序让新模型顶在最前面。 */
 export function orderByReleaseDesc(
   rows: OverviewRecord[],
@@ -37,7 +37,7 @@ export function orderByReleaseDesc(
   );
 }
 
-/** 综合价（排序用）：输入 3 : 输出 1 加权，统一折算 RMB；缺一项用另一项，都缺返回 null。 */
+/** 加权单价（排序用）：输入 3 : 输出 1 加权，统一折算 RMB；缺一项用另一项，都缺返回 null。 */
 function blendedCnyPrice(row: OverviewRecord, rate: number | null): number | null {
   const input = effectiveCnyPrice(row, "input_price", rate);
   const output = effectiveCnyPrice(row, "output_price", rate);
@@ -45,9 +45,9 @@ function blendedCnyPrice(row: OverviewRecord, rate: number | null): number | nul
   return input ?? output;
 }
 
-/** 首页精选行：每个模型（canonicalModel 归一分组）只保留一行——组内有可用价的行里综合价最低的那条
- *  （输入 3 : 输出 1 折 RMB，同价取采集更新的），展示名取组内出现最多的写法（与总览表口径一致）；
- *  全组没有可用价的模型整个不出现，首页精选只放拿得到真实价格的模型。 */
+/** 首页代表行规则：每个模型（canonicalModel 归一分组）只保留一行——组内有可用价的行里加权单价最低的那条
+ *  （输入 3 : 输出 1 折 RMB，同价取采集更新的），展示名取组内出现最多的写法（与总览表规则一致）；
+ *  全组没有可用价的模型整个不出现，首页代表行只放拿得到真实价格的模型。 */
 export function lowestPriceRowPerModel(records: OverviewRecord[], rate: number | null): OverviewRecord[] {
   const groups = new Map<string, OverviewRecord[]>();
   for (const row of records) {
@@ -70,10 +70,10 @@ export function lowestPriceRowPerModel(records: OverviewRecord[], rate: number |
   return picked;
 }
 
-/** 可靠性扣分对综合价的最大影响：满档扣分让排序价虚增 20%，可靠性与价格信号的权衡上限。 */
+/** 可靠性扣分对加权单价的最大影响：满档扣分让排序价虚增 20%，可靠性与价格信号的权衡上限。 */
 const RELIABILITY_CAP = 0.2;
 
-/** 可靠性加权综合价（智能排序主键）：综合价 × (1 + 20% × 归一化扣分)；缺综合价按 +∞ 沉底。 */
+/** 可靠性加权单价（默认排序主键）：加权单价 × (1 + 20% × 归一化扣分)；缺加权单价按 +∞ 沉底。 */
 function reliabilityWeightedPrice(
   row: OverviewRecord,
   reliabilityDeficit: number,
@@ -84,10 +84,10 @@ function reliabilityWeightedPrice(
   return blend * (1 + RELIABILITY_CAP * reliabilityDeficit);
 }
 
-/** 智能排序（总览表默认行序）：有价在前 → 站点综合分高者在前（传 rankOf 时，见 lib/siteRanking）
- *  → 可靠性加权综合价低的在前（综合价 × (1 + 20% × 归一化扣分)，扣分由调用方按数据滞后计算、
+/** 默认排序（总览表默认行序）：有价在前 → 站点综合分高者在前（传 rankOf 时，见 lib/siteRanking）
+ *  → 可靠性加权单价低的在前（加权单价 × (1 + 20% × 归一化扣分)，扣分由调用方按数据滞后计算、
  *  0–1 归一，让数据过期的站点真实下沉，但最多让位 20% 不淹没价格信号）→
- *  折扣与抓取时间破平。规则价与确认价同等对待；点表头单列排序循环回"无排序"即回到此序。 */
+ *  折扣与抓取时间破平。推算价与确认价同等对待；点表头单列排序循环回"无排序"即回到此序。 */
 export function smartOrderRows(
   rows: OverviewRecord[],
   reliabilityDeficitOf: (row: OverviewRecord) => number,

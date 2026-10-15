@@ -1,4 +1,4 @@
-/** 展示口径纯函数：相对时间、跨币种折算、阶梯价与格式化——金额展示的地基，先钉住。 */
+/** 展示规则纯函数：相对时间、跨币种折算、阶梯价与格式化——金额展示的地基，先钉住。 */
 import { describe, expect, it } from "vitest";
 
 import {
@@ -111,13 +111,13 @@ describe("formatCompact / formatTokens", () => {
     expect(formatCompact(2_300_000_000)).toBe("2.3B");
   });
 
-  it("formatTokens 与 formatCompact 同口径（272k 小写）", () => {
+  it("formatTokens 与 formatCompact 同一套规则（272k 小写）", () => {
     expect(formatTokens(272_000)).toBe("272k");
     expect(formatTokens(1_000_000)).toBe("1M");
   });
 });
 
-/** 公告摘要规则：后端 llm_price_monitor/feed_page.py 的 notice_excerpt 是同一套口径
+/** 公告摘要规则：后端 llm_price_monitor/feed_page.py 的 notice_excerpt 是同一套规则
  *  （事件流为省体积只下发摘要），下面这批样例在 tests/test_feed_page.py 里有逐条对应断言，
  *  改规则时两边一起改，否则页面上的摘要会与后端下发的不一致。 */
 describe("noticeExcerpt", () => {

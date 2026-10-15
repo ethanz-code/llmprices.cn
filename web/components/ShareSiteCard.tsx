@@ -117,13 +117,13 @@ export interface ShareLatencyModel {
   series: { name: string; values: (number | null)[] }[];
 }
 
-/** 兜底字体栈：站内 --font-sans/--mono 的去 Geist 版本。Geist 由 next/font 注入，
+/** 后备字体栈：站内 --font-sans/--mono 的去 Geist 版本。Geist 由 next/font 注入，
  *  族名是构建期 hash，分享卡挂载后从 html 变量里取真实值垫到栈首（useSiteFontFamilies）。 */
 const SANS_FALLBACK = `"SF Pro Text", -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
 const MONO_FALLBACK = `"SF Mono", "JetBrains Mono", ui-monospace, monospace`;
 
 /** 站内 Geist 字体族名：next/font 的族名带 hash，从 html 上的 CSS 变量读真实值。
- *  SSR 初值为空（走兜底栈），挂载后补齐——离屏卡片平时不可见，无闪烁。 */
+ *  SSR 初值为空（走后备栈），挂载后补齐——离屏卡片平时不可见，无闪烁。 */
 function useSiteFontFamilies() {
   const [fonts, setFonts] = useState({ sans: "", mono: "" });
   useEffect(() => {
@@ -136,7 +136,7 @@ function useSiteFontFamilies() {
   return fonts;
 }
 
-/** 分享卡字体栈（Geist 真值垫首 + 兜底）：站点状况卡与花费计算卡共用，保证导出图字体一致。 */
+/** 分享卡字体栈（Geist 真值垫首 + 回退）：站点状况卡与花费计算卡共用，保证导出图字体一致。 */
 export function useShareFontStacks() {
   const { sans, mono } = useSiteFontFamilies();
   return {
@@ -271,7 +271,7 @@ export function chartPanelStyle(c: (typeof SHARE_PALETTES)["dark"]) {
   } as const;
 }
 
-/** 分享图 · 可用率趋势：阶梯面积图按三档着色，与站点状态页趋势图同口径
+/** 分享图 · 可用率趋势：阶梯面积图按三档着色，与站点状态页趋势图同一套规则
  *  （阶梯线 + 顶部渐变填充 + 5 档网格 + 时间刻度）。数据与页面同一个数组，不另抽稀。 */
 function ShareTrendChart({
   points,
@@ -330,7 +330,7 @@ function ShareTrendChart({
 
 /** 分享图 · 渠道延迟趋势：输入与站内延迟图同源同构（buildChannelModel 的产物），
  *  每渠道一条折线（ms），线性轴 + P2/P98 分位数量程，直线相连、缺数断笔、
- *  超出量程的尖峰裁到绘图区边缘——与站点状态页延迟图完全同口径。
+ *  超出量程的尖峰裁到绘图区边缘——与站点状态页延迟图完全同一套规则。
  *  系列已按页面图例隐藏状态过滤（colorIndex 是全量序列里的原始下标，取色与页面一致，
  *  隐藏中间某项不会让其余线变色）。 */
 function ShareLatencyChart({
@@ -403,7 +403,7 @@ function ShareLatencyChart({
   );
 }
 
-/** 渠道行内的迷你可用率色块条：与站点页「可用记录」列同口径（buildUptimeBuckets 分桶），
+/** 渠道行内的迷你可用率色块条：与站点页「可用记录」列同一套规则（buildUptimeBuckets 分桶），
  *  静态色块不带悬停；空槽画弱化占位，保证各行条的横向位置对齐。 */
 const STRIP_BUCKETS = 15;
 function UptimeStrip({
@@ -478,7 +478,7 @@ export function ShareSiteCard({
   const okChannels = channels.filter((channel) => channel.ok).length;
   const shown = channels.slice(0, 8);
   const hiddenCount = Math.max(channels.length - shown.length, 0);
-  // 最近 15 次整站检测色点：与站点卡片上的色点条同口径
+  // 最近 15 次整站检测色点：与站点卡片上的色点条同一套规则
   const recent = availability.slice(-15);
   const brandName = "llmprices.cn";
   const brandDesc = share.brandDesc;
@@ -626,7 +626,7 @@ export function ShareSiteCard({
             const latency = last?.latency != null ? `${last.latency}ms` : null;
             const availability7d = channel.availability7d != null ? `${channel.availability7d.toFixed(2)}%` : null;
             const metrics = [latency, availability7d].filter(Boolean).join(" · ");
-            // 该渠道自己的可用率时段桶：与页面渠道行「可用记录」同口径，每次检测正常记 100%、异常记 0%
+            // 该渠道自己的可用率时段分桶：与页面渠道行「可用记录」同一套规则，每次检测正常记 100%、异常记 0%
             const buckets = buildUptimeBuckets(
               channel.dots
                 .filter((dot) => dot.at != null)

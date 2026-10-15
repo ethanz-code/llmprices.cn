@@ -1,4 +1,4 @@
-/** 站点评分口径：价格在「当前模型内」归一、其余四项站点级、数据滞后另扣、缺数据中性、排序主键。 */
+/** 站点评分规则：价格在「当前模型内」归一、其余四项站点级、数据滞后另扣、缺数据中性、排序主键。 */
 import { describe, expect, it } from "vitest";
 
 import type { SiteStats } from "@/lib/channelStatus";
@@ -52,7 +52,7 @@ const BARE_FLAGS: SiteFlags = {
   homepage: false,
 };
 
-/** 造一份渠道视图：把给定站点的可用率放进时段桶（单桶即该站的 7 天可用率）。 */
+/** 造一份渠道视图：把给定站点的可用率放进时段分桶（单桶即该站的 7 天可用率）。 */
 function statsWith(availability: Record<string, number>): SiteStats {
   const uptimeBuckets: SiteStats["uptimeBuckets"] = {};
   for (const [site, pct] of Object.entries(availability)) {
@@ -61,7 +61,7 @@ function statsWith(availability: Record<string, number>): SiteStats {
   return { channels: {}, availability: {}, uptimeBuckets };
 }
 
-describe("effectiveCostCny 缓存加权实付成本", () => {
+describe("effectiveCostCny 按重缓存用量折算的实付成本", () => {
   it("给了便宜缓存读价，成本明显低于按输入价计", () => {
     const plain = row({ input_price: 10, output_price: 40 });
     const cached = row({ input_price: 10, output_price: 40, metadata: { cache_read_price: 1 } });
@@ -106,7 +106,7 @@ describe("价格分在当前模型内比", () => {
     expect(rowScore(ranking, only).price).toBe(1);
   });
 
-  it("真免费档（0/0 confirmed）算最便宜，不被当成没有价", () => {
+  it("真零价（0/0 confirmed）算最便宜，不被当成没有价", () => {
     const free = row({ site_id: "free", model: "m1", input_price: 0, output_price: 0 });
     const paid = row({ site_id: "paid", model: "m1", input_price: 1, output_price: 4 });
     const ranking = buildSiteRanking({ records: [free, paid], rate: null });
@@ -124,7 +124,7 @@ describe("价格分在当前模型内比", () => {
 });
 
 describe("其余三项：渠道稳定 / 配置完整 / 公告新鲜", () => {
-  it("渠道稳定取时段桶可用率均值；无状态数据中性 0.5", () => {
+  it("渠道稳定取时段分桶可用率均值；无状态数据中性 0.5", () => {
     const s = row({ site_id: "s", model: "m" });
     const t = row({ site_id: "t", model: "m" });
     const ranking = buildSiteRanking({

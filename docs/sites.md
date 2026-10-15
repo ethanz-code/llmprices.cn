@@ -1,6 +1,6 @@
 # 站点导入与配置手册
 
-> 回答三个问题：站点怎么进来、进来后怎么配、配什么不配什么（渠道筛选口径）。字段级技术细节见 [pricing.md](pricing.md)「配置文件」；动手前先翻 [lessons.md](lessons.md) 触发词索引与 Serena 记忆 `dom_url_auth_constraint`。
+> 回答三个问题：站点怎么进来、进来后怎么配、配什么不配什么（渠道筛选规则）。字段级技术细节见 [pricing.md](pricing.md)「配置文件」；动手前先翻 [lessons.md](lessons.md) 关键词索引与 Serena 记忆 `dom_url_auth_constraint`。
 
 ## 导入站点的三条路
 
@@ -25,7 +25,7 @@
 
 **模型清单不分站点**：站点级 `models` 字段已废弃（加载时静默丢弃），监控哪些模型由页面顶部「检测模型」统一配置（`settings.monitor_models`），所有站点共用一份。目录刷新自动补各厂商最新发布的模型、发布超 3 个月的自动移出、手动删过的不回加；通配符 `*` 全量采集已移除，只收明确清单。站点没有清单里的模型只是提示「没采到价」，不是故障。
 
-## 渠道筛选口径（只采官方共享渠道）
+## 渠道筛选规则（只采官方共享渠道）
 
 监控对象是**站点自己对外售卖的共享渠道模型**——普通访客充钱就能用、按站点标价计费的那些。三类渠道区别对待：
 
@@ -44,8 +44,8 @@
 **公告（notice）**：
 
 - new-api 系零配置也能跑：未配 `notice.url` 时自动从 `network.url` 根地址推导 `/api/notice`，并自动请求 `/api/status` 把后台「公告管理」发布的多条 announcements 拼成分节 Markdown 合并进正文。
-- **配法口径（2026-10-09 修订，推翻 10-08 旧拍板）**：**哪个接口承载站的真公告就配哪个**——new-api 站的公告板（`/api/status` 的 announcements）通常是主公告源且更明确（cun 板上 16 条完整版 vs `/api/notice` 57 字节一句话；modelflare 的 `/api/notice` 是静态欢迎页；subrouter 的为空），这类站显式配 `/api/status`；少数站板上无货、`/api/notice` 手写位才是真公告（123ai-ai-wx 等批站），则配 `/api/notice`。**配之前两个接口都拉一次看内容，别按站族套公式**。显式配 `/api/notice` 时解析层仍会自动拼 `/api/status` 的公告板进正文（json+status），显式配 `/api/status` 只拿公告板（但板上就是主源时这正好）。零配置虽等价于显式 `/api/notice`，按「填什么抓什么」原则统一显式写。
-- 其余显式场景：① 标准路径不存在或自研路径 → 配实际公告接口（`data` 直接是公告数组、`announcements` 挂顶层、`data` 为单条公告对象（302.ai 型）这三种形态都能解析；公告数组条目的正文字段 `content` 与 `description`（01tree 型）都认）；② 公告接口要登录 → 显式配 + 认证（`auth_inject` 的 notice 腿或 `notice.headers`）。**公告抓回来是空的先查两处再怪站方**：接口 401（腿没配认证）与正文键对不上（01tree 实锤：description 被当无正文整批过滤，扫描零报错零记录，只能主动干跑一单站才发现）。
+- **配法标准（2026-10-09 修订，推翻 10-08 旧定案）**：**哪个接口承载站的真公告就配哪个**——new-api 站的公告板（`/api/status` 的 announcements）通常是主公告源且更明确（cun 板上 16 条完整版 vs `/api/notice` 57 字节一句话；modelflare 的 `/api/notice` 是静态欢迎页；subrouter 的为空），这类站显式配 `/api/status`；少数站板上无货、`/api/notice` 手写位才是真公告（123ai-ai-wx 等批站），则配 `/api/notice`。**配之前两个接口都拉一次看内容，别按站族套公式**。显式配 `/api/notice` 时解析层仍会自动拼 `/api/status` 的公告板进正文（json+status），显式配 `/api/status` 只拿公告板（但板上就是主源时这正好）。零配置虽等价于显式 `/api/notice`，按「填什么抓什么」原则统一显式写。
+- 其余显式场景：① 标准路径不存在或自研路径 → 配实际公告接口（`data` 直接是公告数组、`announcements` 挂顶层、`data` 为单条公告对象（302.ai 型）这三种形态都能解析；公告数组条目的正文字段 `content` 与 `description`（01tree 型）都认）；② 公告接口要登录 → 显式配 + 认证（`auth_inject` 的 notice 链路或 `notice.headers`）。**公告抓回来是空的先查两处再怪站方**：接口 401（该链路没配认证）与正文键对不上（01tree 实证：description 被当无正文整批过滤，扫描零报错零记录，只能主动试运行一单站才发现）。
 - 正文变化才存新版本发事件，正文为空不入库；显式配置的地址 404 是配置错误会报错，自动推导地址 404 视为站点没有公告接口、静默跳过。
 
 **渠道状态（status）**：
@@ -56,13 +56,13 @@
   "status": {"url": "https://status.<站域>/api/status-page/heartbeat/<slug>", "parse": "kuma"}
   ```
   采集器自动取同源 `/api/status-page/<slug>` 拿监控名与分组，转成标准渠道形状（name/group/status 词/availability 整数/timeline 心跳点）；滚动窗口不进 diff，渠道状态翻转才算事件（首例 1xm：22 渠道两轮零噪音）。**不要原样采 heartbeat 端点**——前端通用提取器会把每条心跳渲染成垃圾渠道、diff 每轮刷 81 条噪音。
-- 解析三层：结构化 JSON 直接采用 → HTML/文本提取内嵌 JSON → AI 兜底；数据原样存（不强制归一 schema），路径级结构 diff 生成状态变化事件（滚动时间线字段自动跳过防噪音）。选地址时优先找直接返回 JSON 的接口。
-- **展示层在售口径过滤（前端自动，无需配置）**：渠道视图只保留渠道名对得上本站在售「模型名 ∪ 计价分组名」的行（去空格忽略大小写，`channelStatus.buildMonitoredSets`）；一条都对不上时回退全量防白板（状态页产品线与在售完全错开的站，如 1xm 只挂 claude 渠道而在售全是 GPT/Gemini 分组）。站级可用率/延迟/时段桶随之变成「在售口径」。`status.groups` 是采集层的可选硬过滤，两者不冲突，但优先靠通用机制、不逐站配 groups。
-- `status.groups` 可只保留指定分组；401/403 按需认证处理，走 `auth_inject` 的 status 腿。
+- 解析三层：结构化 JSON 直接采用 → HTML/文本提取内嵌 JSON → AI 后备；数据原样存（不强制归一 schema），路径级结构 diff 生成状态变化事件（滚动时间线字段自动跳过防噪音）。选地址时优先找直接返回 JSON 的接口。
+- **展示层在售范围过滤（前端自动，无需配置）**：渠道视图只保留渠道名对得上本站在售「模型名 ∪ 计价分组名」的行（去空格忽略大小写，`channelStatus.buildMonitoredSets`）；一条都对不上时回退全量防白板（状态页产品线与在售完全错开的站，如 1xm 只挂 claude 渠道而在售全是 GPT/Gemini 分组）。站级可用率/延迟/时段分桶随之变成「在售范围」。`status.groups` 是采集层的可选硬过滤，两者不冲突，但优先靠通用机制、不逐站配 groups。
+- `status.groups` 可只保留指定分组；401/403 按需认证处理，走 `auth_inject` 的 status 链路。
 
-## 选站口径：优先有交流群且人多的站（2026-10-14 用户定）
+## 选站标准：优先有交流群且人多的站（2026-10-14 用户定）
 
-挑新站、决定启用哪些站时，除价格与渠道口径外，优先收录**有交流群且人多**的站——有群说明有人运营、人多说明平台稳。三条速判：
+挑新站、决定启用哪些站时，除价格与渠道标准外，优先收录**有交流群且人多**的站——有群说明有人运营、人多说明平台稳。三条速判：
 
 1. **有没有群**：站点 `/api/status` 的 `chat_link`、首页/页脚的群链接、**公告正文里的「QQ群：xxx」**都算（公告是群号高产来源，实测 68 站里 14 站命中）。
 2. **人多不多**：Telegram 公开群/频道人数按 t.me 预览页统计（真实数字，如「1,183 人」）；QQ 群没有公开人数接口，只作存在性证据；月访问量与全网排名是辅助热度信号（第三方估算 / Tranco 榜，小站常无数据）。
@@ -70,25 +70,25 @@
 
 采集：`popularity` 调度项（默认 24 小时一轮，匿名只读，不碰站点凭证），任务类型「站点人气」，手动重跑 `POST /api/collect/popularity`。数据源实测结论见 [lessons.md](lessons.md) §1。
 
-**批量选站评估法（2026-10-14 定，新增批次实测）**：候选池几百上千时别按「模型总数」排序（镜像站和堆量站会霸榜），按三步筛：
+**批量选站评估法（2026-10-14 定，新增批次实测）**：候选站列表几百上千时别按「模型总数」排序（同源镜像站和堆量站会霸榜），按三步筛：
 
-1. **克隆去重**：拉各候选 `/api/pricing` 的模型名集合算签名（排序后哈希），同签名的是一套上游的镜像站（本轮 4343 候选里两大镜像族各占 6/18 站），每族只留一个代表（优先自建域名、非 railway 试用域）。
+1. **同源站去重**：拉各候选 `/api/pricing` 的模型名集合算签名（排序后哈希），同签名的是一套上游的同源镜像站（本轮 4343 候选里两大镜像族各占 6/18 站），每族只留一个代表（优先自建域名、非 railway 试用域）。
 2. **可取数评估**：按 `input_CNY = model_ratio × ((1e6/quota_per_unit)×price) × group_ratio` 对站点在售的监测模型逐个算实付价，除以官方价目录（`documents.catalog` 的 USD 列表价 × 汇率）得折扣；统计「折扣 ≤100%（能展示）的模型数」，这是站点的真实数据价值——有的站模型数多但命中监测清单少（如「[分组名]模型名」装饰命名的站几乎零命中）。
-3. **风险公告排查**：拿 `/api/notice` 与 `/api/status` 公告板正文扫「停止/关闭/不面向/仅限」关键词——本轮拦下一个（公告「关闭个人充值、不再新增个人用户」的站，直接排除）；另发现一个合规类区域限制（公告「本服务暂不面向中国大陆地区用户提供」）——海外用户可用、大陆用户不可注册充值，是否收录属于产品口径，先收录并提示用户拍板。
-4. **域名本身要审**：候选池混着 punycode 域（`xn--…`），不解码看不出真名——2026-10-14 批次实锤一家 `xn--15q04w3tg4kio0a.com` 解码是脏话域名，差点进公开清单。凡 `xn--` 开头先解码再判断：`python3 -c "print('xn--....com'.encode().decode('idna'))"`。
+3. **风险公告排查**：拿 `/api/notice` 与 `/api/status` 公告板正文扫「停止/关闭/不面向/仅限」关键词——拦的是**停止服务/关闭业务**（公告「关闭个人充值、不再新增个人用户」的站，直接排除）。**区域可用性不作为收录标准（2026-10-14 用户定）**：站点不服务大陆用户（如「本服务暂不面向中国大陆地区用户」「不对大陆开放」）不影响收录——大陆用户可自行使用代理访问，我们的采集是只读公开数据、不受区域条款约束；这类站的公告照常采集展示，用户自己看得到服务范围。
+4. **域名本身要审**：候选站列表混着 punycode 域（`xn--…`），不解码看不出真名——2026-10-14 批次实证一家 `xn--15q04w3tg4kio0a.com` 解码是脏话域名，差点进公开清单。凡 `xn--` 开头先解码再判断：`python3 -c "print('xn--....com'.encode().decode('idna'))"`。
 
 **认证怎么选**（价格/状态/公告三处共用一套逻辑）：
 
 1. 匿名能通就不配认证——先匿名 curl 试，这是最省心的形态。
 2. 固定 token：站点级 `auth_token` + `auth_inject` 写清三处注入规则。
-3. 短效会话：`token_refresh` 自动续签（new-api 会话系配 `refresh_cookie_name: new_api_refresh`，自研站配对应刷新端点）。sub2api 系（1for/2000lab）配法实测（2026-10-09 定稿）：`url` = `https://<站域>/api/v1/auth/refresh`、`method` POST、`body` = `{"refresh_token": "${refresh_token}"}`、`access_token_field` = `data.access_token`、`refresh_token_field` = `data.refresh_token`，浏览器登录后从 localStorage 取 `refresh_token` 贴进去保存即接管。⚠️ 两条纪律：① **rt_ 单次可用每次刷新轮换**——拿被前端自动轮换掉、或被探测烧过的旧 rt_ 去续签必然 `REFRESH_TOKEN_INVALID`（「2000lab 续签链断了」的旧结论就是这么来的误判）；② 接管后浏览器侧会话的自动续签即作废（同一 rt_ 只能一个客户端持有），到期浏览器需重登、采集侧不受影响。**主动续签（2026-10-11 起）**：token 是 JWT 且配了续签的站，三条采集腿每站开抓前检查剩余寿命，不足总寿命 1/6（24h token 提前 4h）就主动续签回写，不等被 401——轮换型 rt_ 隔天只有一次使用机会，被动续签对 24h 短效 token 意味着一天死一次（2026-10-11 四个 sub2api 站同一小时集中掉线的根因）；主动续签撞上并发腿时静默采用库里的新 token，续签链真死仍由被动链路上报。
-4. 登录态 Cookie 与特殊头（`New-Api-User`、`Referer`）放**站点级 `request_headers`**（站点对象顶层字段）——这是价格/渠道状态/公告三腿都生效的唯一落点。`network.headers` 价格腿与公告腿其实也会带上（2026-10-09 cun 实证；只有渠道状态腿不读），但**入口级头会覆盖站点级同名头**（合并序：auth_inject > 入口 headers > request_headers）——把凭证迁到 request_headers 或续签换新时，必须同步删掉 network.headers 里的旧同名键，否则旧值一直盖着新值。只有单个采集地址专用的头才写进那个地址的 `headers`。request_headers 里的 `User-Agent` 可覆盖采集默认 UA（2026-10-12 起，大小写不敏感），供指纹类站对齐登录端。**头名可能随站方品牌改名**（heyroute.ai 把 `New-Api-User` 改成了 `HeyRoute-User`，2026-10-12 实锤）：401 文案会直接说缺哪个头，照抄即可。
-5. 响应头滑窗续签（claude-relay 系，如 icodeeasy）：登录后 token 存 localStorage 单个 `token` 键、有效期 30 天——服务端可在响应头 `x-new-token` 里下发新 token，前端拦截器自动写回。**实测 2026-10-09：新鲜 token 请求未触发该头**（疑似仅临期才下发），采集端也未接管；到期前没人替它续，过期即公告腿 401、需重新登录重贴。识别特征：SPA 前端代码里 `x-new-token` 字样。
-6. **会话绑定类站点**（sub2api 部署可开，401 返回 `SESSION_BINDING_MISMATCH`）：指纹 = SHA256(登录时出口 IP + User-Agent)，任一变化即 401，且**校验失败一次就吊销整个会话家族的 refresh token**（浏览器那边的新鲜 rt_ 立刻全灭）——所以接管前先服务器侧 `curl -H "Authorization: Bearer <token>"` 试一手，别拿浏览器凭证盲配续签链。破解看部署是否信任转发头（源码 session_binding 中间件）：信任时站级 request_headers 传 `X-Forwarded-For: <登录出口 IP>` + `User-Agent: <登录端 UA>`（IAB 内核 UA 用页内 `navigator.userAgent` 现读）即可匹配，采集与续签全通（2btocken 实锤）；不信任转发头就只能同出口代理+UA 定制或放弃。注意 Clash 切节点 = 出口 IP 变 = 指纹再失效，用户重登后要同步更新 XFF 头。
+3. 短效会话：`token_refresh` 自动续签（new-api 会话系配 `refresh_cookie_name: new_api_refresh`，自研站配对应刷新端点）。sub2api 系（1for/2000lab）配法实测（2026-10-09 定稿）：`url` = `https://<站域>/api/v1/auth/refresh`、`method` POST、`body` = `{"refresh_token": "${refresh_token}"}`、`access_token_field` = `data.access_token`、`refresh_token_field` = `data.refresh_token`，浏览器登录后从 localStorage 取 `refresh_token` 贴进去保存即接入登录态。⚠️ 两条纪律：① **rt_ 单次可用每次刷新轮换**——拿被前端自动轮换掉、或被探测作废过的旧 rt_ 去续签必然 `REFRESH_TOKEN_INVALID`（「2000lab 续签流程断了」的旧结论就是这么来的误判）；② 接入后浏览器侧会话的自动续签即作废（同一 rt_ 只能一个客户端持有），到期浏览器需重登、采集侧不受影响。**主动续签（2026-10-11 起）**：token 是 JWT 且配了续签的站，三条采集链路各自在每站开抓前检查剩余寿命，不足总寿命 1/6（24h token 提前 4h）就主动续签回写，不等被 401——轮换型 rt_ 隔天只有一次使用机会，被动续签对 24h 短效 token 意味着一天死一次（2026-10-11 四个 sub2api 站同一小时集中掉线的根因）；主动续签遇到并发链路时静默采用库里的新 token，续签流程真死仍由被动链路上报。
+4. 登录态 Cookie 与特殊头（`New-Api-User`、`Referer`）放**站点级 `request_headers`**（站点对象顶层字段）——这是价格/渠道状态/公告三条采集链路都生效的唯一落点。`network.headers` 价格链路与公告链路其实也会带上（2026-10-09 cun 实证；只有渠道状态链路不读），但**入口级头会覆盖站点级同名头**（合并序：auth_inject > 入口 headers > request_headers）——把凭证迁到 request_headers 或续签换新时，必须同步删掉 network.headers 里的旧同名键，否则旧值一直盖着新值。只有单个采集地址专用的头才写进那个地址的 `headers`。request_headers 里的 `User-Agent` 可覆盖采集默认 UA（2026-10-12 起，大小写不敏感），供指纹类站对齐登录端。**头名可能随站方品牌改名**（heyroute.ai 把 `New-Api-User` 改成了 `HeyRoute-User`，2026-10-12 实证）：401 文案会直接说缺哪个头，照抄即可。
+5. 响应头滑窗续签（claude-relay 系，如 icodeeasy）：登录后 token 存 localStorage 单个 `token` 键、有效期 30 天——服务端可在响应头 `x-new-token` 里下发新 token，前端拦截器自动写回。**实测 2026-10-09：新鲜 token 请求未触发该头**（疑似仅临期才下发），采集端也未接入登录态；到期前没人替它续，过期即公告链路 401、需重新登录重贴。识别特征：SPA 前端代码里 `x-new-token` 字样。
+6. **会话绑定类站点**（sub2api 部署可开，401 返回 `SESSION_BINDING_MISMATCH`）：指纹 = SHA256(登录时出口 IP + User-Agent)，任一变化即 401，且**校验失败一次就吊销整个会话家族的 refresh token**（浏览器那边的新鲜 rt_ 立刻全灭）——所以接入登录态前先服务器侧 `curl -H "Authorization: Bearer <token>"` 试一手，别拿浏览器凭证盲配续签流程。破解看部署是否信任转发头（源码 session_binding 中间件）：信任时站级 request_headers 传 `X-Forwarded-For: <登录出口 IP>` + `User-Agent: <登录端 UA>`（IAB 内核 UA 用页内 `navigator.userAgent` 现读）即可匹配，采集与续签全通（2btocken 实证）；不信任转发头就只能同出口代理+UA 定制或放弃。注意 Clash 切节点 = 出口 IP 变 = 指纹再失效，用户重登后要同步更新 XFF 头。
 
 ## AI 浏览器代办 SOP（替用户看站 + 配置）
 
-### 工具栈：同一套口径，两个环境（2026-10-13 双环境对齐）
+### 工具栈：同一套规则，两个环境（2026-10-13 双环境对齐）
 
 配站走查先认当前跑在哪个环境——能力等价、命令不同，**选型规则两边一致**：
 
@@ -107,24 +107,24 @@
 流程：
 
 1. **看站类型**：打开站点，判断是 new-api/one-api 系（标配 `/api/pricing`、`/api/status`、`/api/notice`）还是自研接口（如 subrouter 的 marketplace API）。**动手前先学站点自己的文档**（2026-10-08 约定）：站内文档页、页脚开源署名对应的 GitHub 仓库、API 文档都看一眼再下判断——sub2api 系读它的仓库文档，new-api 系对照官方源码，不靠猜。**别用一个接口定生死**（2026-10-08 用户要求）：`/api/pricing` 404 不等于站死——把导航、模型广场、渠道、订阅、公告各页面都翻一遍再归类，页面 UI 同款模板（如 sub2api 系的 EN/暗色切换壳）直接对照同族站找接口。
-2. **甄别渠道**：按上表口径过一遍模型页/渠道页，确认官方共享渠道的过滤参数或专用接口；空壳渠道（供货统计全 0、价格「不限」）直接排除。
-3. **确认价格接口**：优先公开 pricing 接口；拿不准时看页面实际打了哪个请求——ZCode 用 Chrome DevTools MCP 网络面板找返回模型+价格的请求；WorkBuddy 无 DevTools MCP，改用 `agent-browser snapshot` 看渲染后的页面结构、再直接 `curl` 候选接口族（`/api/pricing`、`/api/status`、`/api/notice`…）逐个打，命中即配。返回 HTML 的页面地址必须免登录——httpx 直采没有浏览器环境（详见 `dom_url_auth_constraint`）。顺带确认公告与渠道状态接口（new-api 系候选：`/api/notice`、`/api/status`、`/api/model_status/groups`；渠道分组接口不少部署没有，公开性能汇总 `/api/perf-metrics/summary?hours=24` 是常见替代，两者都匿名可读才配）。sub2api 系端点家族：`/api/v1/model-plaza`（模型广场，匿名性逐站不同）、`/api/v1/channels/available`（可用渠道，带每 token 直读价）、`/api/v1/model-prices`（分组实付价，2026-10-08 新增确定性解析器：按分组展开已含倍率的 CNY 价，登录后可读）、`/api/v1/groups/rates`（分组倍率，多为要登录）、`/api/v1/announcements`（公告）、`/api/v1/channel-monitors`（渠道可用率/延迟，登录后可读）；注意「实收 = 官方美元价 × 分组倍率」的 CNY 计费站，倍率表拿不到就别采——采到的只是没乘倍率的官方价（2xapi 教训）。自研美元计价站（「基准价 × 套餐倍率」那种）先想清楚抽取路径：非 new-api 格式走 AI 兜底，抽取不稳就先别开——错价比没价糟（118.ink 教训，lessons.md §2）。
-   **计价口径不用配但必须懂**（2026-10-10 定稿，修 AIHub365 全站价低 6.8 倍后收口）：v1 new-api 站的倍率基准价 = `(1e6/quota_per_unit) × price`，两数都取自该站 `/api/status`（`price` 是充值汇率：1 美元额度卖几块钱；`usd_exchange_rate` 是前端显示换算，不能当基准——1-cnmz 报 7.3 实收按 1）。中文 1:1 站 price=1 基准即 2；AIHub365 6.8→13.6、cun 6.95→13.9、128api/2coding/134-175-71 7.3→14.6。采集层自动读 status 推导（含 marketplace 等非 /api/pricing 地址，剥不出后缀退回 URL 起源），v2 载荷（billing_denomination_version=2）以站方声明优先——配站零动作，但核对价格、跟用户解释折扣时按这个口径心算。另两条解析层既有语义：站方挂牌价（input_price/output_price）优先于 billing_expr 表达式（subrouter 实锤：表达式是官价池计费 p*10+c*50，站上挂牌 0.6=94% 折扣）；`billing_multiplier` 是站方对表达式的折扣系数（sudocode 0.2~2），漏乘即错最高 5 倍。
-   **⚠️ 站方自有计价站（充值折扣/展示价）——配站必查，2026-10-12 heyroute 实锤**：少数 fork 站的定价页把「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示，实收价 = 参考价 × 按充值/套餐汇率**实时算出**的折扣（heyroute：Grok 组 `$2.00`→`$0.040`、badge「≈2% of xAI official price」）。标准公式拿到的是**被划掉的那一列**（`group_ratio` 是「Nx 计费」额度倍率、不是价格折扣），方向相反 → 整站偏高 2–50 倍。**识别特征**：① 页面每格两个数（前灰删除线、后加粗）；② 分组标题挂在「≈X% of official price」＋「Nx billing」；③ `/api/pricing` 顶层带非标准字段 `display_prices`（标准 new-api 没有这个键）。**这类站的实收价在任何 JSON 里都没有**（前端用 `/api/user/topup/info` 的 `wallet_recharge_rate` + `/api/subscription/plans` 现算），标准公式不可复现。**采集侧已内置该形态的确定性解析**（`adapters.display_fork_price_records`：实收 = 参考价(model_ratio×2/a) × 分组折扣 floor(组倍率×100×a/rate)，rate 取钱包/套餐汇率各算百分比后取最小，cn-models 组 a=7；2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证），配站零动作、走 `display_prices` 自动分派；配站收尾仍要用浏览器实锤**逐个数字**是站方实收价（heyroute 当初只对「基准价×倍率」自洽就误判成「一致」）。
-4. **试探认证**：先匿名请求接口；401/403 再配认证。new-api 系注意 `New-Api-User` 头与 Referer 坑（lessons.md §1）。**撞到登录墙（定价/接口要登录才给数据）**：不硬试——每个站单独开一个注册页标签页交给用户注册登录（2026-10-08 与用户跑通的流程）。**2026-10-14 用户要求：这一步是本流程的默认动作，不用等用户开口或事后问**——配站时一到登录墙就主动在浏览器把各站登录/注册页逐个开好，随报告把站点清单（含各站该登哪个域）和「登录后我来自动接管」一句说明一起给出；登录后取凭证，按现役范式配（共享登录态走站点级 `request_headers`，短效凭证配 `token_refresh` 自动续签，浏览器存储登录态走 headless 注入）；凭证运行时贴入，不落仓库。**取凭证按环境走两条路**：① **ZCode** —— IAB 内嵌浏览器 cookie 库是本地明文 SQLite，httpOnly Cookie 也能拷库直查（2026-10-09 cun 实证）：`cp "~/Library/Application Support/ZCode/session/Partitions/zcode-embedded-browser/Cookies" /tmp/iab_cookies.db && sqlite3 /tmp/iab_cookies.db "SELECT name, value FROM cookies WHERE host_key LIKE '%站域%'"`，value 是加密形态（`v10` 开头）才退回让用户从 DevTools 手抄；② **WorkBuddy** —— 没有可拷的内嵌浏览器 cookie 库（2026-10-13 本机实测 `~/Library/Application Support/WorkBuddy` 为空、无 `Partitions` 目录），登录态从**用户自己的系统浏览器**取：**优先直读**——让用户在系统 Chrome 登录同站，再 `python3 tools/read_chrome_localstorage.py <站域>` 直接读出 `auth_token`/`refresh_token`（脚本自带最小 leveldb + snappy 解析，Chrome 把 localStorage 存在 `<UserData>/<Profile>/Local Storage/leveldb/`，`.log` 明文、`.ldb` 压缩块，grep 捞不到；2026-10-13 实证 2000lab / daitu 的 sub2api 四键可原样读出，无需手抄）；**查无结果本身就是判据**——说明账号建了但没登录，先让用户登录再取；直读不通（非 Chromium 浏览器 / Windows）再退回手抄——DevTools → Application → localStorage（sub2api 系四键、new-api 系会话 Cookie，见 lessons.md §3）；需要浏览器会话内真登录时用 `agent-browser open <登录页>` → `snapshot -i` 认元素 → `type` 填 → `click` 提交（凭据向用户要、不落仓库），登录态在该会话内保留供后续同源接口对照。**假设（未实测）**：内置「预览」面板是独立会话、不共享系统浏览器 Cookie；若实测共享，看图走「预览」面板更省事。
+2. **甄别渠道**：按上表标准过一遍模型页/渠道页，确认官方共享渠道的过滤参数或专用接口；空壳渠道（供货统计全 0、价格「不限」）直接排除。
+3. **确认价格接口**：优先公开 pricing 接口；拿不准时看页面实际打了哪个请求——ZCode 用 Chrome DevTools MCP 网络面板找返回模型+价格的请求；WorkBuddy 无 DevTools MCP，改用 `agent-browser snapshot` 看渲染后的页面结构、再直接 `curl` 候选接口族（`/api/pricing`、`/api/status`、`/api/notice`…）逐个打，命中即配。返回 HTML 的页面地址必须免登录——httpx 直采没有浏览器环境（详见 `dom_url_auth_constraint`）。顺带确认公告与渠道状态接口（new-api 系候选：`/api/notice`、`/api/status`、`/api/model_status/groups`；渠道分组接口不少部署没有，公开性能汇总 `/api/perf-metrics/summary?hours=24` 是常见替代，两者都匿名可读才配）。sub2api 系端点家族：`/api/v1/model-plaza`（模型广场，匿名性逐站不同）、`/api/v1/channels/available`（可用渠道，带每 token 直读价）、`/api/v1/model-prices`（分组实付价，2026-10-08 新增确定性解析器：按分组展开已含倍率的 CNY 价，登录后可读）、`/api/v1/groups/rates`（分组倍率，多为要登录）、`/api/v1/announcements`（公告）、`/api/v1/channel-monitors`（渠道可用率/延迟，登录后可读）；注意「实收 = 官方美元价 × 分组倍率」的 CNY 计费站，倍率表拿不到就别采——采到的只是没乘倍率的官方价（2xapi 教训）。自研美元计价站（「基准价 × 套餐倍率」那种）先想清楚抽取路径：非 new-api 格式走 AI 后备，抽取不稳就先别开——错价比没价糟（118.ink 教训，lessons.md §2）。
+   **计价规则不用配但必须懂**（2026-10-10 定稿，修 AIHub365 全站价低 6.8 倍后收敛）：v1 new-api 站的倍率基准价 = `(1e6/quota_per_unit) × price`，两数都取自该站 `/api/status`（`price` 是充值汇率：1 美元额度卖几块钱；`usd_exchange_rate` 是前端显示换算，不能当基准——1-cnmz 报 7.3 实收按 1）。中文 1:1 站 price=1 基准即 2；AIHub365 6.8→13.6、cun 6.95→13.9、128api/2coding/134-175-71 7.3→14.6。采集层自动读 status 推导（含 marketplace 等非 /api/pricing 地址，剥不出后缀退回 URL 起源），v2 载荷（billing_denomination_version=2）以站方声明优先——配站零动作，但核对价格、跟用户解释折扣时按这个标准心算。另两条解析层既有语义：站方挂牌价（input_price/output_price）优先于 billing_expr 表达式（subrouter 实证：表达式是官价池计费 p*10+c*50，站上挂牌 0.6=94% 折扣）；`billing_multiplier` 是站方对表达式的折扣系数（sudocode 0.2~2），漏乘即错最高 5 倍。
+   **⚠️ 站方自有计价站（充值折扣/展示价）——配站必查，2026-10-12 heyroute 实证**：少数 fork 站的定价页把「官方参考价（灰色删除线）」与「本站实收价（加粗）」并排显示，实收价 = 参考价 × 按充值/套餐汇率**实时算出**的折扣（heyroute：Grok 组 `$2.00`→`$0.040`、badge「≈2% of xAI official price」）。标准公式拿到的是**被划掉的那一列**（`group_ratio` 是「Nx 计费」额度倍率、不是价格折扣），方向相反 → 整站偏高 2–50 倍。**识别特征**：① 页面每格两个数（前灰删除线、后加粗）；② 分组标题挂在「≈X% of official price」＋「Nx billing」；③ `/api/pricing` 顶层带非标准字段 `display_prices`（标准 new-api 没有这个键）。**这类站的实收价在任何 JSON 里都没有**（前端用 `/api/user/topup/info` 的 `wallet_recharge_rate` + `/api/subscription/plans` 现算），标准公式不可复现。**采集侧已内置该形态的确定性解析**（`adapters.display_fork_price_records`：实收 = 参考价(model_ratio×2/a) × 分组折扣 floor(组倍率×100×a/rate)，rate 取钱包/套餐汇率各算百分比后取最小，cn-models 组 a=7；2026-10-12 用 heyroute 全部 7 个分组的页面渲染价逐分验证），配站零动作、走 `display_prices` 自动分派；配站收尾仍要用浏览器实证**逐个数字**是站方实收价（heyroute 当初只对「基准价×倍率」自洽就误判成「一致」）。
+4. **试探认证**：先匿名请求接口；401/403 再配认证。new-api 系注意 `New-Api-User` 头与 Referer 坑（lessons.md §1）。**遇到登录限制（定价/接口要登录才给数据）**：不硬试——每个站单独开一个注册页标签页交给用户注册登录（2026-10-08 与用户跑通的流程）。**2026-10-14 用户要求：这一步是本流程的默认动作，不用等用户开口或事后问**——配站时一到登录限制就主动在浏览器把各站登录/注册页逐个开好，随报告把站点清单（含各站该登哪个域）和「登录后我来自动接入」一句说明一起给出；登录后取凭证，按现役范式配（共享登录态走站点级 `request_headers`，短效凭证配 `token_refresh` 自动续签，浏览器存储登录态走 headless 注入）；凭证运行时贴入，不落仓库。**取凭证按环境走两条路**：① **ZCode** —— IAB 内嵌浏览器 cookie 库是本地明文 SQLite，httpOnly Cookie 也能拷库直查（2026-10-09 cun 实证）：`cp "~/Library/Application Support/ZCode/session/Partitions/zcode-embedded-browser/Cookies" /tmp/iab_cookies.db && sqlite3 /tmp/iab_cookies.db "SELECT name, value FROM cookies WHERE host_key LIKE '%站域%'"`，value 是加密形态（`v10` 开头）才退回让用户从 DevTools 手抄；② **WorkBuddy** —— 没有可拷的内嵌浏览器 cookie 库（2026-10-13 本机实测 `~/Library/Application Support/WorkBuddy` 为空、无 `Partitions` 目录），登录态从**用户自己的系统浏览器**取：**优先直读**——让用户在系统 Chrome 登录同站，再 `python3 tools/read_chrome_localstorage.py <站域>` 直接读出 `auth_token`/`refresh_token`（脚本自带最小 leveldb + snappy 解析，Chrome 把 localStorage 存在 `<UserData>/<Profile>/Local Storage/leveldb/`，`.log` 明文、`.ldb` 压缩块，grep 捞不到；2026-10-13 实证 2000lab / daitu 的 sub2api 四键可原样读出，无需手抄）；**查无结果本身就是判据**——说明账号建了但没登录，先让用户登录再取；直读不通（非 Chromium 浏览器 / Windows）再退回手抄——DevTools → Application → localStorage（sub2api 系四键、new-api 系会话 Cookie，见 lessons.md §3）；需要浏览器会话内真登录时用 `agent-browser open <登录页>` → `snapshot -i` 认元素 → `type` 填 → `click` 提交（凭据向用户要、不落仓库），登录态在该会话内保留供后续同源接口对照。**假设（未实测）**：内置「预览」面板是独立会话、不共享系统浏览器 Cookie；若实测共享，看图走「预览」面板更省事。
 5. **录入配置**：管理台新增/编辑站点，价格、公告、渠道状态三件套配齐（能采就采），填认证；凭证运行时贴入，不落仓库。
-6. **自验**：站点行「测试采集」干跑（默认不调 AI、零费用），或 `POST /api/collect` 带 `site_id`；核对采到的模型与价格同站内页面一致、渠道来源符合口径。价格核对拿页面渲染值对数，流程与记录模板见 [page-cross-check.md](page-cross-check.md)（**模型列表页优先，Model Plaza 只在没有模型列表时兜底**；页面渲染值是唯一事实源，接口字段语义与源码注释都可能误导）。公开页直接看 DOM（ZCode 用 IAB、WorkBuddy 用 `agent-browser`）；登录墙站优先用库内凭证直接 `curl` 同源接口对账（两边通用），要页面渲染值再按环境注入登录态（ZCode 拷库/注入四键、WorkBuddy 用 `tools/read_chrome_localstorage.py` 直读系统浏览器或 `agent-browser` 会话内登录）；数值对不上先怀疑充值口径、组倍率计入位置与 billing_multiplier 这类解析层盲区，站方换模型阵容才是正常流失。
+6. **自验**：站点行「测试采集」试运行（默认不调 AI、零费用），或 `POST /api/collect` 带 `site_id`；核对采到的模型与价格同站内页面一致、渠道来源符合标准。价格核对拿页面渲染值对数，流程与记录模板见 [page-cross-check.md](page-cross-check.md)（**模型列表页优先，Model Plaza 只在没有模型列表时后备**；页面渲染值是唯一事实源，接口字段语义与源码注释都可能误导）。公开页直接看 DOM（ZCode 用 IAB、WorkBuddy 用 `agent-browser`）；登录限制站优先用库内凭证直接 `curl` 同源接口对账（两边通用），要页面渲染值再按环境注入登录态（ZCode 拷库/注入四键、WorkBuddy 用 `tools/read_chrome_localstorage.py` 直读系统浏览器或 `agent-browser` 会话内登录）；数值对不上先怀疑充值汇率、组倍率计入位置与 billing_multiplier 这类解析层盲区，站方换模型阵容才是正常流失。
 7. **收尾沉淀**：新坑进 lessons.md 对应分类，跨会话硬约束写 Serena 记忆。
 
 ## 新站速判（配前 3 分钟过一遍，2026-10-12 定）
 
 配一个新站前按顺序打这几枪，命中任何一条都先停下来想清楚再决定采不采：
 
-1. **页面每格几个数？** 打开 `/pricing`（无则模型列表页），看模型行里价格单元格。一格一个数＝常规 new-api，标准公式可用；一格**两个数且前一个灰色删除线**＝站方自有计价（见上方「站方自有计价站」），标准公式会采到被划掉那列 → 采集已内置该形态解析（靠顶层 `display_prices` 自动分派），但配站收尾仍要逐数字实锤。
-2. **分组标题写了什么？** 只有「Nx」＝常规倍率；出现「≈X% of official price」这类对照官价的营销口径＝大概率用了充值/套餐折扣体系。
+1. **页面每格几个数？** 打开 `/pricing`（无则模型列表页），看模型行里价格单元格。一格一个数＝常规 new-api，标准公式可用；一格**两个数且前一个灰色删除线**＝站方自有计价（见上方「站方自有计价站」），标准公式会采到被划掉那列 → 采集已内置该形态解析（靠顶层 `display_prices` 自动分派），但配站收尾仍要逐数字实证。
+2. **分组标题写了什么？** 只有「Nx」＝常规倍率；出现「≈X% of official price」这类对照官价的营销标准＝大概率用了充值/套餐折扣体系。
 3. **`/api/pricing` 顶层有哪些键？** 标准站是 `data / group_ratio / usable_group / pricing_version`；若多出 `display_prices`、`wallet_recharge_rate` 之类非标准键＝改过计费的 fork，先按「自有计价」对待。一条命令扫全库同类站：拉各站 pricing URL 看顶层键（本轮扫描脚本思路见 `.zcode/plans`）。
-4. **实收口径必须逐个数字实锤**：别用「基准价 × 倍率 = 库里值」自证（自洽不等于对），要点开模型行读页面**实收那个数**与库里比；对不上且说不清倍数就是口径错。参照 `docs/page-cross-check.md` 的对照流程与记录模板。
-5. **站价高于官价的行会被系统丢弃**（产品口径，2026-10-12 用户定）：折合 CNY 后折扣 > 100% 即「比官价还贵、没有选择价值」，采集侧不入快照、展示侧过滤。所以某站在库里「少了几个模型/分组」时，先看是不是它本来就卖得比官价贵——不是采集故障。
+4. **实收标准必须逐个数字实证**：别用「基准价 × 倍率 = 库里值」自证（自洽不等于对），要点开模型行读页面**实收那个数**与库里比；对不上且说不清倍数就是标准错。参照 `docs/page-cross-check.md` 的对照流程与记录模板。
+5. **站价高于官价的行会被系统丢弃**（产品决策，2026-10-12 用户定）：折合 CNY 后折扣 > 100% 即「比官价还贵、没有选择价值」，采集侧不入快照、展示侧过滤。所以某站在库里「少了几个模型/分组」时，先看是不是它本来就卖得比官价贵——不是采集故障。
 
 ## 红线
 

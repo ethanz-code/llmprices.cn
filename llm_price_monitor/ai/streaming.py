@@ -65,7 +65,7 @@ def ai_stream_fallback(config: AIConfig, system: str, user: str, *, max_tokens: 
     assert last_exc is not None
     # 把状态码和供应商报错要点一起报出去，这才是用户该看到的真实原因
     _log_pool_exhausted(scene, model, last_error_text, user)
-    raise AIExtractionError(f"模型池全部失败，最后一次错误 {last_error_text}") from last_exc
+    raise AIExtractionError(f"模型备选池全部失败，最后一次错误 {last_error_text}") from last_exc
 
 class _StreamErrorPayload(Exception):
     """HTTP 200 但流里带 error 数据帧：部分供应商（如 MiniMax）参数报错不走状态码。"""
@@ -86,7 +86,7 @@ def _stream_chat_events(
     """单模型流式对话：四种接口结构都产出 {"type":"delta","text"} 增量与最后的 finish 事件。
 
     finish 事件带 finish_reason、按分片拼装完整的 tool_calls 与 usage；HTTP/网络错误原样抛出。
-    timeout 覆盖单次请求超时；流式没有总时长限制（read 超时只管字节间隔），这里按墙钟死线兜底，
+    timeout 覆盖单次请求超时；流式没有总时长限制（read 超时只管字节间隔），这里按墙钟死线后备，
     连续吐字的思考型模型拖过死线同样掐断换人。
     """
     url, headers, body = ai_request(config, model, "", "", messages=messages, tools=tools, json_mode=False)
@@ -364,7 +364,7 @@ def ai_stream_messages_fallback(
                 break
     assert last_exc is not None
     _log_pool_exhausted(scene, model if order else "", last_error_text, prompt_excerpt)
-    raise AIExtractionError(f"模型池全部失败，最后一次错误 {last_error_text}") from last_exc
+    raise AIExtractionError(f"模型备选池全部失败，最后一次错误 {last_error_text}") from last_exc
 
 def ai_stream(config: AIConfig, model: str, system: str, user: str, *, max_tokens: int | None = None, enable_thinking: bool | None = None, timeout: float | None = None) -> Iterator[str]:
     """流式对话：逐段产出模型输出文本；四种接口结构都走各自的 stream 模式，HTTP 错误原样抛出。

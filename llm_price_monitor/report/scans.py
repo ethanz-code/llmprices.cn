@@ -118,8 +118,8 @@ def _scan_prices(
 
     返回 (records, events, errors, site_status)；持久化在本函数内逐站完成——
     history_rows 只含本次真正取到价的记录（沿用上次价的占位行与无数据的跳过行都不写历史）、
-    removed_keys 是分组下线要从快照摘除的 key、touched_keys 是本轮真正写过快照的 key
-    （防止与并行采集互相回写覆盖），三者只进落库链路，不再外传给调用方。
+    removed_keys 是分组下线要从快照移除的 key、touched_keys 是本轮真正写过快照的 key
+    （防止与并行采集互相回写覆盖），三者只进写库链路，不再外传给调用方。
     """
     records: list[dict[str, Any]] = []
     history_rows: list[dict[str, Any]] = []
@@ -132,7 +132,7 @@ def _scan_prices(
     enabled_count = len(enabled_specs)
     scan_started = time.time()
     tasklog.emit(f"开始价格采集：{enabled_count} 个站点（并发 {SITE_FETCH_CONCURRENCY}）")
-    # 网络阶段并行开工、按提交顺序处理落库：一个站卡满硬上限只占一个并发槽，
+    # 网络阶段并行开工、按提交顺序处理写库：一个站卡满硬上限只占一个并发槽，
     # 不再让排在后面的站陪等（串行时最坏 ⌊整轮⌋ = 站数 × 硬上限）
     handles: dict[str, Any] = {}
     for done_count, spec in enumerate(enabled_specs, 1):
@@ -164,9 +164,9 @@ def _scan_prices(
         site_changed = 0
         site_keys: set[str] = set()
         # 本轮真正取到价的 key：分组/模型缺失计数只认真价轮——响应还在但没解析出价的轮次
-        # 也是"没有数据"，同样向摘除阈值累计，过期旧价不得无限期挂在定价页
+        # 也是"没有数据"，同样向移除阈值累计，过期旧价不得无限期挂在定价页
         site_priced_keys: set[str] = set()
-        # 站点切片标记：本站新增的历史行与事件从这两个下标起，供站内立即落库
+        # 站点切片标记：本站新增的历史行与事件从这两个下标起，供站内立即写库
         history_mark = len(history_rows)
         events_mark = len(events)
         # 本轮开始前快照里已有的模型：这些模型冒出新分组记 group_added，全新模型仍记 new
@@ -180,10 +180,10 @@ def _scan_prices(
         # sanity 判据每站现读：一轮采集可能被卡死站点或机器休眠拖上数小时，
         # 目录中途修正后要用新判据，启动时的坏目录不得贯穿整轮
         sanity_models, sanity_rate = _sanity_context(store)
-        # sanity 两轮确认的跨轮进度（待复核/已作废）：作废行被落库层清理后 previous 消失，
+        # sanity 两轮确认的跨轮进度（待复核/已作废）：作废行被写库层清理后 previous 消失，
         # 靠这份站级切片维持状态机，已作废的同因复现静默、不刷任务日志与异常卡片
         sanity_state: dict[str, Any] = dict(store.get_document("sanity_state") or {}) if store is not None else {}
-        # 价格腿零命中 + 渠道状态快照带倍率与模型（sub2api 倍率型站）→ 官方价×倍率合成渠道价
+        # 价格链路零命中 + 渠道状态快照带倍率与模型（sub2api 倍率型站）→ 官方价×倍率合成渠道价
         if not collected and store is not None:
             status_url = str(spec.status.get("url") or "") if isinstance(spec.status, dict) else ""
             synthesized = _channel_rate_records(
@@ -191,22 +191,22 @@ def _scan_prices(
             )
             if synthesized:
                 collected = synthesized
-                # 合成价就是本轮真实产出：站点状态须随重算，否则健康档案按价格腿零命中误报"没抓到任何价格数据"
+                # 合成价就是本轮真实产出：站点状态须随重算，否则健康档案按价格链路零命中误报"没抓到任何价格数据"
                 site_status[spec.id] = {"checked_at": time.time(), **site_status_from_records(collected)}
-                tasklog.emit(f"[{spec.id}] 价格腿未命中，按渠道倍率 × 官方价合成 {len(synthesized)} 条渠道价", "info")
-        # 占位组跳过：组内全部模型同一价目且有作废实锤时整组跳过（零配置通用判据）
+                tasklog.emit(f"[{spec.id}] 价格链路未命中，按渠道倍率 × 官方价合成 {len(synthesized)} 条渠道价", "info")
+        # 虚假分组跳过：组内全部模型同一价目且有作废实证时整组跳过（零配置通用判据）
         collected = _drop_phony_group_records(collected, spec.id, sanity_state)
         for record in collected:
-            # 分组归一：metadata 缺失时兜底 default，保证事件键跨扫描稳定
+            # 分组归一：metadata 缺失时后备 default，保证事件键跨扫描稳定
             group = (record.metadata or {}).get("group") or "default"
             key = latest_key(spec.id, record.model, group)
             site_keys.add(key)
             previous = latest.get(key)
             current = _backfill_rule_price(record_dict(spec.id, record))
             # 站价折合后高于官方价（折扣 > 100%）：中转站比官价还贵，对用户没有选择价值 →
-            # 不入快照、不展示（显式摘除该 key，且不走"沿用旧价"分支，免得旧高价又挂回来）。
-            # 结构化直采的行「高于官价」几乎都是站方明码真价（i-v1api 实锤 mimo-v2.5 ¥45
-            # = 22 倍官价），先按产品口径丢弃，不走 sanity 两轮确认报成"提取错误"刷异常卡片；
+            # 不入快照、不展示（显式移除该 key，且不走"沿用上次价格"分支，免得旧高价又挂回来）。
+            # 结构化直采的行「高于官价」几乎都是站方明码真价（i-v1api 实证 mimo-v2.5 ¥45
+            # = 22 倍官价），先按产品决策丢弃，不走 sanity 两轮确认报成"提取错误"刷异常卡片；
             # 提取类来源维持原顺序——离谱高价可能是提取事故，先过 sanity 留错误信号。
             if (
                 _has_price(current)
@@ -240,7 +240,7 @@ def _scan_prices(
                     continue
                 if previous is not None and (previous.get("metadata") or {}).get("sanity_suspect"):
                     # 上次价挂着待复核标记（异常首轮），本次作废说明异常复现：
-                    # 可疑旧价不沿用（落库层会清掉无价行，等于该行下架待下一轮好数据）
+                    # 可疑旧价不沿用（写库层会清掉无价行，等于该行下架待下一轮好数据）
                     pass
                 elif previous is not None:
                     # 上次有价、本次没拿到：沿用上次价格并标"需认证"，但不写历史（价格没有新观测）
@@ -257,9 +257,9 @@ def _scan_prices(
             current["captured_at"] = record.captured_at
             site_priced_keys.add(key)
             records.append(current)
-            # 指纹去重：价格口径与上一轮一致就不写历史行，趋势表只保留真实变化点。
-            # previous 的指纹现场重算而非读存量哈希——历史行落库时的口径可能比当前代码旧，
-            # 直接比存量哈希会让口径升级后的第一轮全量多写一遍趋势行
+            # 指纹去重：价格规则与上一轮一致就不写历史行，趋势表只保留真实变化点。
+            # previous 的指纹现场重算而非读存量哈希——历史行写库时的标准可能比当前代码旧，
+            # 直接比存量哈希会让标准升级后的第一轮全量多写一遍趋势行
             if previous is None or fingerprint(previous) != current["fingerprint"]:
                 history_rows.append(current)
             if previous is None and record.model in known_models:
@@ -274,13 +274,13 @@ def _scan_prices(
         # 出现"需认证"占位行（401/403）时是我方凭证问题，不代表站点真的没这份数据，
         # 跳过缺失计数，避免 token 过期把整站价格刷成下线事件；
         # 有地址采集失败时本轮记录同样不完整（没采到 ≠ 站点没数据），一并跳过；
-        # 测试采集（persist=False）同样不计数——不完整的测试轮次不得污染正式摘除阈值
+        # 测试采集（persist=False）同样不计数——不完整的测试轮次不得污染正式移除阈值
         site_removed: set[str] = set()
         if store is not None and persist and not needs_refresh(collected) and not collect_errors:
             site_removed = _detect_removed_groups(store, latest, spec.id, site_priced_keys, events)
             removed_keys |= site_removed
-        # 每站采完立即落库：单站卡死被放弃、或整轮中途被重启时，已完成的站点不随内存丢失。
-        # 落库范围用站点切片限定（touched ∩ site_keys 恰为本站写过的快照 key），
+        # 每站采完立即写库：单站卡死被放弃、或整轮中途被重启时，已完成的站点不随内存丢失。
+        # 写库范围用站点切片限定（touched ∩ site_keys 恰为本站写过的快照 key），
         # latest 仍传完整内存快照，由 touched 限定只比对本站 key。
         if store is not None and persist:
             # sanity 状态与 group_miss 同属并行轮共享的读-改-写文档，写回持同一把锁；
@@ -307,8 +307,8 @@ def _scan_prices(
     return records, events, errors, site_status
 
 
-# 连续缺失这么多次才摘除：站点换分组清单、临时调整常态发生，单轮缺失就删会把改版刷成下线事件；
-# 用户口径是数据要跟站点实时对齐——连续 3 轮拿不到数据（约半天内）就把旧价从快照删掉，不长期挂过期价
+# 连续缺失这么多次才移除：站点换分组清单、临时调整常态发生，单轮缺失就删会把改版刷成下线事件；
+# 用户标准是数据要跟站点实时对齐——连续 3 轮拿不到数据（约半天内）就把旧价从快照删掉，不长期挂过期价
 GROUP_REMOVED_MISSES = 3
 
 
@@ -316,10 +316,10 @@ def _detect_removed_groups(
     store: Store, latest: dict[str, dict[str, Any]], site_id: str, priced_keys: set[str], events: list[dict[str, Any]]
 ) -> set[str]:
     """本轮采集成功的站点里，快照中存在但本轮没取到真实价格的分组视为一次缺失：
-    连续 GROUP_REMOVED_MISSES 次缺失记 group_removed 事件并从快照摘除；中途恢复则清零。
+    连续 GROUP_REMOVED_MISSES 次缺失记 group_removed 事件并从快照移除；中途恢复则清零。
     缺失既包括模型/分组从站点响应里消失，也包括响应还在但没解析出价的轮次
-    （占位行、沿用旧价轮）——两种都算"没有数据"，向同一阈值累计。
-    缺失计数持久化到 group_miss 文档，跨轮次累计；返回本轮摘除的快照 key。
+    （占位行、沿用上次价格轮）——两种都算"没有数据"，向同一阈值累计。
+    缺失计数持久化到 group_miss 文档，跨轮次累计；返回本轮移除的快照 key。
     group_miss 是并行采集（全量 + 单站测试）共享的读-改-写文档，全程持 _MERGE_LOCK，
     否则并发轮次会互相丢计数或对同一次下线重复发事件。"""
     with _MERGE_LOCK:
@@ -351,7 +351,7 @@ def _detect_removed_groups(
                 watch[key] = count
             changed = True
         for key in [key for key in watch if key not in latest]:
-            watch.pop(key, None)  # 快照里已经没有的 key 不再计数（站点被删/已被摘除）
+            watch.pop(key, None)  # 快照里已经没有的 key 不再计数（站点被删/已被移除）
             changed = True
         if changed:
             store.set_document("group_miss", watch)
@@ -399,7 +399,7 @@ def _scan_statuses(
         if not spec.enabled or not spec.status.get("url"):
             continue
         spec = ensure_fresh_token(spec, client=client, timeout=config.settings.timeout, user_agent=user_agent, store=store)
-        # 逐站留痕：整轮拖长时能直接看出卡在哪个站的哪条腿
+        # 逐站留痕：整轮拖长时能直接看出卡在哪个站的哪条链路
         tasklog.emit(f"[{spec.id}] 开始渠道状态采集")
         try:
             status_record = _run_site_fetch(

@@ -29,7 +29,7 @@ function msLabel(ms: number | null): string {
 }
 
 /** 新站发现弹窗：从「导入站点」入口打开，发现/探测/导入全在弹窗里完成，不用再跑命令行脚本。
- *  导入只写基础配置（入口+停用态+new-api 公告口径），认证/倍率/网页模式等点「编辑」进站点弹窗补。
+ *  导入只写基础配置（入口+停用态+new-api 公告规则），认证/倍率/网页模式等点「编辑」进站点弹窗补。
  *  以弹窗形态从「导入站点」入口打开，不常驻站点管理页。 */
 export function DiscoverModal({
   open,
@@ -120,7 +120,7 @@ export function DiscoverModal({
         } catch {
           // 单次轮询失败继续等（服务重启会把任务标为失败，下一轮轮询能看到）
         }
-        // 任务接口不可用时的兜底：数据时间变了也算完成
+        // 任务接口不可用时的后备：数据时间变了也算完成
         try {
           const next = await apiSend<DiscoveryData>("/api/discovery?include_ignored=1", "GET");
           if (next.generated_at && next.generated_at !== before) {
@@ -193,7 +193,7 @@ export function DiscoverModal({
     {
       key: "host",
       title: "站点",
-      // 大多数域名 ≤23 字符（mono 13px 约 180px）；更长的靠 ellipsis + title 兜底，宽度让给简介
+      // 大多数域名 ≤23 字符（mono 13px 约 180px）；更长的靠 ellipsis + title 后备，宽度让给简介
       width: 208,
       ellipsis: true,
       render: (_v, row) => (

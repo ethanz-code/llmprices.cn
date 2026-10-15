@@ -1,5 +1,5 @@
-import { CatalogLoading } from "@/components/PageLoading";
+import { CatalogLoadingSwitch } from "@/components/CatalogLoadingSwitch";
 
 export default function Loading() {
-  return <CatalogLoading />;
+  return <CatalogLoadingSwitch />;
 }

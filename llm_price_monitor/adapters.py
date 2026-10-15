@@ -253,7 +253,7 @@ def _newapi_item(data: list[dict[str, Any]], model_name: str | None) -> dict[str
 
 
 def _newapi_denomination(client: httpx.Client, pricing_url: str, timeout: float) -> dict[str, Any] | None:
-    """读站点 /api/status 的充值口径声明（price × quota_per_unit）；任何失败都回落 None。
+    """读站点 /api/status 的充值计价声明（price × quota_per_unit）；任何失败都回落 None。
 
     v1 的 /api/pricing 载荷自身不带计价声明，而各站充值汇率差 7 倍
     （AIHub365 price=6.8，多数中文站 price=1），不读就会把美元站价格整体低算。
@@ -285,7 +285,7 @@ def network_pricing_records(
 ) -> list[PriceRecord]:
     """只用 HTTP JSON 响应计算价格；支持 New API 和字段映射响应。
 
-    `denomination` 是站点 /api/status 的充值口径声明（见 _newapi_denomination），
+    `denomination` 是站点 /api/status 的充值计价声明（见 _newapi_denomination），
     传进来用于修正 v1 载荷的倍率基准价；None 时按默认基准计价。
     metadata.adapter 标签只描述「价格怎么解析出来的」，与采集是否走了浏览器无关
     （"browser" 是历史命名：证据结构沿用了浏览器捕获事件的格式，实际可能纯 HTTP）：
@@ -313,7 +313,7 @@ def network_pricing_records(
             attempted_groups.setdefault(target.name, set())
             failures.setdefault(target.name, [])
         # 目标名 → 该目标可接受的名字（标准名 + AI 别名）；站点侧名字按精确优先、
-        # 版本号省略兜底分配到目标，歧义时不给匹配，避免把别的版本的价格挂上来
+        # 版本号省略回退分配到目标，歧义时不给匹配，避免把别的版本的价格挂上来
         accepted = {
             target.name: (target.name, *(resolved_aliases or {}).get(target.name, ()))
             for target in targets
@@ -325,8 +325,8 @@ def network_pricing_records(
         for target in targets:
             site_name = matched.get(target.name)
             if site_name is None:
-                # 宁缺勿猜被触发的要留痕：管理台看到的失败原因不能是笼统的"未捕获响应"。
-                # 两种歧义都写明站点上撞名的是谁：AI 别名多命中 / 站点同时挂同族多版本。
+                # 歧义即弃权被触发的要留痕：管理台看到的失败原因不能是笼统的"未捕获响应"。
+                # 两种歧义都写明站点上重名的是谁：AI 别名多命中 / 站点同时挂同族多版本。
                 accepted_keys = {name.casefold() for name in accepted[target.name]}
                 hits = sorted({
                     str(value.get("model_name", "")) for value in data
@@ -334,7 +334,7 @@ def network_pricing_records(
                 })
                 if len(hits) > 1:
                     failures[target.name].append(
-                        f"候选名同时命中站点 {len(hits)} 个模型（{'、'.join(hits)}），宁缺勿猜不采信"
+                        f"候选名同时命中站点 {len(hits)} 个模型（{'、'.join(hits)}），歧义即弃权不采信"
                     )
                 else:
                     same_family = sorted({
@@ -344,7 +344,7 @@ def network_pricing_records(
                     if len(same_family) > 1:
                         failures[target.name].append(
                             f"站点同时挂着同族 {len(same_family)} 个版本（{'、'.join(same_family)}），"
-                            f"无法确定哪个对应 {target.name}，宁缺勿猜不采信"
+                            f"无法确定哪个对应 {target.name}，歧义即弃权不采信"
                         )
                 continue
             item = _newapi_item(data, site_name)
@@ -433,7 +433,7 @@ def network_pricing_records(
 _CN_PRICED_GROUPS = frozenset({"cn-models"})
 # 站方前端的内部别名分组（不在 group_ratio 里、也不在定价页显示）→ 归一到真实分组
 _FORK_GROUP_ALIASES = {"cn-models": ("cn-models-ent",)}
-_DISPLAY_FORK_BASE_USD = 2.0  # 1 倍率 = $2/1M（与 new-api 定价页口径一致）
+_DISPLAY_FORK_BASE_USD = 2.0  # 1 倍率 = $2/1M（与 new-api 定价页规则一致）
 
 
 def _resolve_fork_group(group: str, group_ratio: dict[str, Any]) -> str:
@@ -488,10 +488,10 @@ def _display_fork_rates(
         EndpointRequest(url=origin), spec, user_agent, timeout, target="price"
     )
     rates: list[float] = []
-    # 站方按访客出口 IP 分流市场：CN 出口拿到的充值率/套餐率是人民币口径（数值=海外的
+    # 站方按访客出口 IP 分流市场：CN 出口拿到的充值率/套餐率是人民币计价（数值=海外的
     # 1/usd_exchange_rate），海外出口才是定价页实际采用的无量纲性价比。采集器直连（国内
     # 服务器）必然命中 CN 市场，直接进公式会把整站折扣算低 usd_exchange_rate 倍
-    # （heyroute 实锤：CN 套餐率 5.357 vs 海外 37.5，页面 7 组徽标全部只与 37.5 吻合）。
+    # （heyroute 实证：CN 套餐率 5.357 vs 海外 37.5，页面 7 组徽标全部只与 37.5 吻合）。
     # 归一系数取站方 /api/status 自报的 usd_exchange_rate（响应里现成带），非硬编码。
     market_scale = 1.0
     try:
@@ -682,7 +682,7 @@ def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> 
     """确定性解析 platforms/supported_models 结构，两种同族形态：
 
     - totokens 型：pricing.final_prices 按分组展开的每 token 单价，×1,000,000 换算 USD/1M tokens，
-      接口不标币种按 sub2api 系站内美元计费口径落美元（页面 $ 明码标价实锤）；input/output
+      接口不标币种按 sub2api 系站内美元计费规则落美元（页面 $ 明码标价实证）；input/output
       齐全为 confirmed，缺一为 candidate。
     - sub2api channels/available 型：pricing 直接带每 token 的 input_price/output_price，
       sub2api 系证据格式为美元，组倍率是否已计入未标明，一律标 candidate 待复核。
@@ -754,7 +754,7 @@ def platform_pricing_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> 
                         if key in records:
                             continue
                         metadata = evidence(
-                            "platforms 定价接口直读：final_prices 每 token 单价 ×1,000,000 换算为 USD/1M tokens；接口不标币种，按 sub2api 系站内美元计费口径落美元。",
+                            "platforms 定价接口直读：final_prices 每 token 单价 ×1,000,000 换算为 USD/1M tokens；接口不标币种，按 sub2api 系站内美元计费规则落美元。",
                             "USD",
                         )
                         metadata["group"] = group
@@ -832,7 +832,7 @@ def product_library_price_records(spec: SiteSpec, captured: list[dict[str, Any]]
     """确定性解析 302.ai 产品库价目：按折后实付价（platform_*）直读，美元每百万 token。
 
     price_info 多档取标准档；按次计费档（suffix 非 "1M tokens"）不按 token 价采；
-    实付价缺失回落标价；缓存读/写价随实付口径一并采集（实测 61/100 条带缓存价）；
+    实付价缺失回落标价；缓存读/写价随实付标准一并采集（实测 61/100 条带缓存价）；
     折扣 SKU（is_discount 或 sale/ 名称前缀）归「折扣」分组，与标准价并列不互相覆盖。
     """
     response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
@@ -1021,7 +1021,7 @@ def looks_like_marketplace_pricing(payload: Any) -> bool:
 
     - items 型：data.items[].model_name + pricing.input_price/output_price（unit 声明 per_1m_tokens 或 per_token）
     - models 型：data.models[].name + input_cost_per_token 等每 token 单价
-    - groups 型：data.groups[].models[].pricing（plaza 实收口径，按 token 单价；模型名可带 "global:" 之类通道前缀）
+    - groups 型：data.groups[].models[].pricing（plaza 实收标准，按 token 单价；模型名可带 "global:" 之类通道前缀）
     """
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
         return False
@@ -1050,7 +1050,7 @@ def looks_like_marketplace_pricing(payload: Any) -> bool:
 
 
 def marketplace_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
-    """确定性解析模型广场牌价：站方对外的每模型售价，美元口径随接口/站点声明。
+    """确定性解析模型广场牌价：站方对外的每模型售价，美元计价随接口/站点声明。
 
     items 型直读 pricing（优先 effective_* 实付价，回落标价；unit=per_token 时 ×1e6）；
     models 型按每 token 单价 ×1e6 归一为 USD/1M tokens；缓存读/写价同步采集。
@@ -1346,7 +1346,7 @@ def looks_like_subscription_plans(payload: Any) -> bool:
     """订阅套餐目录结构（套餐制站点价目）：data.subscription_plans[].{name, price, 配额字段}。
 
     套餐制站（订阅额度售卖）没有逐模型 token 单价——卖的是「N 美元额度 × 有效期」的
-    通行证，价格口径与按量计费站不同，落为订阅行而非价格行。"""
+    通行证，价格规则与按量计费站不同，落为订阅行而非价格行。"""
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
         return False
     plans = payload["data"].get("subscription_plans")
@@ -1357,7 +1357,7 @@ def looks_like_subscription_plans(payload: Any) -> bool:
 
 
 def _plan_quota_usd(plan: dict[str, Any]) -> float | None:
-    """套餐配额（美元额度）：按日/周/月限额取有值的最小口径（额度即该周期内可烧的官价美元）。"""
+    """套餐配额（美元额度）：按日/周/月限额取有值的最小标准（额度即该周期内可烧的官价美元）。"""
     for field in ("daily_limit_usd", "weekly_limit_usd", "monthly_limit_usd"):
         value = plan.get(field)
         if _plain_number(value) and value > 0:
@@ -1401,7 +1401,7 @@ def subscription_plan_records(spec: SiteSpec, captured: list[dict[str, Any]]) ->
         plan_meta = {
             "price_usd": float(price),
             "quota_usd": quota,
-            # 买 1 美元额度实付多少：0.03 = 1 美元额度卖 3 分钱 → 越低越便宜（价外口径，与 token 折扣不可直接比）
+            # 买 1 美元额度实付多少：0.03 = 1 美元额度卖 3 分钱 → 越低越便宜（价外标准，与 token 折扣不可直接比）
             "per_quota_usd": round(float(price) / quota, 4) if quota else None,
             "validity": validity,
             "group": str(plan.get("group_name") or "") or None,
@@ -1480,7 +1480,7 @@ def _rate_pair_parts(data: Any) -> tuple[list[Any], dict[str, Any]] | None:
 def rate_pair_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> list[PriceRecord]:
     """确定性解析「价目 + 分组倍率」：实付 = 基准档价 × 分组倍率。
 
-    币种按站点页面口径（¥ 计价直显）；倍率是站方明确的分组定价语义（点选分组
+    币种按站点页面标准（¥ 计价直显）；倍率是站方明确的分组定价语义（点选分组
     前后对照实测），合成实付价标 candidate 留复核；每次计费模型（input/output
     双零）不按 token 价采；price_tiers 取 base/standard 标准档，长上下文档不混入。
     """
@@ -1545,7 +1545,7 @@ def rate_pair_price_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> l
                     "payload_sha256": payload_hash(payload),
                 }],
                 "page_evidence": [],
-                "notes": "价目+倍率二元组直读：基准档价 × 分组倍率合成实付价（站点页面 ¥ 计价口径），倍率语义经页面点选分组对照验证。",
+                "notes": "价目+倍率二元组直读：基准档价 × 分组倍率合成实付价（站点页面 ¥ 计价规则），倍率语义经页面点选分组对照验证。",
             }
             records[key] = PriceRecord(
                 target.name,
@@ -1644,7 +1644,7 @@ def looks_like_group_price_map(payload: Any) -> bool:
     """逐分组显式价结构：data[].group_prices{分组:{input,output,currency}}。
 
     与标准 new-api 的「model_ratio 倍率」形态不同——这里站方已把每个渠道的实付单价算好
-    （infistar 实锤：step-5-preview 的 supply 分组直接给 CNY input=5.8125，而同条记录的
+    （infistar 实证：step-5-preview 的 supply 分组直接给 CNY input=5.8125，而同条记录的
     model_ratio 折算只有 1.04，差 5.6 倍）。显式价是站点自己展示的数，优先于倍率推导。
     """
     if not isinstance(payload, dict):
@@ -1667,7 +1667,7 @@ def group_price_map_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> l
     """确定性解析逐分组显式价：按 (模型 × 分组) 展开，取站方给的 input/output 与币种。
 
     同模型多分组按输入价升序，让最便宜的渠道排在前；model_ratio 只留核对线索不参与计价，
-    显式价已是实付口径。
+    显式价已是实付标准。
     """
     response_source_url = str(captured[0].get("url") or "") if captured else str(spec.network.get("url") or "")
     payload = captured[0].get("payload") if captured else None
@@ -1683,7 +1683,7 @@ def group_price_map_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> l
             continue
         site_name = str(item.get("model_name") or "")
         # 名称归一化（大小写/空格/连字符差异，如目标 ERNIE 5.0 对站点 ernie-5.0）走共享匹配器，
-        # 与 newapi 倍率路径同口径，避免同站两条腿匹配结果不一致
+        # 与 newapi 倍率路径同一套规则，避免同站两条链路匹配结果不一致
         target = next((t for t in spec.models if t.name == resolved.get(site_name)), None)
         if target is None:
             continue
@@ -1721,7 +1721,7 @@ def group_price_map_records(spec: SiteSpec, captured: list[dict[str, Any]]) -> l
                 }],
                 "page_evidence": [],
                 "notes": "逐分组显式价直读：站方已按渠道给出实付单价，优先于 model_ratio 倍率推导"
-                         "（infistar 实锤倍率折算偏低 5.6 倍）。",
+                         "（infistar 实证倍率折算偏低 5.6 倍）。",
             }
             records[key] = PriceRecord(
                 target.name,
@@ -1744,7 +1744,7 @@ def looks_like_grouped_ratio_pricing(payload: Any) -> bool:
     """定价页聚合结构：data.model_info[].price_info{分组:{档位:倍率}} + data.group_info{分组:倍率}。
 
     与标准 new-api 的 data[].model_ratio 平铺形态不同——这里倍率挂在「模型 × 分组 × 档位」
-    三层下，同一模型各分组倍率可以不同（88996 实锤：claude-fable-5 各分组倍率一致但
+    三层下，同一模型各分组倍率可以不同（88996 实证：claude-fable-5 各分组倍率一致但
     GroupRatio 0.2~2.5 不等）。group_info 的分组条目带 GroupRatio 数值才算数。
     """
     if not isinstance(payload, dict):
@@ -1776,7 +1776,7 @@ def grouped_ratio_price_records(
 
     逐「模型 × 分组」合成一条记录（分组取站点 enable_groups，缺省该模型带的全部分组），
     因为这种形态下倍率随分组走，只取一个组会漏掉便宜的渠道。基准价与币种同标准
-    new-api：/api/status 的充值口径（1e6/quota_per_unit × price），页面按美元展示
+    new-api：/api/status 的充值汇率（1e6/quota_per_unit × price），页面按美元展示
     （currency_symbol=USD）时按 USD 计；同模型多分组按 GroupRatio 升序，让最便宜的渠道
     排在前（下游取首条即最低价）。model_ratio=0 是站方未定价占位，不合成假免费价。
     """
@@ -1805,7 +1805,7 @@ def grouped_ratio_price_records(
         if not isinstance(model, dict):
             continue
         site_name = str(model.get("model_name") or "")
-        # 名称归一化走共享匹配器（大小写/空格/连字符差异），与 newapi 倍率路径同口径
+        # 名称归一化走共享匹配器（大小写/空格/连字符差异），与 newapi 倍率路径同一套规则
         target = next((t for t in spec.models if t.name == resolved.get(site_name)), None)
         if target is None:
             continue
@@ -1813,7 +1813,7 @@ def grouped_ratio_price_records(
         if not isinstance(price_info, dict):
             continue
         enabled = [str(g) for g in model.get("enable_groups") or [] if str(g)]
-        # 只保留站方标了 GroupRatio 的分组：未标价分组无法计价（K次/clf 实锤）
+        # 只保留站方标了 GroupRatio 的分组：未标价分组无法计价（K次/clf 实证）
         groups = [g for g in (enabled or list(price_info)) if _plain_number((ratios.get(g) or {}).get("GroupRatio"))]
         for group in groups:
             tiers = price_info.get(group)
@@ -1875,7 +1875,7 @@ def grouped_ratio_price_records(
 
 
 def _grouped_ratio_status(client: httpx.Client, pricing_url: str, timeout: float) -> dict[str, Any]:
-    """读站点 /api/status 的 data（计价口径 + 展示币种）；失败返回空字典，解析器按默认基准计价。"""
+    """读站点 /api/status 的 data（计价规则 + 展示币种）；失败返回空字典，解析器按默认基准计价。"""
     try:
         response = client.get(f"{_origin(pricing_url)}/api/status", timeout=timeout)
         if not response.is_success:
@@ -1929,8 +1929,8 @@ class _BrowserPageResponse:
 def _priced_record_count(records: list[PriceRecord]) -> int:
     """真正拿到可用价的记录数（confirmed/candidate）；rule_only/unavailable 都是无价占位。
 
-    AI 别名扩展在「裸名与带前缀变体并存」的站上会把精确命中撞成多命中歧义（宁缺勿猜），
-    带别名的结果反而可能比不带别名的直采更差（bytonsec 实锤：直采的 16 条确认价被
+    AI 别名扩展在「裸名与带前缀变体并存」的站上会把精确命中变成多命中歧义（歧义即弃权），
+    带别名的结果反而可能比不带别名的直采更差（bytonsec 实证：直采的 16 条确认价被
     rule_only 占位挤掉整轮无价）。两份结果按可用价条数取优，别名只在真多解析出价时才生效。
     """
     return sum(1 for record in records if record.price_status in {"confirmed", "candidate"})
@@ -2031,7 +2031,7 @@ class NetworkAdapter:
             )
         if looks_like_group_price_map(payload):
             # 逐分组显式价（站方已算好实付单价）：优先于倍率推导——该形态也满足
-            # looks_like_newapi_pricing，必须先拦，否则倍率折算会偏低数倍（infistar 实锤）
+            # looks_like_newapi_pricing，必须先拦，否则倍率折算会偏低数倍（infistar 实证）
             return group_price_map_records(spec, [captured])
         if looks_like_newapi_pricing(payload):
             denomination = _newapi_denomination(client, str(response.url), timeout)
@@ -2064,13 +2064,13 @@ class NetworkAdapter:
                         resolved.metadata = merged
                     if aliases:
                         tasklog.emit(f"[{spec.id}] AI 模型名对照：命中 {len(aliases)} 个标准名")
-                    # 别名把精确命中撞成多命中歧义时结果会比直采更差（见 _priced_record_count）：
+                    # 别名把精确命中变成多命中歧义时结果会比直采更差（见 _priced_record_count）：
                     # 按可用价条数取优，别名结果里的 rule_only 占位不算"解析成功"
                     if _priced_record_count(resolved_records) >= _priced_record_count(direct_records):
                         return resolved_records
                 except AIExtractionError as exc:
                     # 回落确定性直采定价是既定设计，但回落原因必须留痕——
-                    # 超时/模型池全坏时无日志就无从定位整轮为何拖长
+                    # 超时/模型备选池全坏时无日志就无从定位整轮为何拖长
                     tasklog.emit(f"[{spec.id}] AI 模型名解析失败，使用直采定价：{exc}", "warn")
             return direct_records
         if looks_like_product_library_prices(payload):
@@ -2129,7 +2129,7 @@ class NetworkAdapter:
         response: Any,
         captured: dict[str, Any],
     ) -> list[PriceRecord]:
-        """HTML/文本响应的价格提取：页面内嵌表 → 引用链 chunk → AI 兜底。"""
+        """HTML/文本响应的价格提取：页面内嵌表 → 引用链 chunk → AI 后备。"""
         captured["text"] = response.text
         # 页面自带结构化价格表时优先确定性解析；页面里没有目标模型时，
         # 自动发现页面引用的 JS chunk 逐个查找（chunk 文件名常带内容哈希，
@@ -2158,7 +2158,7 @@ class NetworkAdapter:
                 evidence_text = hit.text
                 evidence_source = "model_list_chunk"
             elif hit is not None:
-                # chunk 里能看到目标模型名但格式认不出：AI 兜底改用该 chunk 文本，
+                # chunk 里能看到目标模型名但格式认不出：AI 回退改用该 chunk 文本，
                 # 否则 AI 只能看到空壳 HTML，等于白跑
                 ai_page_text = hit.text
                 ai_captured = [
@@ -2200,7 +2200,7 @@ class NetworkAdapter:
             if any(record.price_status == "confirmed" for record in records):
                 return records
         # JS 内嵌条目没命中时，页面是普通价目表（表格 + 单元格币种符号）就做确定性表格解析，
-        # 命中监控模型即采信返回——这条兜底必须排在 AI 之前：AI 对干净表格页也会抽错
+        # 命中监控模型即采信返回——这条后备必须排在 AI 之前：AI 对干净表格页也会抽错
         # （01tree 实测 $2.00/1M 被放大 1000 倍并标成 CNY），确定性解析优先是采集侧铁律；
         # 延迟 import：page_price.tables 顶部反向引用本模块的 parse_base_price_entries
         from llm_price_monitor.page_price.tables import parse_text_tables
@@ -2237,7 +2237,7 @@ _JS_REF_PATTERN = re.compile(r'["\']([^"\']+\.js(?:\?[^"\']*)?)["\']')
 @dataclass(frozen=True)
 class _ChunkHit:
     """引用链搜索结果：entries 命中即确定性计价；未命中但 chunk 文本含
-    目标模型名时带出该 chunk（url/status/text），供 AI 兜底使用。"""
+    目标模型名时带出该 chunk（url/status/text），供 AI 后备使用。"""
 
     url: str
     status: int
@@ -2264,7 +2264,7 @@ def _search_price_chunk(
 
     chunk 文件名带内容哈希且常逐层嵌套（页面 → 入口 JS → 业务 chunk），
     每次采集从入口重新发现，站点改版也能跟上；命中目标模型即返回，
-    超过次数/层数上限则放弃（宁可交给 AI 兜底也不无限爬）。
+    超过次数/层数上限则放弃（宁可交给 AI 后备也不无限爬）。
     """
     target_names = [target.name.casefold() for target in spec.models if target.name.strip()]
     seen: set[str] = set()
@@ -2377,7 +2377,7 @@ def _parse_micro_usd_entries(text: str) -> list[dict[str, Any]]:
     大部分模型对象不带 slug 字段，但每条价格行都带 modelId（provider/slug 形态），因此按
     价格行锚定、按 modelId 聚合；站点售价取 role=sell、active=true、unit=per_1m_tokens 的
     input/output 行，微美元换算成 USD/1M tokens。缺售组或没有输入/输出行的模型（纯缓存、
-    按次计费等）跳过，交给后续 AI 兜底；同一模型的行在 RSC 分片里可能重复，先到先得。
+    按次计费等）跳过，交给后续 AI 后备；同一模型的行在 RSC 分片里可能重复，先到先得。
     """
     if "priceMicroUsd" not in text:
         return []
@@ -2656,7 +2656,7 @@ def _price_records_from_table_entries(
 
     表格条目自带币种与单位（取自页面单元格符号与表头标注），与"USD 基准价 × 端点倍率"
     那套语义不同，单独转换不走 _records_from_base_entries。页面上没有的监控模型不产出
-    也不交给 AI 兜底（页面没有就是没有，AI 补抽只会编造——01tree 实测：页面 $2.00/1M
+    也不交给 AI 回退（页面没有就是没有，AI 补抽只会编造——01tree 实测：页面 $2.00/1M
     被 AI 整表放大 1000 倍并标错币种，连续多轮被合理性校验作废）。"""
     matched = resolve_site_names(
         [str(item.get("model") or "") for item in entries],

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChannelDotMatrix } from "./ChannelDotMatrix";
 import type { ChannelDot } from "@/lib/channelStatus";
 
-/** 渠道点阵懒加载：列表先渲染，行滚进视口（含 200px 预取余量）才去服务端取该行分组的点阵。
+/** 检测点阵懒加载：列表先渲染，行滚进视口（含 200px 预取余量）才去服务端取该行分组的点阵。
  *  这样列表页不背渠道这块重数据——完整历史本就在站点详情页，这里只为「一眼看健康度」补点阵。 */
 export function LazyChannelDots({
   site,

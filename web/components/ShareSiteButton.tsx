@@ -70,7 +70,7 @@ export function ShareSiteButton({
     try {
       setGeneratedAt(Math.floor(Date.now() / 1000));
       await nextFrame();
-      // 显式给尺寸，不再让库自己量；再加超时兜底，避免任何环节卡住后按钮一直转圈
+      // 显式给尺寸，不再让库自己量；再加超时后备，避免任何环节卡住后按钮一直转圈
       const url = await withTimeout(
         withFrameFallback(() =>
           toPng(card, { width, height, pixelRatio: 2, cacheBust: true }),

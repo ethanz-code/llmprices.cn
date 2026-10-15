@@ -1,9 +1,9 @@
 """站点发现端点：把 price-discover 的产出展示成「新站发现」，并提供管理操作。
 
-- GET /api/discovery（公开访客接口）：直接下发候选池（var/discovery/candidates.json），
+- GET /api/discovery（公开访客接口）：直接下发候选站列表（var/discovery/candidates.json），
   每站带导航源收录的站点与简介、zuiquanapi 自家监测的 7 天可用率/平均响应/最新响应；
   监控判离线的站直接忽略（计数不占列表），其余不过滤。
-- POST /api/discovery/refresh（管理员）：后台任务拉 zuiquanapi 源合并候选池（站点、简介、
+- POST /api/discovery/refresh（管理员）：后台任务拉 zuiquanapi 源合并候选站列表（站点、简介、
   监控指标），秒级完成。
 - POST /api/discovery/import（管理员）：把勾选的候选站写入站点库（默认停用，只写站点
   入口地址；公告等采集细节启用前在编辑里配，公告地址缺省时采集会自动推导）。
@@ -23,7 +23,7 @@ from llm_price_monitor.text_search import loose_key
 from llm_price_monitor.webapi import tasks
 from llm_price_monitor.webapi.jobs import discovery_refresh_job
 
-# 单页条数上限：候选池数千条，防止一次请求把整池拉进来
+# 单页条数上限：候选站列表数千条，防止一次请求把整池拉进来
 _PAGE_LIMIT_MAX = 500
 
 
@@ -53,7 +53,7 @@ def _save_ignored_doc(store: Store, hosts: set[str], reasons: dict[str, str]) ->
 
 
 def _load_discovery() -> tuple[list[dict[str, Any]], str]:
-    """读候选池，返回（候选列表, 池子更新时间）。"""
+    """读候选站列表，返回（候选列表, 清单更新时间）。"""
     pool_file = discover.OUT_DIR / "candidates.json"
     if not pool_file.exists():
         raise HTTPException(status_code=404, detail="还没跑过站点发现，点「刷新发现」拉取站点清单")
@@ -87,7 +87,7 @@ def build_router(store: Store) -> APIRouter:
         include_ignored: bool = False,
     ) -> dict[str, Any]:
         """候选站真分页读取：默认隐藏「忽略」的站（运营私人标记，不向访客展示），
-        status=imported/pending 按是否已监控筛选，q 搜域名/名称/简介（与前端 looseSearchKey 同口径）。
+        status=imported/pending 按是否已监控筛选，q 搜域名/名称/简介（与前端 looseSearchKey 同一套规则）。
         total 为收录总数、filtered_total 为筛选后条数（分页器用）。"""
         pool, generated_at = _load_discovery()
         in_library = library_hosts()
@@ -126,7 +126,7 @@ def build_router(store: Store) -> APIRouter:
             "imported": len([s for s in stations if s["imported_id"]]),
             "ignored": len([s for s in stations if s["ignored"]]),
         }
-        # 未监控的排前面（运营最关心），同组里可用率高的在前，没监控数据的垫底；
+        # 未监控的排前面（运营最关心），同组里可用率高的在前，没监控数据的排最后；
         # 标记「忽略」的沉到最底，不再进运营视线
         ordered = sorted(
             stations,

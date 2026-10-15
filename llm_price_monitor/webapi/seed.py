@@ -12,7 +12,7 @@ from llm_price_monitor.store import Store
 
 
 def apply_seed(store: Store, raw: dict[str, Any], mode: str) -> dict[str, Any]:
-    """按模式把种子内容合并进库，返回写入摘要；先整体校验后落库，非法种子抛 ValueError。"""
+    """按模式把种子内容合并进库，返回写入摘要；先整体校验后写库，非法种子抛 ValueError。"""
     raw = raw if isinstance(raw, dict) else {}
     seed_settings = raw.get("settings") if isinstance(raw.get("settings"), dict) else {}
     seed_ai = raw.get("ai") if isinstance(raw.get("ai"), dict) else {}

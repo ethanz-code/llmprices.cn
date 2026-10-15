@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Calculator, optionFromCatalog, optionFromRecord } from "@/components/Calculator";
+import { calculator } from "@/lib/copy";
 import { EMPTY_STATE } from "@/lib/calculator";
 import type { CatalogData, CatalogEntry, OverviewData, OverviewRecord } from "@/lib/types";
 
@@ -120,14 +121,14 @@ const overview = {
 } as unknown as OverviewData;
 
 describe("Calculator 渲染冒烟", () => {
-  it("四档单价、三个用量输入、默认口径 96/2 都在位", () => {
+  it("四档单价、三个用量输入、默认规则 96/2 都在位", () => {
     const html = renderToStaticMarkup(
       <Calculator catalog={catalog} overview={overview} initial={EMPTY_STATE} />,
     );
     for (const label of ["输入", "输出", "缓存读取", "缓存写入", "总用量", "缓存命中率", "输出占比"]) {
       expect(html).toContain(label);
     }
-    // 默认口径直接落在两个输入框上：命中率 96%、输出占比 2%
+    // 默认规则直接落在两个输入框上：命中率 96%、输出占比 2%
     expect(html).toContain('value="96"');
     expect(html).toContain('value="2"');
     // 目录候选的挂牌价（$3 / $15）说明取价函数跑通
@@ -153,6 +154,39 @@ describe("Calculator 渲染冒烟", () => {
     expect(html).toContain('value="0.525"');
     expect(html).toContain('value="14.4"');
     expect(html).toContain('value="0.384571"');
+  });
+
+  it("命中率>0 且填了缓存写入价：输入档归 0 并挂悬停说明，指明钱记在缓存写入", () => {
+    // 默认规则：命中率 96、输出占比 2、总用量 1 亿 → 输入档 token 全转到缓存写入档
+    const html = renderToStaticMarkup(
+      <Calculator
+        catalog={catalog}
+        overview={overview}
+        initial={{
+          ...EMPTY_STATE,
+          model: "claude-sonnet",
+          prices: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        }}
+      />,
+    );
+    // 说明文案与图标（aria-label 由 Tip 透传）都在位
+    expect(html).toContain(calculator.inputMovedToCacheWrite);
+  });
+
+  it("命中率=0 时输入档有量，不再挂那条说明", () => {
+    const html = renderToStaticMarkup(
+      <Calculator
+        catalog={catalog}
+        overview={overview}
+        initial={{
+          ...EMPTY_STATE,
+          model: "claude-sonnet",
+          hitRate: 0,
+          prices: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+        }}
+      />,
+    );
+    expect(html).not.toContain(calculator.inputMovedToCacheWrite);
   });
 
   it("两个数据源都缺失时不抛错，落空态", () => {

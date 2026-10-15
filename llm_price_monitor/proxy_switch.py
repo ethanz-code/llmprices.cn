@@ -26,7 +26,7 @@ from typing import Any
 
 from llm_price_monitor import tasklog
 
-# 同一域名两次自动切换的最小间隔：换出口是兜底杀器，冷却防止连环被拒就连环换
+# 同一域名两次自动切换的最小间隔：换出口是后备手段，冷却防止连环被拒就连环换
 _SWITCH_COOLDOWN_SECONDS = 600.0
 # 候选节点实测数量上限：全部测会拖长失败请求的等待，测到有可达的就行
 _MAX_DELAY_PROBES = 6
@@ -71,7 +71,7 @@ def fetch_groups(base: str, secret: str, *, timeout: float = 8.0) -> list[dict[s
     """读控制接口里的全部代理组，供管理面板下拉选组、选节点。
 
     返回 [{name, type, now, builtin, nodes: [{name, info, group}]}]：builtin 标出内置的
-    GLOBAL 组（排序垫底）；info 标出机场塞在组里的信息位（剩余流量/套餐到期这类），
+    GLOBAL 组（排序排最后）；info 标出机场塞在组里的信息位（剩余流量/套餐到期这类），
     group 标出该成员本身还是个策略组——两个标记只做展示，过滤与否由调用方决定。
     连不上/密钥不对/响应不是 mihomo 的形状都会抛异常，由调用方翻成人话提示。
     """

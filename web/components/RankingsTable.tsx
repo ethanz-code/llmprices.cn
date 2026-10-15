@@ -15,7 +15,7 @@ import type { RankingEntry, RankingsData } from "@/lib/types";
 /** 默认每页条数：与 app/rankings/page.tsx 的 RANKINGS_PAGE_SIZE 保持一致。 */
 const DEFAULT_PAGE_SIZE = 100;
 
-/** AA 榜单表：Artificial Analysis 的模型自测排名，独立于站点折扣口径，仅供选型参考。
+/** AA 榜单表：Artificial Analysis 的模型自测排名，独立于站点折扣标准，仅供选型参考。
  *  真分页：搜索/排序/翻页都改 URL，服务端按 limit/offset 只取当前页。 */
 export function RankingsTable({
   data,
@@ -145,7 +145,7 @@ export function RankingsTable({
     {
       title: (
         <>
-          智能指数<TermTip term="aa_rank" />
+          综合评分<TermTip term="aa_rank" />
         </>
       ),
       dataIndex: "intelligence_index",
@@ -204,7 +204,7 @@ export function RankingsTable({
       <div className="panel" style={{ padding: "32px 28px", textAlign: "center" }}>
         <div style={{ fontSize: 15, fontWeight: 550, marginBottom: 8 }}>模型榜单还没生成</div>
         <p style={{ color: "var(--text-2)", fontSize: 13.5, lineHeight: 1.8, margin: "0 auto", maxWidth: 520 }}>
-          榜单收录第三方评测的智能指数排名，每天自动更新一次；着急的话，登录后点下面的按钮立刻抓一次。
+          榜单收录第三方评测的综合评分排名，每天自动更新一次；着急的话，登录后点下面的按钮立刻抓一次。
         </p>
         <div style={{ marginTop: 16 }}>
           <Btn variant="primary" loading={refreshing} onClick={refreshRankings}>
@@ -226,7 +226,7 @@ export function RankingsTable({
           prefix={<IconSearch size={14} />}
         />
         <span style={{ color: "var(--text-2)", fontSize: 13 }}>
-          数据时间 <span className="mono" title={data.generated_at_iso}>{formatIsoMinute(data.generated_at_iso)}</span> · 第三方评测口径，非本站评测
+          数据时间 <span className="mono" title={data.generated_at_iso}>{formatIsoMinute(data.generated_at_iso)}</span> · 第三方评测标准，非本站评测
         </span>
       </div>
       <div className="panel rise-in" style={{ overflow: "hidden" }}>

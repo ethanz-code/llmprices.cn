@@ -1,13 +1,13 @@
-"""渠道状态视图：把站点状态快照解析成「渠道 → 检测点」并聚合出可用率序列与时段桶。
+"""渠道状态视图：把站点状态快照解析成「渠道 → 检测点」并聚合出可用率序列与时段分桶。
 
-这是前端 web/lib/channelStatus.ts 的 Python 移植版，口径必须逐字对齐（同一份状态快照、
+这是前端 web/lib/channelStatus.ts 的 Python 移植版，规则必须逐字对齐（同一份状态快照、
 同一套启发式键名，产出同一组数字）。为什么要搬过来：列表页（首页/总览）原先要逐站拉
 最近 400 条原始快照（21 站合计约 49MB，内含站点上游整包 JSON），再在 Node 里解析；
 瓶颈是这 49MB 的传输与解析，不是请求个数。放到后端算，原始 JSON 一步都不出后端，
-前端只拿算好的可用率/时段桶/渠道成功率，体积降到 1MB 级。
+前端只拿算好的可用率/时段分桶/渠道成功率，体积降到 1MB 级。
 
 只提供给「列表页」用的精简结果：不含 dots（点阵仍由详情页/点阵接口按需拉），也不含
-latency（列表不用）。详情页继续走前端 TS 版，两边口径由本文件顶部的常量与函数一一对齐。
+latency（列表不用）。详情页继续走前端 TS 版，两边标准由本文件顶部的常量与函数一一对齐。
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ NON_CHAT_CHANNEL_WORDS = (
 # 历史序列键名：不作为独立渠道递归，而是并成所属渠道的检测点
 TIMELINE_KEYS = {"timeline", "history", "checks", "events", "logs", "log", "uptime"}
 TIME_KEYS = ("checked_at", "checkedAt", "checked", "timestamp", "detected_at", "time", "at", "ts")
-# 上限只防异常膨胀，与前端一致（展示量由在售口径过滤收窄）
+# 上限只防异常膨胀，与前端一致（展示量由在售范围过滤收窄）
 MAX_CHANNELS = 256
 MAX_DOTS = 720
 RECENT_DOT_WINDOW = 15
@@ -113,7 +113,7 @@ def find_status_key(obj: dict[str, Any]) -> str | None:
 
 
 def _name_key(obj: dict[str, Any]) -> str | None:
-    # type(v) in (int, float) 天然排除 bool（type(True) is bool），与 JS typeof 口径一致
+    # type(v) in (int, float) 天然排除 bool（type(True) is bool），与 JS typeof 规则一致
     for key in NAME_KEYS:
         kind = type(obj.get(key))
         if kind is str or kind is int or kind is float:
@@ -342,7 +342,7 @@ def normalize_channel_name(name: str) -> str:
 
 
 def build_monitored_sets(records: list[dict[str, Any]]) -> dict[str, set[str]]:
-    """在售监测集：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」），与前端同口径。"""
+    """在售模型与分组集合：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」），与前端同一套规则。"""
     sets: dict[str, set[str]] = {}
     for row in records:
         site_id = row.get("site_id")
@@ -473,7 +473,7 @@ def full_availability_from_dots(by_site: dict[str, list[dict[str, Any]]]) -> dic
 def _downsample_worst(
     points: list[dict[str, Any]], max_points: int, worse: Callable[[dict, dict], dict]
 ) -> list[dict[str, Any]]:
-    """保峰抽稀：按时间跨度等分桶，每桶保留一个更「坏」的点；始终保留最后一个点。"""
+    """最差值降采样：按时间跨度等分桶，每桶保留一个更「坏」的点；始终保留最后一个点。"""
     if len(points) <= max_points:
         return points
     span = points[-1]["at"] - points[0]["at"]
@@ -530,7 +530,7 @@ def build_site_views(
 ) -> dict[str, Any]:
     """列表页用的精简视图：channels（不含 dots）+ availability（抽稀）+ uptimeBuckets。
 
-    与前端 buildSiteViews 同源同口径，但 channels 去掉 dots、不含 latency——列表页不渲染点阵与
+    与前端 buildSiteViews 同源同一套规则，但 channels 去掉 dots、不含 latency——列表页不渲染点阵与
     延迟趋势，点阵仍由 /api/channel-dots 与详情页按需拉。"""
     by_site = channel_dots_by_site(records, monitored)
     full = full_availability_from_dots(by_site)

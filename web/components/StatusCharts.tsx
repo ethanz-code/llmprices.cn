@@ -85,7 +85,7 @@ export function StatusCharts({
       )}
       {showTps && (
         <>
-          <h3 className="section-title">出字速度趋势（TPS）</h3>
+          <h3 className="section-title">输出速度趋势（TPS）</h3>
           <StatusTpsChart
             times={tpsModel.times}
             series={tpsModel.series}

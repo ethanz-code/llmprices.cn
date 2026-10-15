@@ -11,7 +11,7 @@
 裸子串会误伤 veo-3.1、video-1.5 这类名字）。顺序有语义——跨厂商关键词同现时
 先命中者赢（如 deepseek-r1-distill-qwen 同时含 deepseek 与 qwen，DeepSeek 必须
 排在 Alibaba Cloud 前；gpt-5.3-codex-spark 同时含 gpt 与 spark，OpenAI 必须排在
-iFlytek 前）。没命中任何关键词返回 None，由调用方按渠道性质决定默认口径：
+iFlytek 前）。没命中任何关键词返回 None，由调用方按渠道性质决定默认规则：
 models.dev 白名单是官方 lab 本店（默认视为自研），国内定价页是渠道店（默认
 不进官方目录）。
 """
@@ -80,7 +80,7 @@ def is_unbranded(model: str) -> bool:
 
 
 def skip_reason(model: str, vendor: str) -> str:
-    """合并摘要用的跳过说明；与 is_hosted_model / is_unbranded 同口径。"""
+    """合并摘要用的跳过说明；与 is_hosted_model / is_unbranded 同一套规则。"""
     home = home_vendor(model)
     if home is None:
         return f"{vendor}/{model}（识别不出官方归属，不进官方目录）"

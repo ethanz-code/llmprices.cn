@@ -2,7 +2,7 @@
  * 文章内容集中地：正文是 web/content/articles/<slug>.md 的 Markdown 文件，
  * 这里只负责加载与解析（frontmatter + 正文），页面用 react-markdown 渲染。
  * frontmatter 字段：title / subtitle / date；slug 取文件名。新增文章零配置。
- * 写作口径：像跟读者对话，事实带出处，不喊口号不排比；subtitle 就是对外的描述，
+ * 写作规则：像跟读者对话，事实带出处，不喊口号不排比；subtitle 就是对外的描述，
  * 列表卡片、SEO metadata、结构化数据都用它，不单独维护摘要。
  *
  * 读取走 getArticles()（react cache 单请求去重）而不是模块级常量：

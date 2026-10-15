@@ -155,7 +155,7 @@ describe("channelDotsBySite 缓存读取/写入指标", () => {
   });
 });
 
-describe("buildMonitoredSets 在售监测集", () => {
+describe("buildMonitoredSets 在售模型与分组集合", () => {
   it("模型名 ∪ 计价分组名都收，归一去空格忽略大小写", () => {
     const sets = buildMonitoredSets([
       { site_id: "demo", model: "Claude-Opus-5", metadata: { group: "满血CC Max分组" } },
@@ -167,7 +167,7 @@ describe("buildMonitoredSets 在售监测集", () => {
   });
 });
 
-describe("channelDotsBySite 在售口径过滤", () => {
+describe("channelDotsBySite 在售范围过滤", () => {
   const items = [
     { name: "GPT Pro", status: "up" },
     { name: "gpt-5.5", status: "down" },
@@ -200,7 +200,7 @@ describe("channelDotsBySite 在售口径过滤", () => {
   });
 
   it("buildSiteViews 透传：可用率按时段只算过滤后的渠道", () => {
-    // 全量口径四渠道三好 = 75%；在售只留 GPT Pro（好）= 100%
+    // 全量范围四渠道三好 = 75%；在售只留 GPT Pro（好）= 100%
     const records = [record("demo", items)];
     const monitored = buildMonitoredSets([
       { site_id: "demo", model: "不在售模型", metadata: { group: "gpt pro" } },

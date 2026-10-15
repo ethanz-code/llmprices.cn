@@ -1,7 +1,7 @@
-"""事件流下发瘦身口径：公告正文换摘要、价格事件 metadata 走白名单。
+"""事件流下发瘦身规则：公告正文换摘要、价格事件 metadata 走白名单。
 
 背景：/api/feed 原先整份下发，历史页一次 1.3 MB（公告正文 625 KB + metadata 484 KB），
-两块都只有详情弹窗用得到。这里把口径钉住，防止以后有人"顺手"把字段加回来。
+两块都只有详情弹窗用得到。这里把标准钉住，防止以后有人"顺手"把字段加回来。
 公告摘要与前端 web/lib/format.ts 的 noticeExcerpt 是同一套规则，两侧都要改才一致。
 """
 import json
@@ -39,7 +39,7 @@ def client(tmp_path: Path, monkeypatch) -> TestClient:
     return TestClient(create_app(config))
 
 
-# ---------- 公告摘要口径（与前端 noticeExcerpt 同规则） ----------
+# ---------- 公告摘要标准（与前端 noticeExcerpt 同规则） ----------
 
 EXCERPT_CASES = [
     # (入参, 期望输出)：这批样例前端 web/lib/format.test.ts 里有同样的断言，两边同步改
