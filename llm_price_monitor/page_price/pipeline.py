@@ -12,7 +12,7 @@ from llm_price_monitor.ai import AIExtractionError
 from llm_price_monitor.config import AIConfig, PriceMonitorError
 from llm_price_monitor.useragent import DEFAULT_BROWSER_USER_AGENT
 
-from .ai_fallback import _AI_PAGE_BUDGET_SECONDS, _ai_extract, _records_suspicious
+from .ai_fallback import _AI_PAGE_BUDGET_SECONDS, _records_suspicious
 from .tables import _parse_text
 
 

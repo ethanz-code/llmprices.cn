@@ -69,11 +69,6 @@ def register_forced_proxy_hosts(hosts: Iterable[str]) -> None:
                 _forced_hosts.add(normalized)
 
 
-def forced_proxy(host: str) -> bool:
-    """该域名是否被登记为强制代理。"""
-    return _normalize(host) in _forced_hosts
-
-
 # 当前出口 IP（会话绑定站的 XFF 要与请求对端一致，节点漂移时跟随）。
 # 查询结果缓存 EGRESS_IP_TTL 秒：代理出口不会秒级变化，每轮采集只查一次足够。
 EGRESS_IP_TTL_SECONDS = 300.0

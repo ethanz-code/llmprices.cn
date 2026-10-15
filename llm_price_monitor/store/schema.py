@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
 
 
 def latest_site_prefix(site_id: str) -> str:
@@ -57,6 +56,17 @@ CREATE TABLE IF NOT EXISTS price_events (
     payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_price_events_kind ON price_events(kind);
+CREATE TABLE IF NOT EXISTS popularity_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    captured_at REAL NOT NULL,
+    visits REAL,
+    visits_source TEXT NOT NULL DEFAULT '',
+    rank INTEGER,
+    rank_source TEXT NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_popularity_points_day ON popularity_points(site_id, day);
 CREATE TABLE IF NOT EXISTS latest (
     key TEXT PRIMARY KEY,
     record TEXT NOT NULL

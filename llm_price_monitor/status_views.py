@@ -42,7 +42,6 @@ TIME_KEYS = ("checked_at", "checkedAt", "checked", "timestamp", "detected_at", "
 # 上限只防异常膨胀，与前端一致（展示量由在售范围过滤收窄）
 MAX_CHANNELS = 256
 MAX_DOTS = 720
-RECENT_DOT_WINDOW = 15
 MAX_SERIES_POINTS = 1440
 
 LATENCY_KEYS = ("latency_ms", "latency", "response_ms", "primary_latency_ms", "average_latency_ms", "avg_latency_ms")

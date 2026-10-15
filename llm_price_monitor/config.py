@@ -18,7 +18,6 @@ from llm_price_monitor import egress
 from llm_price_monitor.store import Store
 from llm_price_monitor.useragent import DEFAULT_BROWSER_USER_AGENT
 
-PriceStatus = Literal["confirmed", "candidate", "rule_only", "unavailable"]
 ChangeKind = Literal["new", "changed", "unchanged", "recovered", "status_changed", "group_removed", "group_added"]
 
 

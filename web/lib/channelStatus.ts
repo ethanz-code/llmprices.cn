@@ -113,16 +113,6 @@ function latestAt(cursor: DotCursor, at: number): ChannelDot | null {
   return dot && dot.at <= at ? dot : null;
 }
 
-/** 成功率窗口：取最近 15 次检测，与总览检测点阵单行展示的列数一致。 */
-const RECENT_DOT_WINDOW = 15;
-
-/** 一组检测点的成功率：最近检测的正常占比（0–1）；无数据返回 null。 */
-export function dotsSuccessRate(dots: ChannelDot[] | undefined): number | null {
-  if (!dots || dots.length === 0) return null;
-  const recent = dots.slice(-RECENT_DOT_WINDOW);
-  return recent.filter((dot) => dot.ok).length / recent.length;
-}
-
 /** 严格取某分组的检测点：只认渠道行名对得上的行（不做「匹配不上就全量」的回退），
  *  同名多行（写法差异）的点合并后按时间升序返回；没有匹配行返回 null。
  *  总览渠道列与排序扣分共用，保证「这一行的渠道列 = 这一行分组的可用度」。 */

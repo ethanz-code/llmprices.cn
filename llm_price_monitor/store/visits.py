@@ -1,7 +1,6 @@
 """store/visits.py：访问日志（visit_logs）、访客 IP 归属地缓存（ip_geo）与访问统计聚合。"""
 from __future__ import annotations
 
-import json
 import time
 from datetime import date, datetime, timedelta
 from typing import Any

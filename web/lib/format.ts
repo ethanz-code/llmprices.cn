@@ -35,11 +35,6 @@ export function noticeExcerpt(content: string, maxLines = 1): string {
   return text.length > cap ? `${text.slice(0, cap)}…` : text;
 }
 
-/** 公告纯文本（剥 HTML 标签、压平空白）：悬浮提示等不渲染标记的场景用。 */
-export function noticePlainText(content: string): string {
-  return content.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-}
-
 export function formatPrice(value: number | null | undefined): string {
   if (value === null || value === undefined) return "—";
   // 小于 0.01 的单价（如 0.000647/1M）3 位小数会失真成 0.001，放开到 6 位

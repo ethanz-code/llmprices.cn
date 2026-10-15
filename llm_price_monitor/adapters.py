@@ -12,7 +12,7 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -39,16 +39,6 @@ from llm_price_monitor.tracker import (
     newapi_denomination_from_status,
     newapi_price_record,
 )
-
-class Adapter(Protocol):
-    def collect(
-        self,
-        spec: SiteSpec,
-        client: httpx.Client,
-        timeout: float,
-        user_agent: str,
-        ai: AIConfig | None = None,
-    ) -> list[PriceRecord]: ...
 
 
 def headers(spec: SiteSpec, user_agent: str) -> dict[str, str]:

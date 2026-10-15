@@ -1,5 +1,5 @@
 import { isNoticeEvent, noticeExcerpt } from "@/lib/format";
-import type { EventRow, FeedEvent, NoticeEvent } from "@/lib/types";
+import type { FeedEvent, NoticeEvent } from "@/lib/types";
 
 /** 事件流里的公告短文本：后端为省体积只随列表下发摘要（excerpt，同 noticeExcerpt 标准），
  *  完整正文按需另取（见 EventDetailModal 与 app/api/notice-event）。摘要缺失时（老缓存、
@@ -35,15 +35,4 @@ export function foldEvents(events: FeedEvent[]): FeedEvent[][] {
     }
   }
   return groups;
-}
-
-/** 折叠组内各事件的分组名（current 优先，退回 previous；公告组返回空数组）。 */
-export function groupNames(group: FeedEvent[]): string[] {
-  return group
-    .filter((event): event is EventRow => !isNoticeEvent(event))
-    .map(
-      (event) =>
-        (event.current?.metadata?.group || event.previous?.metadata?.group) ?? null,
-    )
-    .filter((name): name is string => name != null);
 }

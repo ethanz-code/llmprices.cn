@@ -6,7 +6,6 @@ import threading
 import time
 from typing import Any
 
-from llm_price_monitor import tasklog
 from llm_price_monitor.config import MonitorConfig
 from llm_price_monitor.store import Store
 
