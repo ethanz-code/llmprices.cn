@@ -199,6 +199,7 @@ def create_app(config_path: Path = DEFAULT_CONFIG) -> FastAPI:
         public_site_meta = request.method == "GET" and (
             request.url.path in {"/api/sites/screenshots", "/api/sites/homepages", "/api/sites/popularity"}
             or request.url.path.endswith("/screenshot")
+            or request.url.path.endswith("/popularity-history")  # 人气趋势点：详情页图表用，公开数据
         )
         needs_admin = (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}

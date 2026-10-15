@@ -50,6 +50,30 @@ export async function loadSitePopularity(): Promise<SitePopularityMap> {
   }
 }
 
+/** 人气趋势点（图表用）：每次采集记一个点，一天一个、同天覆盖。 */
+export interface PopularityPoint {
+  /** 本地日期 YYYY-MM-DD */
+  day: string;
+  /** 采集时刻（秒级时间戳） */
+  at: number;
+  visits: number | null;
+  visits_source: string;
+  rank: number | null;
+  rank_source: string;
+}
+
+/** 服务端读取单站人气趋势点；拉不到返回空数组（图表整块不渲染），不阻塞页面。 */
+export async function loadSitePopularityHistory(siteId: string): Promise<PopularityPoint[]> {
+  try {
+    const data = await apiGet<{ points?: PopularityPoint[] }>(
+      `/api/sites/${encodeURIComponent(siteId)}/popularity-history`
+    );
+    return data.points ?? [];
+  } catch {
+    return [];
+  }
+}
+
 /** 数量级缩写统一走 lib/format 的 formatCompact（9.5k / 134.7k / 1.2M），全站一套英文写法。 */
 
 /** 群平台展示名。 */

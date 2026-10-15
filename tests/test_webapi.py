@@ -2301,7 +2301,7 @@ def test_admin_get_routes_denied_to_anonymous_by_default(workspace: Path, monkey
         "/api/rankings", "/api/catalog", "/api/catalog/all", "/api/geo", "/api/discovery",
         # 站点截图与首页覆盖表是公开页面的公共内容：匿名可读；站点人气同理（详情页展示）
         "/api/sites/screenshots", "/api/sites/{site_id}/screenshot", "/api/sites/homepages",
-        "/api/sites/popularity",
+        "/api/sites/popularity", "/api/sites/{site_id}/popularity-history",
     }
 
     def all_api_routes() -> list[APIRoute]:

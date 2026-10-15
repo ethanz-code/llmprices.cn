@@ -31,6 +31,7 @@ from .schema import (
 from .base import StoreBase, _dumps
 from .sites import SiteStoreMixin
 from .documents import DocumentStoreMixin
+from .popularity import PopularityStoreMixin
 from .prices import PriceStoreMixin, _price_event_group
 from .status import StatusStoreMixin
 from .notices import NoticeStoreMixin
@@ -50,6 +51,7 @@ class Store(
     SiteStoreMixin,
     DocumentStoreMixin,
     PriceStoreMixin,
+    PopularityStoreMixin,
     StatusStoreMixin,
     NoticeStoreMixin,
     AIStoreMixin,
@@ -65,6 +67,7 @@ __all__ = [
     "SiteStoreMixin",
     "DocumentStoreMixin",
     "PriceStoreMixin",
+    "PopularityStoreMixin",
     "StatusStoreMixin",
     "NoticeStoreMixin",
     "AIStoreMixin",

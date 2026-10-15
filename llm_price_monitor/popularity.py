@@ -100,6 +100,9 @@ EMPTY_RECHECK_SECONDS = 30 * 86_400
 # 85 站约需 18 分钟额度，20 分钟能一轮补完；定时轮通常只剩零星几个站，几秒到几分钟收尾。
 POPULARITY_TOPUP_SECONDS = 1200.0
 
+# 人气趋势点保留期：一天一个点，留两年足够看趋势（每站另有 800 点上限兜底）
+POPULARITY_POINT_DAYS = 730
+
 
 def _origin(url: str) -> str:
     parsed = urlsplit(url or "")
@@ -307,13 +310,35 @@ def fetch_visits_estimate(host: str, client: httpx.Client) -> int | None:
     return int(value) if 0 < value < 1e12 else None
 
 
+def _rank_history_points(history: Any) -> tuple[tuple[str, int], ...]:
+    """SimilarWeb 自带的月度全球排名历史 → [(ISO 日期, 排名)]（绝对值，可直接进图表）。"""
+    if not isinstance(history, list):
+        return ()
+    points: list[tuple[str, int]] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        date = str(item.get("date") or "")[:10]
+        rank = item.get("rank")
+        if len(date) == 10 and isinstance(rank, (int, float)) and rank > 0:
+            points.append((date, int(rank)))
+    return tuple(points)
+
+
 @dataclass(frozen=True)
 class TrafficResult:
     """SimilarWeb 一次查询的结局：ok=有数据 / empty=上游没有该域数据（204）/
-    blocked=出口被 WAF 限流 / error=网络层失败（后两种换个出口可以再试）。"""
+    blocked=出口被 WAF 限流 / error=网络层失败（后两种换个出口可以再试）。
+
+    visits_change 是 SimilarWeb 自报的「较上月变化」（小数，-0.085 = 降 8.5%）；
+    rank_points 是它自带的月度全球排名历史 [(ISO 日期, 排名)]，给趋势图补历史点用
+    （只有绝对值可信；同一响应里的百分比序列是压缩刻度，反推不出绝对访问量）。
+    """
 
     kind: str
     visits: int | None = None
+    visits_change: float | None = None
+    rank_points: tuple[tuple[str, int], ...] = ()
 
     @property
     def settled(self) -> bool:
@@ -426,11 +451,22 @@ class SimilarWebClient:
             payload = response.json()
         except ValueError:
             return TrafficResult("empty")
-        overview = payload.get("overview") if isinstance(payload, dict) else None
-        visits = overview.get("visitsTotalCount") if isinstance(overview, dict) else None
+        if not isinstance(payload, dict):
+            return TrafficResult("empty")
+        overview = payload.get("overview") if isinstance(payload.get("overview"), dict) else {}
+        traffic = payload.get("traffic") if isinstance(payload.get("traffic"), dict) else {}
+        ranking = payload.get("ranking") if isinstance(payload.get("ranking"), dict) else {}
+        visits = overview.get("visitsTotalCount")
+        change = traffic.get("visitsTotalCountChange")
+        rank_points = _rank_history_points(ranking.get("globalRankHistory"))
         if isinstance(visits, (int, float)) and 0 < visits < 1e12:
-            return TrafficResult("ok", int(visits))
-        return TrafficResult("empty")  # 0 或缺字段：太小站点的占位，不算抓到数据
+            return TrafficResult(
+                "ok",
+                int(visits),
+                float(change) if isinstance(change, (int, float)) else None,
+                rank_points,
+            )
+        return TrafficResult("empty", rank_points=rank_points)  # 0 或缺字段：太小站点的占位，不算抓到数据
 
     def seconds_until_budget(self, *, now: float | None = None) -> float | None:
         """出口池还要等多少秒才有可用额度（0=现在就有；没有池子返回 None）。
@@ -623,8 +659,13 @@ def fetch_traffic(
             visits_source = "hypestat" if visits else ""
         if visits:
             traffic.update({"monthly_visits": visits, "visits_source": visits_source, "visits_checked_at": time.time()})
+            if result is not None and result.visits_change is not None:
+                traffic["visits_change"] = result.visits_change  # 「较上月」变化，展示用
         elif result is not None and result.settled:
             traffic["visits_checked_at"] = time.time()
+        if result is not None and result.rank_points:
+            # SimilarWeb 自带的月度排名历史：趋势图补历史点用（绝对值可信）
+            traffic["sw_rank_history"] = [list(point) for point in result.rank_points]
     if want_rank:
         # Tranco 有速率限制：两次查询之间拉开间隔（保证跨站点也生效）
         time.sleep(TRANCO_INTERVAL_SECONDS)
@@ -641,7 +682,16 @@ def _merge_traffic(previous: dict[str, Any], fresh: dict[str, Any]) -> dict[str,
     每个源的「结论时间」跟值一起走，updated_at 只在数字真变化时刷新。"""
     merged = dict(previous)
     refreshed = False
-    for key in ("monthly_visits", "visits_source", "visits_checked_at", "rank", "rank_source", "rank_checked_at"):
+    for key in (
+        "monthly_visits",
+        "visits_source",
+        "visits_checked_at",
+        "visits_change",
+        "sw_rank_history",
+        "rank",
+        "rank_source",
+        "rank_checked_at",
+    ):
         value = fresh.get(key)
         if value is None:
             continue
@@ -677,12 +727,48 @@ def _merge_payload(previous: dict[str, Any], fresh: dict[str, Any]) -> dict[str,
     }
 
 
+def _iso_day_stamp(day: str) -> float | None:
+    """'2026-09-01' → 当天中午的时间戳（取中午，避免时区把日期挪到前后一天）。"""
+    try:
+        return time.mktime(time.strptime(day, "%Y-%m-%d")) + 12 * 3600
+    except ValueError:
+        return None
+
+
+def record_points(store, site_id: str, traffic: dict[str, Any], *, now: float | None = None) -> int:
+    """把当前有效的访问量/排名记成时序点（趋势图的数据源）。
+
+    一天一个点、同天再采到新值覆盖（一次采集里先拿旧值、补采拿新值是常态）；
+    SimilarWeb 自带的月度排名历史顺带补种（按它给的日期），图表一开始就有历史深度。
+    """
+    at = now if now is not None else time.time()
+    rows: list[dict[str, Any]] = [
+        {
+            "captured_at": at,
+            "visits": traffic.get("monthly_visits"),
+            "visits_source": traffic.get("visits_source") or "",
+            "rank": traffic.get("rank"),
+            "rank_source": traffic.get("rank_source") or "",
+        }
+    ]
+    for item in traffic.get("sw_rank_history") or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        stamp = _iso_day_stamp(str(item[0]))
+        if stamp is None:
+            continue
+        rows.append({"captured_at": stamp, "visits": None, "visits_source": "", "rank": item[1], "rank_source": "similarweb"})
+    return store.append_popularity_points(site_id, rows)
+
+
 def record_popularity(store, site_id: str, payload: dict[str, Any]) -> None:
     """把单站人气合并进文档；只更新该站，不动其他站的记录。"""
     doc = dict(store.get_document(POPULARITY_DOC) or {})
     previous = doc.get(site_id) if isinstance(doc.get(site_id), dict) else {}
-    doc[site_id] = _merge_payload(previous, payload)
+    entry = _merge_payload(previous, payload)
+    doc[site_id] = entry
     store.set_document(POPULARITY_DOC, doc)
+    record_points(store, site_id, entry.get("traffic") or {})
 
 
 def record_traffic(store, site_id: str, traffic: dict[str, Any]) -> None:
@@ -699,6 +785,7 @@ def record_traffic(store, site_id: str, traffic: dict[str, Any]) -> None:
     entry["traffic"] = _merge_traffic(previous.get("traffic") or {}, traffic)
     doc[site_id] = entry
     store.set_document(POPULARITY_DOC, doc)
+    record_points(store, site_id, entry["traffic"])
 
 
 def remove_popularity(store, site_id: str) -> None:

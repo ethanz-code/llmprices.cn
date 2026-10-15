@@ -227,6 +227,15 @@ def build_router(store: Store) -> APIRouter:
         pending = sum(1 for row in rows if row["needs_query"])
         return {"rows": rows, "pending": pending, "total": len(rows)}
 
+    @router.get("/api/sites/{site_id}/popularity-history")
+    def site_popularity_history(site_id: str) -> dict[str, Any]:
+        """站点人气趋势点（图表用）：每次采集记一个点，带月访问量与全网排名。
+
+        与 /api/sites/popularity 同属公开数据，站点详情页直接画趋势图；没有采集记录的
+        站点返回空列表（前端据此不渲染图表）。
+        """
+        return {"points": store.popularity_points(site_id)}
+
     @router.get("/api/sites/{site_id}/screenshot")
     def site_screenshot(site_id: str) -> FileResponse:
         """站点首页截图：没有截过（或文件已丢失）时 404，前端据此不展示截图区。"""

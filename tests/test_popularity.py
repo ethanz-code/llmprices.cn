@@ -19,6 +19,7 @@ from llm_price_monitor.popularity import (
     fetch_tranco_rank,
     fetch_visits_estimate,
     record_popularity,
+    record_traffic,
     remove_popularity,
     site_host,
 )
@@ -540,6 +541,13 @@ def test_popularity_endpoint_public_and_under_read_lockdown(workspace: Path, mon
     response = client.get("/api/sites/popularity")
     assert response.status_code == 200
     assert response.json()["popularity"]["demo"]["traffic"]["rank"] == 5
+    # 人气趋势点同样公开（详情页图表用）：写库顺带记的点能读出来
+    history = client.get("/api/sites/demo/popularity-history")
+    assert history.status_code == 200
+    points = history.json()["points"]
+    assert len(points) == 1 and points[0]["rank"] == 5 and points[0]["visits"] is None
+    # 没有采集记录的站点给空列表，前端据此不画图
+    assert client.get("/api/sites/nobody/popularity-history").json() == {"points": []}
     # 同前缀的管理接口照旧封锁
     assert client.get("/api/sites").status_code == 401
 
@@ -708,6 +716,95 @@ def test_topup_pending_waits_for_budget_then_fills(tmp_path, monkeypatch):
     assert stats["topped_up"] == 2  # 两轮各写入一条新结论（先排名、后访问量）
     assert slept[0] == 31.0  # 第一次等窗口回补（+1 秒余量）
     assert all(seconds == 0 for seconds in slept[1:])  # 其余是 Tranco 的间隔 sleep（测试压到 0）
+
+
+def test_popularity_points_upsert_by_day_and_cap(tmp_path, monkeypatch):
+    """一天一个点：同天再写入按字段覆盖（这次没采到的信号保留当天值）；超出上限裁最老。"""
+    import llm_price_monitor.store.popularity as store_popularity
+
+    store = Store(tmp_path / "monitor.db")
+    # 锚在当天本地中午：+1 小时仍是同一天，+n 天是不同天（不受时区/夏令时影响）
+    today = time.strftime("%Y-%m-%d", time.localtime())
+    day = time.mktime(time.strptime(today, "%Y-%m-%d")) + 12 * 3600
+    store.append_popularity_points(
+        "demo",
+        [{"captured_at": day, "visits": 100, "visits_source": "similarweb", "rank": 5, "rank_source": "tranco"}],
+    )
+    # 同天后一次只补到访问量：排名保留当天已有的（按字段回退）
+    store.append_popularity_points(
+        "demo",
+        [{"captured_at": day + 3600, "visits": 200, "visits_source": "hypestat", "rank": None, "rank_source": ""}],
+    )
+    points = store.popularity_points("demo")
+    assert len(points) == 1
+    assert points[0]["visits"] == 200 and points[0]["visits_source"] == "hypestat"
+    assert points[0]["rank"] == 5 and points[0]["rank_source"] == "tranco"
+    # 两个信号都为空的点不进库
+    assert store.append_popularity_points("demo", [{"captured_at": day + 7200, "visits": None, "rank": None}]) == 0
+    # 上限裁剪：只留最近的 N 个点
+    monkeypatch.setattr(store_popularity, "MAX_POINTS_PER_SITE", 3)
+    rows = [{"captured_at": day + 86_400 * i, "visits": i, "visits_source": "similarweb", "rank": None, "rank_source": ""} for i in range(1, 5)]
+    store.append_popularity_points("demo", rows)
+    kept = store.popularity_points("demo")
+    assert len(kept) == 3 and [p["visits"] for p in kept] == [2, 3, 4]
+    # 过期清理：只删早于 cutoff 的点（第 3 天那个点等于 cutoff，保留）
+    assert store.prune_popularity_points(day + 86_400 * 3) == 1
+    assert [p["visits"] for p in store.popularity_points("demo")] == [3, 4]
+
+
+def test_record_popularity_writes_points_with_sw_rank_history(tmp_path):
+    """采集写库顺带记趋势点：当前值一个点，SimilarWeb 月度排名历史补种各一个点。"""
+    store = Store(tmp_path / "monitor.db")
+    now = time.time()
+    record_popularity(
+        store,
+        "demo",
+        {
+            "groups": [],
+            "traffic": {
+                "monthly_visits": 1234,
+                "visits_source": "similarweb",
+                "visits_checked_at": now,
+                "rank": 88,
+                "rank_source": "tranco",
+                "rank_checked_at": now,
+                "sw_rank_history": [["2026-07-01", 522094], ["2026-08-01", 533290]],
+            },
+            "checked_at": now,
+        },
+    )
+    points = store.popularity_points("demo")
+    assert len(points) == 3
+    assert points[0]["day"] == "2026-07-01" and points[0]["rank"] == 522094 and points[0]["rank_source"] == "similarweb"
+    assert points[-1]["visits"] == 1234 and points[-1]["rank"] == 88
+    # 补采（record_traffic）同样记点
+    record_traffic(store, "demo", {"monthly_visits": 2345, "visits_source": "similarweb", "visits_checked_at": now, "rank": None, "rank_source": ""})
+    assert store.popularity_points("demo")[-1]["visits"] == 2345
+
+
+def test_similarweb_parse_captures_change_and_rank_history(monkeypatch):
+    """解析：月访问量「较上月变化」与自带的月度排名历史都要留下（图表与文案用）。"""
+    import llm_price_monitor.popularity as popularity
+
+    monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: None)
+    sw = pop.SimilarWebClient("test/1.0")
+    payload = {
+        "overview": {"visitsTotalCount": 66918.0},
+        "traffic": {"visitsTotalCountChange": -0.085},
+        "ranking": {
+            "globalRankHistory": [
+                {"date": "2026-07-01T00:00:00", "rank": 522094},
+                {"date": "2026-09-01T00:00:00", "rank": 521914},
+                {"date": "坏日期", "rank": 1},
+                {"date": "2026-08-01T00:00:00", "rank": 0},
+            ]
+        },
+    }
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(popularity.httpx, "get", lambda url, **kw: httpx.Response(200, json=payload))
+        result = sw.visits_with_retry("a.test", "a")
+    assert result.visits == 66918 and result.visits_change == -0.085
+    assert result.rank_points == (("2026-07-01", 522094), ("2026-09-01", 521914))
 
 
 def test_pending_traffic_counts_unfinished_force_round(tmp_path):

@@ -3,15 +3,17 @@
 /** 站点人气管理：各站交流群/访问量/排名一览 + 上次取数时间 + 手动补采。
  *  数据来自 /api/sites/popularity/admin（含未启用站，选站要用）；两个按钮都提交
  *  collect-popularity 任务并轮询到结束：「立即补采」只查还有数据要补的站，
- *  「全量刷新」无视复查期逐站重查。列表顺序（待补在前）与整轮采集顺序一致。 */
+ *  「全量刷新」无视复查期逐站重查。列表顺序（待补在前）与整轮采集顺序一致。
+ *  每行的「趋势」按钮打开该站的人气趋势图（后端逐轮记点，详情页同图）。 */
 
 import { useCallback, useEffect, useState } from "react";
 import { DataTable, type DColumn } from "./DataTable";
-import { Btn, LoadingRows, toast } from "./ui";
+import { Btn, LoadingRows, Modal, toast } from "./ui";
 import { apiSend, errorText } from "@/lib/api";
 import { getSiteInfo } from "@/lib/sites";
 import { formatTime } from "@/lib/format";
-import { groupKindLabel, type SiteGroup } from "@/lib/popularity";
+import { groupKindLabel, loadSitePopularityHistory, type PopularityPoint, type SiteGroup } from "@/lib/popularity";
+import { PopularityTrendChart } from "./PopularityTrendChart";
 import { formatCompact } from "@/lib/format";
 import { IconUsers } from "./icons";
 import { DajuSit } from "./DajuArt";
@@ -47,6 +49,19 @@ function freshnessText(checkedAt: number | null | undefined): string {
 export function AdminPopularity() {
   const [data, setData] = useState<PopularityAdminData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // 趋势弹窗：打开时按需拉该站的点（列表接口不带序列，避免整表膨胀）
+  const [trendSite, setTrendSite] = useState<string | null>(null);
+  const [trendPoints, setTrendPoints] = useState<PopularityPoint[] | null>(null);
+
+  async function openTrend(siteId: string) {
+    setTrendSite(siteId);
+    setTrendPoints(null);
+    try {
+      setTrendPoints(await loadSitePopularityHistory(siteId));
+    } catch {
+      setTrendPoints([]);
+    }
+  }
 
   const reload = useCallback(() => {
     apiSend<PopularityAdminData>("/api/sites/popularity/admin", "GET")
@@ -95,6 +110,9 @@ export function AdminPopularity() {
               {site.name}
             </span>
             {!row.enabled && <span className="tag tag-quiet">停用</span>}
+            <Btn size="sm" variant="text" onClick={() => openTrend(row.site_id)} title="看这站的人气趋势图">
+              趋势
+            </Btn>
           </span>
         );
       },
@@ -256,6 +274,26 @@ export function AdminPopularity() {
           />
         )}
       </div>
+
+      <Modal open={trendSite !== null} onClose={() => setTrendSite(null)} title="人气趋势" width={720}>
+        {trendSite && (
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span className="mono" style={{ fontWeight: 550 }}>
+                {getSiteInfo(trendSite).name}
+              </span>
+              <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>
+                每轮采集记一个点（一天一个）；数据太少时线很短，多跑几轮自然长出来
+              </span>
+            </div>
+            {trendPoints === null ? (
+              <LoadingRows rows={3} />
+            ) : (
+              <PopularityTrendChart points={trendPoints} />
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

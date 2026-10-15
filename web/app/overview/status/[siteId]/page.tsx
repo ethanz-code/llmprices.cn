@@ -23,7 +23,8 @@ import type { Tone } from "@/components/ToneTag";
 import type { Metadata } from "next";
 import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";
 import { loadSiteScreenshots, shotSrc } from "@/lib/screenshots";
-import { groupKindLabel, groupPlatformLabel, loadSitePopularity, type SitePopularity } from "@/lib/popularity";
+import { groupKindLabel, groupPlatformLabel, loadSitePopularity, loadSitePopularityHistory, type PopularityPoint, type SitePopularity } from "@/lib/popularity";
+import { PopularityTrendChart } from "@/components/PopularityTrendChart";
 import { formatCompact } from "@/lib/format";
 import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
@@ -179,7 +180,7 @@ async function ScreenshotSection({ siteId }: { siteId: string }) {
 
 /** 站点人气：交流群、月访问量估算与全网排名——判断站点规模与售后渠道的公开信息，
  *  采集不到任何一项时整块不渲染（与截图区同一套规则）。 */
-function PopularitySection({ popularity }: { popularity?: SitePopularity }) {
+function PopularitySection({ popularity, history }: { popularity?: SitePopularity; history?: PopularityPoint[] }) {
   if (!popularity) return null;
   const groups = popularity.groups ?? [];
   const traffic = popularity.traffic ?? {};
@@ -233,6 +234,11 @@ function PopularitySection({ popularity }: { popularity?: SitePopularity }) {
                 <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>（Tranco 榜）</span>
               </span>
             )}
+          </div>
+        )}
+        {history && history.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 2 }}>
+            <PopularityTrendChart points={history} />
           </div>
         )}
       </div>
@@ -295,11 +301,13 @@ export default async function StatusDetailPage({
   let homepages: Record<string, string> = {};
   // 站点人气：交流群/月访问量/排名，采集不到时该站没有条目（区块不渲染）
   let popularity: Record<string, SitePopularity> = {};
+  // 人气趋势点（每次采集一个点，图表用）：没有点的站图表整块不渲染
+  let popularityHistory: PopularityPoint[] = [];
   let error: string | null = null;
   try {
     // 渠道时序走 lib/statusData.ts：每站最近 400 条、近 7 天——首页与总览的渠道统计
     // 也用这同一份标准（数据同源，各页数字才一致），这里是「详情页标准」的本体。
-    const [timeline, noticeData, overviewData, homepageMap, popularityMap] = await Promise.all([
+    const [timeline, noticeData, overviewData, homepageMap, popularityMap, popularityPoints] = await Promise.all([
       fetchSiteStatus(siteId),
       // 公告拉取失败只影响公告区，不阻塞整页；只取最新一次采集的存档
       apiGet<{ records: NoticeSnapshot[] }>(
@@ -311,12 +319,14 @@ export default async function StatusDetailPage({
       apiGet<OverviewData>(`/api/overview?site_id=${encodeURIComponent(siteId)}`).catch(() => null),
       loadSiteHomepages(),
       loadSitePopularity(),
+      loadSitePopularityHistory(siteId),
     ]);
     records = timeline;
     notices = noticeData.records ?? [];
     overview = overviewData;
     homepages = homepageMap;
     popularity = popularityMap;
+    popularityHistory = popularityPoints;
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
@@ -487,7 +497,7 @@ export default async function StatusDetailPage({
               )}
             </>
           )}
-          <PopularitySection popularity={popularity[siteId]} />
+          <PopularitySection popularity={popularity[siteId]} history={popularityHistory} />
           <NoticeSection notices={notices} />
           <ScreenshotSection siteId={siteId} />
         </div>

@@ -510,11 +510,16 @@ def popularity_scan_job(config: MonitorConfig, store: Store, *, force: bool = Fa
 
     force=True（手动全量刷新）无视数据新鲜度、逐站重查外部源；默认定时轮只补缺数据的站。
     """
-    from llm_price_monitor.popularity import scan_popularity
+    from llm_price_monitor.popularity import POPULARITY_POINT_DAYS, scan_popularity
     from llm_price_monitor.useragent import choose_user_agent
 
     def _run() -> dict[str, Any]:
-        return scan_popularity(config, store, user_agent=choose_user_agent(config), force=force)
+        stats = scan_popularity(config, store, user_agent=choose_user_agent(config), force=force)
+        # 顺带保留清理：趋势点只留 POPULARITY_POINT_DAYS 天（每站另有 800 点上限兜底）
+        purged = store.prune_popularity_points(time.time() - POPULARITY_POINT_DAYS * 86400)
+        if purged:
+            tasklog.emit(f"保留清理：移除 {purged} 个过期人气趋势点")
+        return stats
 
     return _run
 

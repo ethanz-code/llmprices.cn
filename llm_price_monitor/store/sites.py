@@ -42,7 +42,7 @@ class SiteStoreMixin(StoreBase):
             cursor = conn.execute("DELETE FROM sites WHERE id = ?", (site_id,))
             deleted = cursor.rowcount > 0
             if purge and deleted:
-                for table in ("price_trend", "price_events", "status_records", "status_events", "notice_records", "notice_events"):
+                for table in ("price_trend", "price_events", "popularity_points", "status_records", "status_events", "notice_records", "notice_events"):
                     conn.execute(f"DELETE FROM {table} WHERE site_id = ?", (site_id,))
                 # 用站点前缀精确匹配避免 LIKE 通配符歧义（key 格式见 latest_key）
                 prefix = latest_site_prefix(site_id)
@@ -65,7 +65,7 @@ class SiteStoreMixin(StoreBase):
             cursor = conn.execute("UPDATE sites SET id = ? WHERE id = ?", (new_id, old_id))
             renamed = cursor.rowcount > 0
             if renamed:
-                for table in ("price_trend", "price_events", "status_records", "status_events", "notice_records", "notice_events"):
+                for table in ("price_trend", "price_events", "popularity_points", "status_records", "status_events", "notice_records", "notice_events"):
                     conn.execute(f"UPDATE {table} SET site_id = ? WHERE site_id = ?", (new_id, old_id))
                 old_prefix = latest_site_prefix(old_id)
                 conn.execute(
