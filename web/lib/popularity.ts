@@ -5,6 +5,7 @@
  * 拿不到就显示"暂无公开数据"，不编数字。 */
 
 import { apiGet } from "./api";
+import { formatCompact } from "./format";
 
 export interface SiteGroup {
   /** telegram / qq / wechat / discord */
@@ -49,14 +50,7 @@ export async function loadSitePopularity(): Promise<SitePopularityMap> {
   }
 }
 
-/** 中文习惯的数字缩写：134700 → 13.5万，1200000 → 120万，9500 → 9,500。 */
-export function formatCompactCn(value: number): string {
-  if (value >= 10_000) {
-    const wan = value / 10_000;
-    return `${wan >= 100 ? Math.round(wan) : Math.round(wan * 10) / 10}万`;
-  }
-  return value.toLocaleString("en-US");
-}
+/** 数量级缩写统一走 lib/format 的 formatCompact（9.5k / 134.7k / 1.2M），全站一套英文口径。 */
 
 /** 群平台展示名。 */
 export function groupPlatformLabel(type: string): string {
@@ -74,29 +68,47 @@ export function groupKindLabel(group: SiteGroup): string {
 }
 
 export interface PopularityBadge {
-  /** 人气列显示段（每段一行，不拼接）：访问量 / TG群(TG频道)人数 / 排名 */
+  /** 人气列显示段（每段一行，不拼接）：访问量 / 各平台交流群 / 排名 */
   lines: string[];
   /** 悬停明细 */
   title: string;
 }
 
-/** 人气摘要：固定「访问量 / TG群(TG频道)人数 / 排名」三段，有哪段显示哪段，每段一行——
- *  同一列内格式统一，不做"挑最强信号"的取舍。全空返回 null。 */
+/** 群人数的展示行：TG 带「群/频道」，其余平台直接「平台名：人数」；没人数（QQ/Discord 只有链接）返回 null。 */
+function groupLine(group: SiteGroup): string | null {
+  if (group.members == null) return null;
+  const count = `${formatCompact(group.members)} 人`;
+  if (group.type === "telegram") return `TG${groupKindLabel(group)}：${count}`;
+  if (group.type === "qq") return `QQ群：${count}`;
+  if (group.type === "discord") return `Discord：${count}`;
+  if (group.type === "wechat") return `微信群：${count}`;
+  return `${groupPlatformLabel(group.type)}：${count}`;
+}
+
+/** 人气摘要：每段一行（访问量 / 各平台群人数 / 排名），有哪段显示哪段；多群各占一行。
+ *  QQ/Discord 等只有链接没有人数的不占数字行（悬停看群链接）。全空返回 null。 */
 export function popularityBadge(popularity?: SitePopularity | null): PopularityBadge | null {
   if (!popularity) return null;
   const traffic = popularity.traffic ?? {};
   const telegram = (popularity.groups ?? []).find((group) => group.type === "telegram" && group.members);
-  const kind = telegram ? groupKindLabel(telegram) : "";
+  const groupRows = (popularity.groups ?? [])
+    .map(groupLine)
+    .filter((line): line is string => line !== null)
+    .slice(0, 3); // 列里最多显示 3 行群，更多的进悬停
   const lines = [
-    traffic.monthly_visits ? `访问量：${formatCompactCn(traffic.monthly_visits)}/月` : null,
-    telegram?.members ? `TG${kind}：${formatCompactCn(telegram.members)} 人` : null,
-    traffic.rank ? `排名：${formatCompactCn(traffic.rank)}` : null,
+    traffic.monthly_visits ? `访问量：${formatCompact(traffic.monthly_visits)}/月` : null,
+    ...groupRows,
+    traffic.rank ? `排名：${formatCompact(traffic.rank)}` : null,
   ].filter((line): line is string => line !== null);
   if (lines.length === 0) return null;
   const parts = [
-    traffic.monthly_visits ? `访问量：每月约 ${formatCompactCn(traffic.monthly_visits)}（SimilarWeb 公开数据估算，每月更新）` : null,
-    telegram?.members ? `Telegram ${kind}：${formatCompactCn(telegram.members)} 人（公开页面统计）` : null,
-    traffic.rank ? `全网排名：约第 ${formatCompactCn(traffic.rank)} 名（Tranco 榜）` : null,
+    traffic.monthly_visits ? `访问量：每月约 ${formatCompact(traffic.monthly_visits)}（SimilarWeb 公开数据估算，每月更新）` : null,
+    ...(popularity.groups ?? []).map((group) => {
+      const line = groupLine(group);
+      const withLink = group.url ? `，加群链接 ${group.url}` : "";
+      return line ? `${line.replace("：", "：")}${withLink}` : group.url ? `交流群：${group.label}（${groupPlatformLabel(group.type)}，无公开人数）${withLink}` : null;
+    }),
+    traffic.rank ? `全网排名：约第 ${formatCompact(traffic.rank)} 名（Tranco 榜）` : null,
   ].filter((part): part is string => part !== null);
   return { lines, title: parts.join("\n") };
 }

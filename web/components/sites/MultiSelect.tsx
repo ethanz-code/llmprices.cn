@@ -337,10 +337,10 @@ function ModelMultiSelect({ value, onChange }: { value: string[]; onChange: (nex
       emptyText="目录是空的，直接输入模型名回车添加"
       failedText="模型目录还没同步好，直接输入模型名回车添加"
       noMatchText="没有匹配的模型；回车把当前输入添加为自定义模型"
-      // 不在官方目录的条目（手工加的）打上角标：这类名字要有站点在售，否则会被自动移出
+      // 不在官方目录的条目打上角标：这类名字要有站点在售，否则连续几天没人卖会被自动移出
       chipMark={(id) =>
         orderById && !orderById.has(canonicalModel(id))
-          ? { label: "自定义", title: "不在厂商官方目录里：需要有站点在售，连续几天没有站点卖会被自动移出" }
+          ? { label: "目录外", title: "不在厂商官方目录里（名字手写、厂商刚下线，或目录这轮没抓到）：需要有站点在售" }
           : undefined
       }
     />

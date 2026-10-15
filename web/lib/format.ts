@@ -46,7 +46,36 @@ export function formatPrice(value: number | null | undefined): string {
   const digits = value >= 100 ? 1 : value >= 1 ? 2 : value >= 0.01 ? 3 : 6;
   let text = value.toFixed(digits);
   if (text.includes(".")) text = text.replace(/0+$/, "").replace(/\.$/, "");
+  // ≥1000 补千分位（1,200），单价场景数量级不大，只处理整数部分
+  if (value >= 1000) {
+    const [int, dot] = text.split(".");
+    text = `${Number(int).toLocaleString("en-US")}${dot ? `.${dot}` : ""}`;
+  }
   return text;
+}
+
+/** 数量级缩写（全站统一英文风格）：950 → "950"、9,500 → "9.5k"、134,700 → "134.7k"、
+ *  1,200,000 → "1.2M"、2,300,000,000 → "2.3B"。千以下原样，k/M/B 段一位小数封顶去尾零。 */
+export function formatCompact(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  if (value < 1000) return String(value);
+  const units: [number, string][] = [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "k"],
+  ];
+  for (let i = 0; i < units.length; i++) {
+    const [scale, suffix] = units[i];
+    if (value < scale) continue;
+    const scaled = Math.round((value / scale) * 10) / 10;
+    // 本档四舍五入满 1000（如 999,960 → 1,000k）进到上一档，避免出现 1,000k
+    if (scaled >= 1000 && i > 0) {
+      const [nextScale, nextSuffix] = units[i - 1];
+      return `${(Math.round((value / nextScale) * 10) / 10).toLocaleString("en-US")}${nextSuffix}`;
+    }
+    return `${scaled.toLocaleString("en-US")}${suffix}`;
+  }
+  return value.toLocaleString("en-US");
 }
 
 /** 相对时间三档：分钟/小时/天前（检测新鲜度等场景）；未来时间或超 30 天回落绝对日期。
@@ -97,14 +126,12 @@ export function formatCount(value: number | null | undefined, maximumFractionDig
   return value.toLocaleString("en-US", { maximumFractionDigits });
 }
 
-/** token 数缩写：272000 → 272K、1000000 → 1M，不足 1K 原样。 */
+/** token 数缩写：统一走 formatCompact（272k、1M），与人气/统计数字同一套英文缩写口径。 */
 export function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${Math.round((value / 1_000_000) * 10) / 10}M`;
-  if (value >= 1000) return `${Math.round(value / 1000)}K`;
-  return String(value);
+  return formatCompact(value);
 }
 
-/** 档位标注：上限档 "≤272K"、无上限档 ">272K"、两端都有 "min–max"；无边界信息为 null。 */
+/** 档位标注：上限档 "≤272k"、无上限档 ">272k"、两端都有 "min–max"；无边界信息为 null。 */
 function tierLabel(tier: { context_min?: unknown; context_max?: unknown }): string | null {
   const min = typeof tier.context_min === "number" ? tier.context_min : null;
   const max = typeof tier.context_max === "number" ? tier.context_max : null;
@@ -251,7 +278,7 @@ export function effectiveCnyCachePrice(
   return converted ?? raw;
 }
 
-/** 单行阶梯价文本（事件流摘要用）："≤272K ¥1 / >272K ¥2"，单档只显示价格；非阶梯返回 null。
+/** 单行阶梯价文本（事件流摘要用）："≤272k ¥1 / >272k ¥2"，单档只显示价格；非阶梯返回 null。
  *  传 rate 时统一折算成 RMB；无法折算回落原币符号。 */
 export function tieredPriceText(
   row:

@@ -142,12 +142,12 @@ export const calculator = {
     cacheRead: "缓存读取",
     cacheWrite: "缓存写入",
   },
-  priceTitle: "单价 · 每百万 token",
+  priceTitle: "单价 · 每 1M token",
   usageTotal: "用量",
   /** 总用量下拉框的字段标签 */
   usageSelect: "总用量",
   /** 总用量快捷档位标签，与 lib/calculator.ts 的 TOKEN_PRESET_VALUES 按序对应 */
-  tokenPresets: ["10M（一千万）", "100M（一亿）", "1B（十亿）"],
+  tokenPresets: ["10M", "100M", "1B"],
   hitRate: "缓存命中率",
   /** 用量区输入框标签：输出占总用量的百分比 */
   outputShare: "输出占比",

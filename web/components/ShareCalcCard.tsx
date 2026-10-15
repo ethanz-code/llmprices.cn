@@ -140,7 +140,7 @@ export function ShareCalcCard({
             </span>
             {modelSub && <span style={{ fontSize: 13.5, color: c.faint, flexShrink: 0 }}>{modelSub}</span>}
           </div>
-          <span style={{ fontSize: 13.5, color: c.muted }}>AI 花费估算 · 每 100 万 token 单价</span>
+          <span style={{ fontSize: 13.5, color: c.muted }}>AI 花费估算 · 每 1M token 单价</span>
         </div>
         <span style={{ fontFamily: monoStack, fontSize: 13.5, color: c.text, background: c.panel2, padding: "7px 14px", borderRadius: 6, flexShrink: 0 }}>
           {sourceLabel}

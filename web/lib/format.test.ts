@@ -5,8 +5,10 @@ import {
   cachePriceText,
   effectiveCnyCachePrice,
   effectiveCnyPrice,
+  formatCompact,
   formatPrice,
   formatTimeAgo,
+  formatTokens,
   noticeExcerpt,
   toCnyPrice,
   tieredPrices,
@@ -90,6 +92,28 @@ describe("formatPrice", () => {
     expect(formatPrice(3.5)).toBe("3.5");
     expect(formatPrice(0.125)).toBe("0.125");
     expect(formatPrice(null)).toBe("—");
+  });
+
+  it("千位补逗号，小数部分不受影响", () => {
+    expect(formatPrice(1200)).toBe("1,200");
+    expect(formatPrice(1234.5)).toBe("1,234.5");
+  });
+});
+
+describe("formatCompact / formatTokens", () => {
+  it("千以下原样，往上 k/M/B 一位小数，999,960 进位成 1M", () => {
+    expect(formatCompact(950)).toBe("950");
+    expect(formatCompact(9500)).toBe("9.5k");
+    expect(formatCompact(134_700)).toBe("134.7k");
+    expect(formatCompact(969_713)).toBe("969.7k");
+    expect(formatCompact(1_200_000)).toBe("1.2M");
+    expect(formatCompact(999_960)).toBe("1M");
+    expect(formatCompact(2_300_000_000)).toBe("2.3B");
+  });
+
+  it("formatTokens 与 formatCompact 同口径（272k 小写）", () => {
+    expect(formatTokens(272_000)).toBe("272k");
+    expect(formatTokens(1_000_000)).toBe("1M");
   });
 });
 

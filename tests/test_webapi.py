@@ -2197,19 +2197,22 @@ def test_prune_stale_monitor_models(tmp_path: Path):
 
 def test_prune_orphan_monitor_models(tmp_path: Path):
     """孤儿清理：既不在官方目录、又全库无人售卖的池内条目（价目表粘贴残留/装饰名）
-    连续 ORPHAN_GRACE_ROUNDS 轮零覆盖才移出并记 dismissed；在目录或有价即清零重来。"""
+    连续 ORPHAN_GRACE_ROUNDS 轮零覆盖才移出并记 dismissed；在目录/厂商定价源或有价即清零重来。"""
     from llm_price_monitor.store import Store
     from llm_price_monitor.webapi.jobs import ORPHAN_GRACE_ROUNDS, prune_orphan_monitor_models
 
     store = Store(tmp_path / "monitor.db")
-    store.set_document("settings", {"monitor_models": ["in-catalog", "sold", "junk", "junk-fresh"]})
+    store.set_document("settings", {"monitor_models": ["in-catalog", "vendor-only", "sold", "junk", "junk-fresh"]})
     store.replace_latest({"demo:sold:default": {"site_id": "demo", "model": "sold", "input_price": 1.0}})
     catalog = {"models": {"incatalog": {"model": "in-catalog"}}}
+    # 厂商定价源里出现过的名字也算「官方认识」：目录某轮没抓到某厂商时不能误清真模型
+    store.set_document("vendor_sources", {"sources": {"iFlytek": {"models": [{"model": "vendor-only"}]}}})
     store.set_document("monitor_orphan_state", {
         "junk": ORPHAN_GRACE_ROUNDS - 1,  # 已连续零覆盖 N-1 轮，本轮到点
         "junk-fresh": 0,
-        "sold": 5,       # 有价：不该继续计数
-        "in-catalog": 9,  # 在官方目录：同样清零
+        "sold": 5,         # 有价：不该继续计数
+        "in-catalog": 9,   # 在官方目录：同样清零
+        "vendor-only": 7,  # 在厂商定价源：同样清零
     })
 
     # 到点的 junk 移出；junk-fresh 记 1 轮；有价/在目录的名字从计数里消失

@@ -247,13 +247,31 @@ def prune_stale_monitor_models(store: Store, catalog: dict[str, Any], max_age_mo
     return removed
 
 
+def _vendor_source_model_names(store: Store) -> set[str]:
+    """厂商定价源（vendor_sources 文档）里出现过的模型名：海外与国内厂商官方定价页抓到的
+    条目都算「官方认识的名字」。目录文档偶尔会因某厂商抓取失败整片缺失（下一轮自愈），
+    只看目录会把真模型当成孤儿误清，这里以原始定价源兜底。"""
+    doc = store.get_document("vendor_sources") or {}
+    sources = doc.get("sources") if isinstance(doc, dict) else None
+    names: set[str] = set()
+    for source in (sources or {}).values():
+        if not isinstance(source, dict):
+            continue
+        for entry in source.get("models") or []:
+            if isinstance(entry, dict):
+                name = str(entry.get("model") or "").strip()
+                if name:
+                    names.add(name)
+    return names
+
+
 def prune_orphan_monitor_models(store: Store, catalog: dict[str, Any]) -> list[str]:
     """清理既不在官方目录、又没有任何站点在售的池内条目（历史粘贴残留、价目表装饰名）。
 
     这类名字永远匹配不上站点（如「mimo-v2.6-flashmimo-v2.5」「…（即将下线）」），官方
     目录的老化与国内滚动规则都管不到（不认识的名字一律不动），不清就永久占池、虚增
     「没采到价」计数。连续 ORPHAN_GRACE_ROUNDS 轮零覆盖才移出：新加的名字、站方即将
-    上架的名字都有宽限期，一旦有价（或进了官方目录）计数清零重来。
+    上架的名字都有宽限期，一旦有价（或进了官方目录/厂商定价源）计数清零重来。
 
     计数存 documents.monitor_orphan_state（与 settings 解耦，旧表单回写冲不掉进度）；
     移出记 monitor_models_dismissed，防厂商定价页再次产出同名装饰条目时被自动补回。
@@ -269,6 +287,8 @@ def prune_orphan_monitor_models(store: Store, catalog: dict[str, Any]) -> list[s
         for entry in (entries or {}).values()
         if isinstance(entry, dict) and str(entry.get("model") or "").strip()
     }
+    vendor_names = _vendor_source_model_names(store)
+    vendor_keys = {model_key(name) for name in vendor_names}
     covered = {
         str(record.get("model") or "")
         for record in store.latest_all().values()
@@ -278,8 +298,9 @@ def prune_orphan_monitor_models(store: Store, catalog: dict[str, Any]) -> list[s
     kept_state: dict[str, int] = {}
     removed: list[str] = []
     for name in monitor:
-        if model_key(name) in catalog_keys or name in covered:
-            continue  # 官方目录认识或有站点在售：不是孤儿，进度清零
+        key = model_key(name)
+        if key in catalog_keys or key in vendor_keys or name in covered:
+            continue  # 官方目录/厂商定价源认识，或有站点在售：不是孤儿，进度清零
         rounds = int(previous.get(name) or 0) + 1
         if rounds >= ORPHAN_GRACE_ROUNDS:
             removed.append(name)

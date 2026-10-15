@@ -23,7 +23,8 @@ import type { Tone } from "@/components/ToneTag";
 import type { Metadata } from "next";
 import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";
 import { loadSiteScreenshots, shotSrc } from "@/lib/screenshots";
-import { formatCompactCn, groupKindLabel, groupPlatformLabel, loadSitePopularity, type SitePopularity } from "@/lib/popularity";
+import { groupKindLabel, groupPlatformLabel, loadSitePopularity, type SitePopularity } from "@/lib/popularity";
+import { formatCompact } from "@/lib/format";
 import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
 
@@ -210,8 +211,8 @@ function PopularitySection({ popularity }: { popularity?: SitePopularity }) {
                   {group.type === "telegram"
                     ? `${groupPlatformLabel(group.type)}${group.members != null ? ` ${groupKindLabel(group)}` : ""}`
                     : groupPlatformLabel(group.type)}
-                  {group.members != null ? ` · ${formatCompactCn(group.members)} 人` : ""}
-                  {group.online != null ? `（${formatCompactCn(group.online)} 在线）` : ""}
+                  {group.members != null ? ` · ${formatCompact(group.members)} 人` : ""}
+                  {group.online != null ? `（${formatCompact(group.online)} 在线）` : ""}
                 </span>
               </span>
             ))}
@@ -222,13 +223,13 @@ function PopularitySection({ popularity }: { popularity?: SitePopularity }) {
             <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>热度</span>
             {traffic.monthly_visits != null && (
               <span>
-                月访问量约 <b className="mono">{formatCompactCn(traffic.monthly_visits)}</b>
+                月访问量约 <b className="mono">{formatCompact(traffic.monthly_visits)}</b>
                 <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>（按公开数据估算）</span>
               </span>
             )}
             {traffic.rank != null && (
               <span>
-                全网排名约 <b className="mono">{formatCompactCn(traffic.rank)}</b>
+                全网排名约 <b className="mono">{formatCompact(traffic.rank)}</b>
                 <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>（Tranco 榜）</span>
               </span>
             )}

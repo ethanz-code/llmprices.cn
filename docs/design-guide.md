@@ -59,6 +59,12 @@
 
 行高：正文 1.6–1.7，说明性文字 1.75。
 
+数字格式（2026-10-14 用户定：全站统一英文风格，不用中文「万/亿」）：
+
+- **精确统计数**（条数、次数、token 用量明细）：千分位 `1,000`，用 `lib/format.ts` 的 `formatCount`；价格走 `formatPrice`（≥1000 同样补千分位）。
+- **量级缩写**（访问量、群人数、排名、token 档位）：统一英文缩写 k/M/B（小写 k），用 `formatCompact`（`9.5k / 134.7k / 1.2M`，一位小数封顶）；token 数走 `formatTokens`（同一口径，`272k`）。不要再写中文缩写或自造 `13.5万` 式格式。
+- **文案里的数字单位**：说「每 1M token」不说「每百万 token」，快捷档位写 `10M / 100M / 1B` 不加中文注音。
+
 ## 4. 布局与间距
 
 - 内容容器 `.page`：`padding: 76px 32px 96px`（顶部留白大于吸顶导航高度），`overflow-x: clip`。
@@ -80,7 +86,7 @@
 ## 6. 组件规范（`web/components/ui.tsx`）
 
 - **Panel 卡片**：`.panel` 基座（无边框色块）；结构分隔用 `--panel-2` 色带（`snap-head`/`dash-panel-head`/表头），不叠多层投影。
-- **Alert 提示条**：`info` 用 `--panel-2` 灰底、`warn` 用 `--tone-yellow-bg`；前置 `IconAlertCircle`（14px）；**无彩色左竖线、无描边卡**。整宽告警用 `band` 变体（tone 底色通栏铺开）。
+- **Alert 提示条**：`info` 用 `--panel-2` 灰底、`warn` 用 `--tone-yellow-bg`；前置 `IconAlertCircle`（14px）；**无彩色左竖线、无描边卡**。整宽告警用 `band` 变体（tone 底色通栏铺开），但 **band 只留给页面级告警**（页面顶部、贴内容区边缘）；内容列中段的清单类提示走普通 `Alert`（随内容列宽、条内换行），且告警条内的状态徽标底色换 `--panel`，别让同色徽标糊进告警底色（2026-10-13）。
 - **数据表格 `.dtable`**：表头 = `--panel-2` 色带（贴面板顶时随圆角裁齐）；行分隔用 `--border` 低语发丝；单元格 `padding: 15px 12px`，首尾列 16px；行 hover 变底色；横向滚动只发生在 `.dtable-scroll` 内。
 - **按钮 `.btn`**：高 34px，胶囊圆角 9999px；`primary` = accent 填充 + `--accent-contrast` 文字；`ghost` = 中性填充底（`color-mix(--text 6%)`，与输入控件同一套语言）；`text` 纯文字。
 - **Seg 分段控件**：小胶囊组，激活项亮底 + `--shadow-pop`。

@@ -142,9 +142,9 @@ describe("channelDotsBySite 缓存读取/写入指标", () => {
 
   it("展示文本：报了非零读写就展示「读 X · 写 Y」，否则退回命中率", () => {
     expect(cacheMetricText({ status: "up", ok: true, cacheRead: 1_280_000, cacheWrite: 48_000, cacheRate: 84 }))
-      .toBe("读 1.3M · 写 48K");
+      .toBe("读 1.3M · 写 48k");
     // 只报读取没报写入时只展示读取
-    expect(cacheMetricText({ status: "up", ok: true, cacheRead: 2000 })).toBe("读 2K");
+    expect(cacheMetricText({ status: "up", ok: true, cacheRead: 2000 })).toBe("读 2k");
     // token 数恒为 0 占位（2btocken 实测）时退回命中率
     expect(cacheMetricText({ status: "up", ok: true, cacheRead: 0, cacheWrite: 0, cacheRate: 68.24 }))
       .toBe("命中 68%");

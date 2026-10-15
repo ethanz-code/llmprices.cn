@@ -10,7 +10,8 @@ import { Btn, Check, LoadingRows, toast } from "./ui";
 import { apiSend, errorText } from "@/lib/api";
 import { getSiteInfo } from "@/lib/sites";
 import { formatTime } from "@/lib/format";
-import { formatCompactCn, groupKindLabel, type SiteGroup } from "@/lib/popularity";
+import { groupKindLabel, type SiteGroup } from "@/lib/popularity";
+import { formatCompact } from "@/lib/format";
 import { IconUsers } from "./icons";
 import { DajuSit } from "./DajuArt";
 
@@ -116,7 +117,7 @@ export function AdminPopularity() {
                 {group.members != null && (
                   <span style={{ color: "var(--text-3)" }}>
                     {" "}
-                    {groupKindLabel(group)} {formatCompactCn(group.members)} 人
+                    {groupKindLabel(group)} {formatCompact(group.members)} 人
                   </span>
                 )}
               </span>
@@ -134,7 +135,7 @@ export function AdminPopularity() {
       render: (_v, row) =>
         row.monthly_visits ? (
           <span className="mono" title={`来源：${row.visits_source === "similarweb" ? "SimilarWeb" : "第三方估算"}`}>
-            {formatCompactCn(row.monthly_visits)}
+            {formatCompact(row.monthly_visits)}
           </span>
         ) : (
           <span style={{ color: "var(--text-3)" }}>—</span>
@@ -149,7 +150,7 @@ export function AdminPopularity() {
       render: (_v, row) =>
         row.rank ? (
           <span className="mono" title="Tranco 全网榜，越靠前越热">
-            {formatCompactCn(row.rank)}
+            {formatCompact(row.rank)}
           </span>
         ) : (
           <span style={{ color: "var(--text-3)" }}>—</span>
@@ -177,9 +178,9 @@ export function AdminPopularity() {
       width: 90,
       render: (_v, row) =>
         row.needs_query ? (
-          <span className="tag tone-yellow" title="访问量或排名还没拿到，下一轮采集会优先补">待补</span>
+          <span className="tag tone-yellow" title="访问量或排名还没拿到（或数据超过一周），下一轮采集会优先补">待补</span>
         ) : (
-          <span className="tag tag-quiet" title="访问量与排名齐全且 7 天内更新过">齐</span>
+          <span className="tag tag-quiet" title="访问量与排名都拿到了，且一周内更新过">已齐</span>
         ),
     },
   ];
