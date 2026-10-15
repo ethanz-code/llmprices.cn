@@ -21,3 +21,5 @@ docker-compose.override.yml
 # local session artifacts
 .zcode/
 gui-test-screenshots/
+.tmp-verify/
+.workbuddy/
