@@ -37,6 +37,7 @@ function TagMultiSelect({
   noMatchText,
   queryHint,
   chipMark,
+  allowCustom = true,
   width = "min(420px, 100%)",
 }: {
   value: string[];
@@ -57,6 +58,9 @@ function TagMultiSelect({
   queryHint?: (query: string) => string | null;
   /** 给不在候选里的已选项加角标：label 是短标记、title 是悬停解释 */
   chipMark?: (id: string) => { label: string; title: string } | undefined;
+  /** 是否允许把输入直接加为自定义项（默认允许，如分组白名单）；false 时输入只在精确
+   *  对上候选时才等价于勾选，手打/粘贴的目录外名字不落地 */
+  allowCustom?: boolean;
   width?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -85,10 +89,18 @@ function TagMultiSelect({
   }
 
   function commitInput() {
-    const id = query.trim();
+    const raw = query.trim();
     setQuery("");
-    if (!id || selected.has(id)) return;
-    onChange([...value, id]);
+    if (!raw) return;
+    if (!allowCustom) {
+      // 只认目录里的候选：输入的名字精确对上（忽略大小写与分隔符）等价于勾选，
+      // 对不上不落地——从源头挡住手打/粘贴的半行文本变成自定义条目
+      const hit = (options ?? []).find((item) => canonicalModel(item.id) === canonicalModel(raw));
+      if (hit && !selected.has(hit.id)) onChange([...value, hit.id]);
+      return;
+    }
+    if (selected.has(raw)) return;
+    onChange([...value, raw]);
   }
 
   return (
@@ -330,17 +342,19 @@ function ModelMultiSelect({ value, onChange }: { value: string[]; onChange: (nex
       failed={failed}
       width="100%"
       ariaLabel="选择目标模型"
-      inputLabel="搜索或添加模型"
-      fieldPlaceholder="点开搜索勾选模型，自定义的也能加"
-      inputPlaceholder="搜模型名或厂商；回车把输入添加为自定义模型"
+      inputLabel="搜索模型"
+      fieldPlaceholder="点开搜索勾选模型"
+      inputPlaceholder="搜模型名或厂商，点选加入"
       loadingText="模型目录加载中…"
-      emptyText="目录是空的，直接输入模型名回车添加"
-      failedText="模型目录还没同步好，直接输入模型名回车添加"
-      noMatchText="没有匹配的模型；回车把当前输入添加为自定义模型"
-      // 不在官方目录的条目打上角标：这类名字要有站点在售，否则连续几天没人卖会被自动移出
+      emptyText="模型目录是空的，稍后再试"
+      failedText="模型目录还没同步好，稍后再试"
+      noMatchText="没有匹配的模型；换个关键词试试"
+      // 只允许勾选官方目录里的模型：手打/粘贴的名字不落地，避免混进永远采不到价的条目
+      allowCustom={false}
+      // 历史遗留的目录外条目仍打角标：这类名字需要有站点在售，否则会被自动移出
       chipMark={(id) =>
         orderById && !orderById.has(canonicalModel(id))
-          ? { label: "目录外", title: "不在厂商官方目录里（名字手写、厂商刚下线，或目录这轮没抓到）：需要有站点在售" }
+          ? { label: "目录外", title: "不在厂商官方目录里（名字手写、厂商刚下线，或这一轮目录没抓到对应厂商）：需要有站点在售" }
           : undefined
       }
     />

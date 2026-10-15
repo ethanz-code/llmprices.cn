@@ -254,6 +254,7 @@ export function OverviewTable({
           <TermTip term="site_score" />
         </>
       ),
+      key: "site",
       dataIndex: "site_id",
       // 固定宽度贴住内容（站名+分），不设宽会在 fixed 布局里与公告列平分剩余空间、
       // 站名后面拖出一大段空白；富余宽度让公告列（文本）吸收，手机端由 mobileScrollX 回退
@@ -304,6 +305,7 @@ export function OverviewTable({
           人气<TermTip term="site_popularity" />
         </>
       ),
+      key: "popularity",
       dataIndex: "site_id",
       // 每段一行竖排（用户 2026-10-14 定：不用 · 分隔，换行显示）——列宽只按最长一段给
       width: 130,
@@ -315,8 +317,8 @@ export function OverviewTable({
         if (!badge) return <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>—</span>;
         return (
           <span className="mono" title={badge.title} style={{ display: "grid", gap: 2, fontSize: 12.5, whiteSpace: "nowrap" }}>
-            {badge.lines.map((line) => (
-              <span key={line}>{line}</span>
+            {badge.lines.map((line, index) => (
+              <span key={`${index}:${line}`}>{line}</span>
             ))}
           </span>
         );

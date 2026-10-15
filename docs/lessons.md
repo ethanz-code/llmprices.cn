@@ -169,6 +169,7 @@
 | 服务端真分页下「本页为空但总数 > 0」（手改 URL 到 `?page=999`）会被表格 `rows.length === 0 → 整只空态` 的分支吞掉：分页器随表一起消失，用户卡在空白页翻不回去 | DataTable 早返回加判定：服务端模式且 `total > 0` 时不走空态，照常渲染表壳 + 分页器，页内提示「这一页没有内容」，页码钳到最后一页；`components/DataTable.test.tsx` 钉住该行为（含「total 真为 0 才走空态」的反例） | 本次提交；DataTable.tsx 早返回分支；DataTable.test.tsx |
 | 给列表接口加真分页、或改默认行为，属于**接口契约变更**——只改「主调用方」会漏掉旁路调用方：`/api/discovery` 改成默认不返回「忽略的站」后，管理台的站点导入弹窗（DiscoverModal）正靠这个字段显示「已忽略」与取消忽略，差点看不到被忽略的站 | 改接口默认值/返回形状前先全仓 grep 调用点逐个确认是否依赖旧行为；分页参数写成 `limit: int \| None = None`（不传=全量）保住首页/总览/目录页的旧取法，不强迫所有调用方跟着改 | 提交 3ae9c5a；web/components/DiscoverModal.tsx；webapi/routes/rankings.py、discovery.py |
 | 通栏告警色带（`alert-band`）被当成内容条用：价格表上方「需要关注的站点」提示横穿内容列、比相邻卡片各宽出 32px，用户点名「宽度不行，超出正常内容范围」；且黄底告警里再叠黄色状态徽标（需认证）会糊进底色看不出状态 | `band` 只留给页面级告警（页面顶部/贴内容区边缘）；内容列中段的清单类提示用普通 `Alert`（随内容列宽、条内换行），徽标底色在告警条内换 `--panel` 保对比。顺手把该提示从管理员专属 `collect_status` 改成公开脱敏的 `collect_alerts`（只给站点 id/状态/时间，原始报错仍只进管理台「采集异常」卡） | web/components/CollectAlerts.tsx；webapi/routes/data.py `collect_alerts`；design-guide §6 |
+| DataTable 两列都不写 `key` 时列 key 静默回退到 `dataIndex`，两列同 dataIndex（OverviewTable「站点」「人气」都用 `site_id`）→ 表头/单元格 React 重复 key 报错，且只在 Next devtools 徽标里可见（console 走收集器也抓得到，但页面功能完全正常，容易漏）；行内容重复时裸 `key={文本}` 同理（人气徽标两行同文案） | 多列共用同一 dataIndex 时给每列显式 `key`（语义名如 `site`/`popularity`）；行内文本列表 key 拼下标 `${index}:${text}`；Next devtools 页面角落的 Issue 徽标是唯一可靠的全量报错入口，走查别只看 console | OverviewTable.tsx 双列修实测 |
 
 ## 5. 部署与运维
 

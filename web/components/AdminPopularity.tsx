@@ -180,7 +180,7 @@ export function AdminPopularity() {
         row.needs_query ? (
           <span className="tag tone-yellow" title="访问量或排名还没拿到（或数据超过一周），下一轮采集会优先补">待补</span>
         ) : (
-          <span className="tag tag-quiet" title="访问量与排名都拿到了，且一周内更新过">已齐</span>
+          <span className="tag tag-quiet" title="访问量与排名都拿到了，且一周内更新过">正常</span>
         ),
     },
   ];
