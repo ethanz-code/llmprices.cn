@@ -24,7 +24,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from llm_price_monitor import tasklog
+from llm_price_monitor import egress, tasklog
 
 # 同一域名两次自动切换的最小间隔：换出口是后备手段，冷却防止连环被拒就连环换
 _SWITCH_COOLDOWN_SECONDS = 600.0
@@ -105,6 +105,43 @@ def fetch_groups(base: str, secret: str, *, timeout: float = 8.0) -> list[dict[s
     return groups
 
 
+def _usable_members(group_data: dict[str, Any], node_filter: list[str]) -> list[str]:
+    """组数据里的可用节点：剔除机场信息位（流量/官网这类），再按关键词过滤。"""
+    return [
+        member
+        for member in group_data.get("all") or []
+        if isinstance(member, str) and member.strip() and not any(mark in member for mark in _INFO_NODE_MARKS)
+        and (not node_filter or any(keyword in member.lower() for keyword in node_filter))
+    ]
+
+
+def pool_state(*, timeout: float = 8.0) -> tuple[list[str], str] | None:
+    """切换组的出口池：([可用节点], 当前选中节点)；没配控制接口返回 None。
+
+    人气采集按这份清单把请求分散到不同出口（SimilarWeb 这类 WAF 按出口 IP 限流），
+    读不到/连不上由调用方降级处理（照常抛异常，留痕）。
+    """
+    base, secret, group, node_filter = _controller()
+    if not base or not group:
+        return None
+    group_data = _request(base, secret, f"/proxies/{urllib.parse.quote(group, safe='')}", timeout=timeout) or {}
+    return _usable_members(group_data, node_filter), str(group_data.get("now") or "")
+
+
+def select_node(node: str, *, timeout: float = 8.0) -> bool:
+    """把切换组的选中节点设为 node；没配控制接口或设置失败返回 False（失败留痕）。"""
+    base, secret, group, _node_filter = _controller()
+    if not base or not group:
+        return False
+    try:
+        _request(base, secret, f"/proxies/{urllib.parse.quote(group, safe='')}", method="PUT", body={"name": node}, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 —— 切换失败不回滚调用方流程，只留痕
+        tasklog.emit(f"切换代理节点失败（{node}）：{exc}", "warn")
+        return False
+    egress.invalidate_egress_ip()  # 出口变了：会话绑定站的 XFF 下次拼装重新探测
+    return True
+
+
 def auto_switch_for(host: str, target_url: str) -> str | None:
     """host 的代理出口也被目标站拒绝时，切到对该站实测可达的节点，返回新节点名。
 
@@ -130,12 +167,7 @@ def auto_switch_for(host: str, target_url: str) -> str | None:
 
 def _switch_to_reachable(base: str, secret: str, group: str, node_filter: list[str], target_url: str) -> str | None:
     group_data = _request(base, secret, f"/proxies/{urllib.parse.quote(group, safe='')}") or {}
-    members = [
-        member
-        for member in group_data.get("all") or []
-        if isinstance(member, str) and member.strip() and not any(mark in member for mark in _INFO_NODE_MARKS)
-        and (not node_filter or any(keyword in member.lower() for keyword in node_filter))
-    ]
+    members = _usable_members(group_data, node_filter)
     current = str(group_data.get("now") or "")
     candidates = [member for member in members if member != current][:_MAX_DELAY_PROBES]
     if not candidates:
@@ -155,4 +187,5 @@ def _switch_to_reachable(base: str, secret: str, group: str, node_filter: list[s
         return None
     best = min(reachable, key=reachable.get)
     _request(base, secret, f"/proxies/{urllib.parse.quote(group, safe='')}", method="PUT", body={"name": best})
+    egress.invalidate_egress_ip()  # 出口变了：会话绑定站的 XFF 下次拼装重新探测
     return best

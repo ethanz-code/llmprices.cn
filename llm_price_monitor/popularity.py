@@ -11,12 +11,18 @@ Cloudflare Radar 只给 >20 万档位、Tranco 只给排名）：能拿到第三
 
 落 documents.site_popularity（site_id → 载荷），单站两个来源都失败时保留旧数据；
 新采集拿不到的数字字段按字段回退旧值，不会因为一次网络抖动把已有数据清掉。
+
+SimilarWeb 站内 API 按出口 IP 限流（实测单出口连打约 10 次即冻结、约 11 分钟解冻）：
+采集从节点切换组读出「出口池」，请求按出口分散，被限流的出口冻结换下一个；两个外部源
+各有复查期（有值 7 天、确认无数据 30 天），确认过没数据的站不每轮白烧出口额度。
 """
 from __future__ import annotations
 
 import base64
 import re
+import sqlite3
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -69,11 +75,30 @@ _VISITS = re.compile(r"Monthly Visits[^0-9]{0,160}?([\d.,]+)\s*([KMB]?)", re.I |
 _VISITS_SCALE = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
 
 # SimilarWeb 站内 JSON API（免登录）：空 aws-waf-token cookie 免 WAF 质询（omkarcloud/
-# similarweb-scraper 验证的规律，本地实测复现），但同一出口 IP 只有约 6 次额度，超了回
-# 202（质询）/403（拉黑数小时）。出口用系统设置里配的备用代理（与采集回退同一条线）；
-# 没配代理的直连环境额度打完只能等下一轮（24h 周期天然错开额度窗口，数据月更不敏感）。
+# similarweb-scraper 验证的规律，本地实测复现）。WAF 按出口 IP 限流，2026-10-15 实测：
+# 单出口连打约 10 次就从第 11 次起回 202、换一个出口立刻放行、被冻出口约 10 分 40 秒解冻；
+# 采集出口组里各节点出口 IP 互不相同，所以采集把请求按出口池分散，别把一个出口打穿。
 SIMILARWEB_API = "https://www.similarweb.com/api/website/{domain}"
-_SIMILARWEB_BLOCKED = frozenset({202, 403, 405})
+_SIMILARWEB_BLOCKED = frozenset({202, 403, 405, 429})
+
+# 出口池参数：每个出口在滑动窗口内的请求预算（实测单出口上限约 10 次，取 6 留出被共享
+# 出口消耗的余量）、命中封锁后的停用时长（实测约 10 分 40 秒解冻，取 15 分钟保余量）、
+# 网络失败后的短暂避开时长、单站最多试几个出口。
+SW_WINDOW_SECONDS = 600.0
+SW_WINDOW_BUDGET = 6
+SW_FREEZE_SECONDS = 900.0
+SW_ERROR_COOLDOWN_SECONDS = 300.0
+SW_MAX_ATTEMPTS = 4
+
+# 外部源复查间隔：拿到值后 7 天复查一次（SimilarWeb 月更、Tranco 日更，周更足够）；
+# 确认过「上游没有这个站的数据」的按月复查（小站体量变化慢，别每轮都白烧出口额度）。
+VALUE_RECHECK_SECONDS = 7 * 86_400
+EMPTY_RECHECK_SECONDS = 30 * 86_400
+
+# 自动补采上限：出口额度按 10 分钟窗口回补，主轮跑完还剩没轮到/被限流的站时，等窗口回补
+# 接着补，最多补这么久；到点还没补完的留给下轮定时采集（待补站下轮排最前）。手动全量刷新
+# 85 站约需 18 分钟额度，20 分钟能一轮补完；定时轮通常只剩零星几个站，几秒到几分钟收尾。
+POPULARITY_TOPUP_SECONDS = 1200.0
 
 
 def _origin(url: str) -> str:
@@ -228,21 +253,40 @@ def fetch_telegram_stats(url: str, client: httpx.Client) -> dict[str, Any]:
     return stats
 
 
-def fetch_tranco_rank(host: str, client: httpx.Client) -> int | None:
-    """Tranco 每日榜排名（聚合 DNS/流量榜的研究数据，覆盖前 100 万域名）；查不到返回 None。"""
+@dataclass(frozen=True)
+class RankResult:
+    """Tranco 一次查询的结局：settled=上游明确给了结论（含「没收录」）；查询失败不算结论。"""
+
+    rank: int | None = None
+    settled: bool = False
+
+
+def fetch_tranco_rank(host: str, client: httpx.Client) -> RankResult:
+    """Tranco 每日榜排名（聚合 DNS/流量榜的研究数据，覆盖前 100 万域名）。
+
+    200 且榜单里有值 → 有排名；200 但榜单为空 → 上游明确没收录（settled=True，
+    记一个月复查期，别每轮都来问一遍）；其他状态码/网络失败 → 没结论，下轮重试。
+    """
     try:
         response = client.get(f"https://tranco-list.eu/api/ranks/domain/{host}")
     except httpx.HTTPError:
-        return None
+        return RankResult()
     if response.status_code != 200:
-        return None
+        return RankResult()
     try:
-        ranks = response.json().get("ranks") or []
+        payload = response.json()
     except ValueError:
-        return None
-    if not ranks or not isinstance(ranks[0].get("rank"), (int, float)):
-        return None
-    return int(ranks[0]["rank"])
+        return RankResult()
+    ranks = payload.get("ranks") if isinstance(payload, dict) else None
+    if not isinstance(ranks, list):
+        return RankResult()
+    if not ranks:
+        return RankResult(None, True)
+    first = ranks[0] if isinstance(ranks[0], dict) else {}
+    value = first.get("rank")
+    if isinstance(value, (int, float)):
+        return RankResult(int(value), True)
+    return RankResult()
 
 
 def fetch_visits_estimate(host: str, client: httpx.Client) -> int | None:
@@ -263,14 +307,30 @@ def fetch_visits_estimate(host: str, client: httpx.Client) -> int | None:
     return int(value) if 0 < value < 1e12 else None
 
 
-class SimilarWebClient:
-    """SimilarWeb 站内 JSON API 的轻客户端（独立 httpx、空质询 cookie、代理出口优先）。
+@dataclass(frozen=True)
+class TrafficResult:
+    """SimilarWeb 一次查询的结局：ok=有数据 / empty=上游没有该域数据（204）/
+    blocked=出口被 WAF 限流 / error=网络层失败（后两种换个出口可以再试）。"""
 
-    WAF 对单出口 IP 只放约 6 次请求，超了 202/403（冻结一段时间）。限流策略（2026-10-14 定）：
-    ① 到限额就换一个代理地址接着用——每站被拦都尝试 proxy_switch 切换组里的下一个节点，
-    切换后立刻重试，额度从一个出口挪到另一个出口继续烧；
-    ② 没配代理（切换组不可用）就不换，老老实实等冻结时间过了下轮再自动查——
-    缺数据的站每轮都会轮到，冻结期一过自然补上。
+    kind: str
+    visits: int | None = None
+
+    @property
+    def settled(self) -> bool:
+        """上游已经给了结论（有数据或明确没有），换出口重试没有意义。"""
+        return self.kind in ("ok", "empty")
+
+
+class SimilarWebClient:
+    """SimilarWeb 站内 JSON API 的轻客户端（独立 httpx、空质询 cookie、按出口池分散请求）。
+
+    WAF 按出口 IP 限流，所以请求要分散、到预算就主动让路：
+    ① 配了节点切换（出口池）时轮着用池里各出口，每出口每 SW_WINDOW_SECONDS 最多打
+       SW_WINDOW_BUDGET 次；命中封锁的出口停用 SW_FREEZE_SECONDS，单站最多换
+       SW_MAX_ATTEMPTS 个出口；
+    ② 没配节点切换时按单出口采集：代理优先、直连后备，额度打满本轮不再打，
+       缺数据的站靠 24 小时的定时周期自然轮转补上；
+    ③ 上游明确没数据（204）不换出口（换多少出口都是没有）。
     """
 
     def __init__(self, user_agent: str, timeout: float = 25.0) -> None:
@@ -281,101 +341,188 @@ class SimilarWebClient:
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://www.similarweb.com/",
         }
-        # 出口被冻结的累计计数：日志里给一句"本轮已换 N 次出口"，方便对账额度
+        self._proxy: str | None = None
+        self._pool: list[str] | None = None  # None=还没读；[]=没有可轮换的出口
+        self._selected = ""
+        self._used: dict[str, list[float]] = {}  # 出口 -> 窗口内的请求时刻
+        self._avoid_until: dict[str, float] = {}  # 出口 -> 停用/避开的截止时刻
         self._switches = 0
+        self._exhausted_note = False
 
-    def fetch(self, domain: str) -> dict[str, Any] | None:
-        """域名 → {monthly_visits, global_rank}；无数据/被拦/网络失败返回 None（上游语义不区分）。"""
-        # SimilarWeb 的 CloudFront 拒数据中心/本机直连 IP，住宅代理出口才放行——
-        # 代理优先、直连后备，与采集链路「直连优先」正好镜像
-        proxies = egress.effective_proxy()
-        attempts: tuple[dict | None, ...] = ({"proxy": proxies} if proxies else None, None)
-        for kwargs in attempts:
-            try:
-                response = httpx.get(
-                    SIMILARWEB_API.format(domain=domain),
-                    headers=self._headers,
-                    cookies={"aws-waf-token": ""},
-                    timeout=self._timeout,
-                    **(kwargs or {}),
-                )
-            except httpx.HTTPError:
+    # ---- 出口池 ----
+
+    def _ensure_pool(self) -> None:
+        """读一次出口池（节点切换组里的出口）；读不到就退回单出口，留痕不打断。"""
+        if self._pool is not None:
+            return
+        self._pool = []
+        self._proxy = egress.effective_proxy()
+        if not self._proxy:
+            return  # 没配代理出口：没有可切换的链路，直连打 SimilarWeb 必然被拒
+        try:
+            state = proxy_switch.pool_state()
+        except Exception as exc:  # noqa: BLE001 —— 出口池读不到不该拖垮采集
+            tasklog.emit(f"SimilarWeb 出口池读取失败，本轮按单出口采集：{exc}", "warn")
+            return
+        if state is None:
+            return
+        self._pool, self._selected = state
+        window = f"{int(SW_WINDOW_SECONDS / 60)} 分钟" if SW_WINDOW_SECONDS >= 60 else f"{int(SW_WINDOW_SECONDS)} 秒"
+        tasklog.emit(
+            f"SimilarWeb 出口池：{len(self._pool)} 个出口，每出口每 {window} 最多 {SW_WINDOW_BUDGET} 次请求"
+        )
+
+    def _pick_node(self, now: float) -> str | None:
+        """挑一个窗口内还有预算、没在停用期的出口（用得少的优先，平手留在当前出口）。"""
+        candidates: list[tuple[int, bool, str]] = []
+        for node in self._pool or []:
+            if self._avoid_until.get(node, 0.0) > now:
                 continue
-            if response.status_code in _SIMILARWEB_BLOCKED:
-                continue  # 这个出口被拉黑，换下一个出口
-            if response.status_code != 200:
-                return None  # 204 = SimilarWeb 没有该域数据（本地实测）
-            return self._parse(response)
-        return None
+            recent = [at for at in self._used.get(node, []) if now - at < SW_WINDOW_SECONDS]
+            self._used[node] = recent
+            if len(recent) >= SW_WINDOW_BUDGET:
+                continue
+            candidates.append((len(recent), node != self._selected, node))
+        if not candidates:
+            return None
+        candidates.sort()
+        return candidates[0][2]
+
+    def _retire(self, node: str, result: TrafficResult, host_label: str) -> None:
+        """把本轮用不了的出口停用：被限流按冻结时长，连不上按短暂避开。"""
+        if result.kind == "blocked":
+            self._avoid_until[node] = time.time() + SW_FREEZE_SECONDS
+            self._switches += 1
+            tasklog.emit(
+                f"[{host_label}] SimilarWeb 出口「{node}」额度用完，冻结换下一个出口（本轮第 {self._switches} 次）"
+            )
+            return
+        self._avoid_until[node] = time.time() + SW_ERROR_COOLDOWN_SECONDS
+        tasklog.emit(f"[{host_label}] SimilarWeb 出口「{node}」连不上，本轮先避开", "warn")
+
+    # ---- 请求 ----
+
+    def _request(self, domain: str, proxy: str | None) -> TrafficResult:
+        """单次请求：200=有数据、202/403/405/429=被 WAF 限流、204=上游明确没这个域的数据。"""
+        try:
+            response = httpx.get(
+                SIMILARWEB_API.format(domain=domain),
+                headers=self._headers,
+                cookies={"aws-waf-token": ""},
+                timeout=self._timeout,
+                **(dict(proxy=proxy) if proxy else {}),
+            )
+        except httpx.HTTPError:
+            return TrafficResult("error")
+        if response.status_code in _SIMILARWEB_BLOCKED:
+            return TrafficResult("blocked")
+        if response.status_code != 200:
+            return TrafficResult("empty")
+        return self._parse(response)
 
     @staticmethod
-    def _parse(response: httpx.Response) -> dict[str, Any] | None:
+    def _parse(response: httpx.Response) -> TrafficResult:
         try:
             payload = response.json()
         except ValueError:
-            return None
+            return TrafficResult("empty")
         overview = payload.get("overview") if isinstance(payload, dict) else None
         visits = overview.get("visitsTotalCount") if isinstance(overview, dict) else None
-        ranking = payload.get("ranking") if isinstance(payload, dict) else None
-        history = ranking.get("globalRankHistory") if isinstance(ranking, dict) else None
-        rank = None
-        if isinstance(history, list):
-            for point in reversed(history):
-                if isinstance(point, dict) and point.get("rank"):
-                    rank = int(point["rank"])
-                    break
-        result: dict[str, Any] = {}
         if isinstance(visits, (int, float)) and 0 < visits < 1e12:
-            result["monthly_visits"] = int(visits)
-        if rank:
-            result["global_rank"] = rank
-        return result or None
+            return TrafficResult("ok", int(visits))
+        return TrafficResult("empty")  # 0 或缺字段：太小站点的占位，不算抓到数据
 
-    def visits_with_retry(self, domain: str, host_label: str) -> int | None:
-        """拿月访问量：被 WAF 拦下就换代理出口接着查（每站一次切换机会）。
+    def seconds_until_budget(self, *, now: float | None = None) -> float | None:
+        """出口池还要等多少秒才有可用额度（0=现在就有；没有池子返回 None）。
 
-        切换组不可用（未配代理）时不换，等下轮冻结期过了自动补——缺数据的站每轮都轮到。
+        补采循环用它决定「睡多久再试」：取各出口里最早回补的一个——预算用满的等窗口
+        里最早那次请求滑出去，被冻结的等停用期结束。
         """
-        result = self.fetch(domain)
-        if result is not None and result.get("monthly_visits"):
-            return int(result["monthly_visits"])
-        if result is not None:
-            return None  # 上游明确没数据（204），换出口也不会有
-        switched = proxy_switch.auto_switch_for(f"similarweb:{host_label}", SIMILARWEB_API.format(domain=domain))
-        if switched is None:
-            return None  # 没配代理/没有可达节点：老实等冻结期过，下轮自动补
-        self._switches += 1
-        tasklog.emit(
-            f"[{host_label}] SimilarWeb 出口额度用完，已换代理出口 → {switched}，接着查"
-            f"（本轮已换 {self._switches} 次）"
-        )
-        retried = self.fetch(domain)
-        if retried and retried.get("monthly_visits"):
-            return int(retried["monthly_visits"])
-        return None
+        if not self._pool:
+            return None
+        now = now if now is not None else time.time()
+        waits: list[float] = []
+        for node in self._pool:
+            avoid = self._avoid_until.get(node, 0.0) - now
+            recent = sorted(at for at in self._used.get(node, []) if now - at < SW_WINDOW_SECONDS)
+            if len(recent) >= SW_WINDOW_BUDGET:
+                waits.append(max(0.0, recent[-SW_WINDOW_BUDGET] + SW_WINDOW_SECONDS - now))
+            else:
+                waits.append(max(0.0, avoid))
+        return min(waits) if waits else None
+
+    def visits_with_retry(self, domain: str, host_label: str) -> TrafficResult:
+        """拿月访问量：出口池里被限流的出口冻结换下一个；上游没数据不重试。
+
+        出口池用尽（全部停用或超出窗口预算）返回 blocked，由调用方按「本轮没采到」处理，
+        下轮定时采集会再轮到。
+        """
+        self._ensure_pool()
+        if not self._pool:
+            result = self._request(domain, self._proxy)
+            if result.kind == "blocked" and self._proxy:
+                result = self._request(domain, None)  # SimilarWeb 拒本机直连 IP，直连只是兜底
+            return result
+        for _ in range(SW_MAX_ATTEMPTS):
+            now = time.time()
+            node = self._pick_node(now)
+            if node is None:
+                if not self._exhausted_note:
+                    self._exhausted_note = True
+                    tasklog.emit("SimilarWeb 出口全部停用或超出窗口预算，剩下的站下轮自动补", "warn")
+                return TrafficResult("blocked")
+            if node != self._selected:
+                if not proxy_switch.select_node(node):
+                    self._avoid_until[node] = now + SW_ERROR_COOLDOWN_SECONDS
+                    continue
+                self._selected = node
+            result = self._request(domain, self._proxy)
+            self._used.setdefault(node, []).append(time.time())
+            if result.settled:
+                return result
+            self._retire(node, result, host_label)
+        return TrafficResult("blocked")
+
+
+# ---- 外部源新鲜度：两个源各自结算，有值 7 天复查、确认无数据 30 天复查 ----
+
+
+def _within(ts: Any, ttl: float, now: float) -> bool:
+    """这个时刻在 ttl 秒之内；缺失/异常值按「不在」处理。"""
+    try:
+        return now - float(ts) < ttl
+    except (TypeError, ValueError):
+        return False
+
+
+def visits_current(traffic: dict[str, Any], *, now: float) -> bool:
+    """访问量已有结论且没到复查期（SimilarWeb 给值或确认没数据；hypestat 的估算同样算数）。"""
+    if not isinstance(traffic, dict):
+        return False
+    ttl = VALUE_RECHECK_SECONDS if traffic.get("monthly_visits") else EMPTY_RECHECK_SECONDS
+    return _within(traffic.get("visits_checked_at"), ttl, now)
+
+
+def rank_current(traffic: dict[str, Any], *, now: float) -> bool:
+    """Tranco 排名已有结论且没到复查期。"""
+    if not isinstance(traffic, dict):
+        return False
+    ttl = VALUE_RECHECK_SECONDS if traffic.get("rank") else EMPTY_RECHECK_SECONDS
+    return _within(traffic.get("rank_checked_at"), ttl, now)
 
 
 def needs_query(entry: dict[str, Any] | None, *, now: float | None = None) -> bool:
-    """这个站还需要查外部人气源（SimilarWeb/Tranco）吗？
+    """这个站还有没有值得打的外部源（SimilarWeb/Tranco）？管理页「待补」与整轮跳过都用它。
 
-    三条全满足才跳过：① 访问量和排名都已有值（SimilarWeb 月更，7 天内的数据就是新鲜的）；
-    ② 数据是 7 天内采的；③ 群信息也采过（群链接有被站方撤掉的可能，但 7 天内重扫意义不大）。
-    任一不满足就查——优先把额度花在「还没数据」和「数据变旧」的站上，这是限流环境下的
-    自动补齐策略：没数据的站每轮都轮到，有新鲜数据的站让路。
-
-    `grouped` 阈值：Telegram 人数天天在变，但排名/访问量月更，群人数 7 天一刷足够。
+    两个外部源各自结算：拿到值、或一个月内确认过上游没有这个站的数据，就算结了；
+    有值的按 7 天复查（SimilarWeb 月更、Tranco 日更，周更足够）。任一源没结就得查——
+    限流环境里额度优先花在「还没数据」和「数据变旧」的站上，确认过没数据的不白跑。
     """
     if not isinstance(entry, dict):
         return True
     now = now if now is not None else time.time()
     traffic = entry.get("traffic") if isinstance(entry.get("traffic"), dict) else {}
-    has_traffic = bool(traffic.get("monthly_visits")) and bool(traffic.get("rank"))
-    fresh = now - float(entry.get("checked_at") or 0) < FRESH_SKIP_SECONDS
-    return not (has_traffic and fresh)
-
-
-# 数据新鲜阈值：7 天内的访问量+排名视为新鲜，不再烧外部额度重查
-FRESH_SKIP_SECONDS = 7 * 86_400
+    return not (visits_current(traffic, now=now) and rank_current(traffic, now=now))
 
 
 def collect_site(
@@ -390,9 +537,9 @@ def collect_site(
     """采集单站人气；站点接口、首页、已存公告三个来源全空时返回 None（保留旧数据）。
 
     notice_text 是 store 里该站最近一条公告正文：公告是群号的高产来源（"加入 QQ 群 …"），
-    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的写库数据：访问量+排名都有且
-    7 天内采过时跳过外部额度查询（SimilarWeb 限流环境下的自动补齐策略），群链接仍照常
-    扫描（站点接口与首页本来就是本轮要打的，只省外部源）；force=True 无视新鲜跳过。
+    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的写库数据：两个外部源（Tranco /
+    SimilarWeb）各自到复查期才重查（见 visits_current / rank_current），群链接仍照常扫描
+    （站点接口与首页本来就是本轮要打的，只省外部源）；force=True 无视复查期全查。
     """
     page_url = site_homepage(spec) or ""
     origin = _origin(str((spec.network or {}).get("url") or "")) or _origin(page_url)
@@ -430,44 +577,76 @@ def collect_site(
     traffic: dict[str, Any] = {}
     host = site_host(spec)
     if host:
-        skip_external = not force and not needs_query(previous)
-        if skip_external:
-            # 数据新鲜：不烧外部额度，沿用上轮访问量/排名（合并逻辑本身就有按字段回退，
-            # 这里直接带上旧值，让 checked_at 照常刷新、群链接照常更新）
-            old_traffic = previous.get("traffic") if isinstance(previous, dict) else {}
-            if isinstance(old_traffic, dict):
-                for key in ("monthly_visits", "visits_source", "rank", "rank_source"):
-                    if old_traffic.get(key) is not None:
-                        traffic[key] = old_traffic[key]
-        else:
-            # Tranco 有速率限制：两次查询之间拉开间隔（放在查排名前，保证跨站点也生效）
-            time.sleep(TRANCO_INTERVAL_SECONDS)
-            rank = fetch_tranco_rank(host, client)
-            if rank is not None:
-                traffic.update({"rank": rank, "rank_source": "tranco"})
-            # 月访问量：SimilarWeb 站内 API 是主源（覆盖面广、真实统计），WAF 拦下自动换节点；
-            # 拿不到再退 hypestat 公开页估算（覆盖面小）
-            visits: int | None = None
-            visits_source = ""
-            if similarweb is not None:
-                visits = similarweb.visits_with_retry(host, spec.id)
-                visits_source = "similarweb" if visits else ""
-            if visits is None:
-                visits = fetch_visits_estimate(host, client)
-                visits_source = "hypestat" if visits else ""
-            if visits:
-                traffic.update({"monthly_visits": visits, "visits_source": visits_source})
+        previous_traffic = previous.get("traffic") if isinstance(previous, dict) else None
+        old = previous_traffic if isinstance(previous_traffic, dict) else {}
+        now = time.time()
+        traffic = fetch_traffic(
+            host,
+            spec.id,
+            client,
+            similarweb,
+            previous_traffic,
+            want_visits=force or not visits_current(old, now=now),
+            want_rank=force or not rank_current(old, now=now),
+        )
     return {"groups": groups, "traffic": traffic, "checked_at": time.time()}
 
 
+def fetch_traffic(
+    host: str,
+    host_label: str,
+    client: httpx.Client,
+    similarweb: "SimilarWebClient | None",
+    previous_traffic: dict[str, Any] | None,
+    *,
+    want_visits: bool,
+    want_rank: bool,
+) -> dict[str, Any]:
+    """查两个外部源（SimilarWeb/hypestat 访问量、Tranco 排名），查哪几个由调用方指定。
+
+    want_* 由调用方按「复查期 + 本轮是否已结算」算好（整轮采集见 collect_site，补采见
+    owed_sources）：这样补采只补还欠的源，不会把已结算的源重复查一遍白烧额度。
+    返回 traffic 片段（本轮的新结论）；都没查时返回空 dict。
+    """
+    traffic: dict[str, Any] = {}
+    if want_visits:
+        # 月访问量：SimilarWeb 站内 API 是主源（覆盖面广、真实统计；请求按出口池分散，
+        # 被限流的出口自动冻结换下一个），SW 没给值再退 hypestat 公开页估算（覆盖面小）；
+        # 上游明确没数据时记一次结论（一个月内不重查），查询失败则不记、下轮接着试
+        result = similarweb.visits_with_retry(host, host_label) if similarweb is not None else None
+        visits: int | None = None
+        visits_source = ""
+        if result is not None and result.kind == "ok":
+            visits, visits_source = result.visits, "similarweb"
+        else:
+            visits = fetch_visits_estimate(host, client)
+            visits_source = "hypestat" if visits else ""
+        if visits:
+            traffic.update({"monthly_visits": visits, "visits_source": visits_source, "visits_checked_at": time.time()})
+        elif result is not None and result.settled:
+            traffic["visits_checked_at"] = time.time()
+    if want_rank:
+        # Tranco 有速率限制：两次查询之间拉开间隔（保证跨站点也生效）
+        time.sleep(TRANCO_INTERVAL_SECONDS)
+        rank = fetch_tranco_rank(host, client)
+        if rank.rank is not None:
+            traffic.update({"rank": rank.rank, "rank_source": "tranco", "rank_checked_at": time.time()})
+        elif rank.settled:
+            traffic["rank_checked_at"] = time.time()
+    return traffic
+
+
 def _merge_traffic(previous: dict[str, Any], fresh: dict[str, Any]) -> dict[str, Any]:
-    """数字字段逐个合并：本轮拿到的覆盖旧的，拿不到的保留旧值（防一次抖动清空）。"""
+    """字段逐个合并：本轮拿到的覆盖旧的，拿不到的保留旧值（防一次抖动清空）；
+    每个源的「结论时间」跟值一起走，updated_at 只在数字真变化时刷新。"""
     merged = dict(previous)
     refreshed = False
-    for key in ("monthly_visits", "visits_source", "rank", "rank_source"):
+    for key in ("monthly_visits", "visits_source", "visits_checked_at", "rank", "rank_source", "rank_checked_at"):
         value = fresh.get(key)
-        if value is not None:
-            merged[key] = value
+        if value is None:
+            continue
+        merged[key] = value
+        if key in ("monthly_visits", "rank"):
             refreshed = True
     if refreshed:
         merged["updated_at"] = time.time()
@@ -506,12 +685,214 @@ def record_popularity(store, site_id: str, payload: dict[str, Any]) -> None:
     store.set_document(POPULARITY_DOC, doc)
 
 
+def record_traffic(store, site_id: str, traffic: dict[str, Any]) -> None:
+    """只把外部源的新结论合并进该站记录（窗口回补后的补采用）。
+
+    不动群链接、也不动 checked_at（那是站点侧取数时间）：补采只补外部源，页面上的
+    「上次取数」不该被它改写。
+    """
+    if not traffic:
+        return
+    doc = dict(store.get_document(POPULARITY_DOC) or {})
+    previous = doc.get(site_id) if isinstance(doc.get(site_id), dict) else {}
+    entry = dict(previous)
+    entry["traffic"] = _merge_traffic(previous.get("traffic") or {}, traffic)
+    doc[site_id] = entry
+    store.set_document(POPULARITY_DOC, doc)
+
+
 def remove_popularity(store, site_id: str) -> None:
     """删站清理：摘掉该站的人气记录。"""
     doc = dict(store.get_document(POPULARITY_DOC) or {})
     if site_id in doc:
         doc.pop(site_id)
         store.set_document(POPULARITY_DOC, doc)
+
+
+def _entry_traffic(doc: dict[str, Any], site_id: str) -> dict[str, Any]:
+    entry = doc.get(site_id) if isinstance(doc.get(site_id), dict) else {}
+    traffic = entry.get("traffic")
+    return traffic if isinstance(traffic, dict) else {}
+
+
+def _entry_groups(doc: dict[str, Any], site_id: str) -> list[Any]:
+    entry = doc.get(site_id) if isinstance(doc.get(site_id), dict) else {}
+    groups = entry.get("groups")
+    return groups if isinstance(groups, list) else []
+
+
+def _write_with_retry(action, *args, attempts: int = 3) -> bool:
+    """写库遇到「database is locked」重试几次；仍失败返回 False（调用方留痕、继续下一站）。
+
+    正常只有调度线程一个写者，但并行跑采集（dev 里常见）或别的进程在写大文档时，
+    单次写会被占住——整轮人气采集不该被一次写库繁忙搞死。
+    """
+    for attempt in range(attempts):
+        try:
+            action(*args)
+            return True
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc) or attempt == attempts - 1:
+                if "locked" not in str(exc):
+                    raise
+                return False
+            time.sleep(1.5 * (attempt + 1))
+    return False
+
+
+def _settled_since(ts: Any, since: float) -> bool:
+    """这个源的结论是在 since 之后（含）拿到的吗？补采用它区分「本轮查过」与「旧值还在」。"""
+    try:
+        return float(ts) >= since
+    except (TypeError, ValueError):
+        return False
+
+
+def owed_sources(
+    traffic: dict[str, Any],
+    due: tuple[bool, bool] | None,
+    *,
+    since: float,
+    now: float | None = None,
+) -> tuple[bool, bool]:
+    """这个站本轮还欠哪些源（访问量, 排名）。
+
+    due 是轮次开始时「该查哪些源」的快照（force 轮全 True），since 是本轮开始时刻：
+    该查、但结论时间早于 since（还是旧值或压根没有）→ 欠着。不传 due 按复查期现算。
+    """
+    now = now if now is not None else time.time()
+    want_visits, want_rank = due if due is not None else (
+        not visits_current(traffic, now=now),
+        not rank_current(traffic, now=now),
+    )
+    return (
+        want_visits and not _settled_since(traffic.get("visits_checked_at"), since),
+        want_rank and not _settled_since(traffic.get("rank_checked_at"), since),
+    )
+
+
+def pending_traffic(
+    store,
+    config,
+    *,
+    since: float = 0.0,
+    due: dict[str, tuple[bool, bool]] | None = None,
+) -> list[tuple[Any, dict[str, Any]]]:
+    """还没拿到外部结论的站（有可查域名，且该查的源没在本轮结算）。
+
+    due 是「本轮该查哪些源」的快照（site_id → (查访问量, 查排名)）：force 全量刷新时
+    所有源都算该查，靠 `since`（本轮开始时刻）区分「本轮查过了」与「旧值还在复查期内」——
+    只看新鲜度会把「本轮没轮到」误判成「不缺数据」。不传 due 就按复查期现算。
+    主轮跑完与补采每一轮结束后都用它重算：拿到本轮结论的站自动出列。
+    """
+    doc = store.get_document(POPULARITY_DOC) or {}
+    now = time.time()
+    pending: list[tuple[Any, dict[str, Any]]] = []
+    for spec in config.sites:
+        if not site_host(spec):
+            continue  # 没有可查域名（纯 IP 站等）：补采无从下手
+        traffic = _entry_traffic(doc, spec.id)
+        want_visits, want_rank = owed_sources(traffic, (due or {}).get(spec.id), since=since, now=now)
+        if want_visits or want_rank:
+            pending.append((spec, traffic))
+    return pending
+
+
+def topup_pending(
+    store,
+    config,
+    similarweb: SimilarWebClient,
+    client: httpx.Client,
+    stats: dict[str, int],
+    *,
+    since: float = 0.0,
+    due: dict[str, tuple[bool, bool]] | None = None,
+) -> None:
+    """窗口回补后的自动补采：把本轮没拿到外部结论的站接着补，直到都有结论或超出上限。
+
+    SimilarWeb 的出口额度按窗口回补，主轮跑完往往还剩几个站没轮到（手动全量刷新时尤其
+    明显）。这里按出口池给出的「还有多久有额度」等窗口回补，再补一轮，最多补
+    POPULARITY_TOPUP_SECONDS；到点还没补完的留给下轮定时采集（待补站下轮排最前）。
+    补采只动外部源：群链接不重扫，页面的「上次取数」也不改写。
+    """
+    pending = pending_traffic(store, config, since=since, due=due)
+    if not pending:
+        return
+    deadline = time.time() + POPULARITY_TOPUP_SECONDS
+    tasklog.emit(
+        f"主轮结束仍有 {len(pending)} 站缺外部数据，等出口额度回补后自动补采（最多 {int(POPULARITY_TOPUP_SECONDS / 60)} 分钟）"
+    )
+    stalls = 0
+    while pending and time.time() < deadline:
+        wait = similarweb.seconds_until_budget()
+        if wait is None:
+            tasklog.emit(f"没有可轮换的出口，剩余 {len(pending)} 站留给下轮定时采集", "warn")
+            return
+        if wait > 0:
+            if time.time() + wait > deadline:
+                tasklog.emit(f"出口额度回补还要 {int(wait)} 秒、超出本轮补采上限，剩余 {len(pending)} 站下轮自动补", "warn")
+                return
+            time.sleep(min(wait + 1.0, 300.0))
+        progressed = 0
+        for spec, traffic in pending:
+            host = site_host(spec)
+            # 只补还欠的源：已在本轮结算的源不重复查（否则额度全耗在无意义的重试上）
+            want_visits, want_rank = owed_sources(traffic, (due or {}).get(spec.id), since=since)
+            try:
+                fresh = fetch_traffic(host, spec.id, client, similarweb, traffic, want_visits=want_visits, want_rank=want_rank)
+            except Exception as exc:  # noqa: BLE001 —— 补采单站异常不打断循环，留痕后继续
+                tasklog.emit(f"[{spec.id}] 补采异常：{exc}", "warn")
+                continue
+            if not fresh:
+                continue
+            if not _write_with_retry(record_traffic, store, spec.id, fresh):
+                tasklog.emit(f"[{spec.id}] 补采写库失败（数据库繁忙），下轮自动补", "warn")
+                continue
+            stats["topped_up"] += 1
+            progressed += 1
+            # 日志只说本轮补到了什么（旧值不重复报）
+            parts = []
+            if fresh.get("monthly_visits"):
+                parts.append(f"月访问量约 {fresh['monthly_visits']}")
+            elif fresh.get("visits_checked_at"):
+                parts.append("上游确认没有访问量数据")
+            if fresh.get("rank"):
+                parts.append(f"全网排名 {fresh['rank']}")
+            elif fresh.get("rank_checked_at"):
+                parts.append("Tranco 未收录")
+            tasklog.emit(f"[{spec.id}] 补采：{'，'.join(parts)}")
+        pending = pending_traffic(store, config, since=since, due=due)
+        if progressed == 0:
+            stalls += 1
+            if stalls >= 2:
+                tasklog.emit(f"补采连续 {stalls} 轮没有新结论，剩余 {len(pending)} 站下轮自动补", "warn")
+                return
+        else:
+            stalls = 0
+    if pending:
+        tasklog.emit(f"补采到时间上限，剩余 {len(pending)} 站下轮自动补", "warn")
+    else:
+        tasklog.emit("补采完成：本轮所有站的外部数据都拿到了结论")
+
+
+def popularity_order_key(*, needs_query: bool, checked_at: float | None, site_id: str) -> tuple[bool, float, str]:
+    """人气管理页展示序与整轮采集序共用的排序键：待补在前，然后按上次取数新→旧。"""
+    return (not needs_query, -(checked_at or 0), site_id)
+
+
+def scan_order(sites, popularity_doc: dict[str, Any], *, now: float | None = None) -> list:
+    """采集顺序：待补的站排前面（与管理页默认列表一致），其余按上次取数新→旧。
+
+    额度有限时先照顾缺数据/数据变旧的站；这个顺序写进任务日志，页面列表能直接对照。
+    """
+    now = now if now is not None else time.time()
+
+    def key(spec):
+        entry = popularity_doc.get(spec.id)
+        checked_at = entry.get("checked_at") if isinstance(entry, dict) else None
+        return popularity_order_key(needs_query=needs_query(entry, now=now), checked_at=checked_at, site_id=spec.id)
+
+    return sorted(sites, key=key)
 
 
 def scan_popularity(
@@ -522,31 +903,45 @@ def scan_popularity(
     user_agent: str | None = None,
     force: bool = False,
 ) -> dict[str, int]:
-    """逐站采集一轮人气：全部站点（含未启用，选站要用），单站失败记日志继续下一站。
+    """逐站采集一轮人气：全部站点（含未启用，选站要用），按管理页的「待补在前」顺序，
+    单站失败记日志继续下一站。
 
-    force=False（默认定时轮）时，访问量+排名都有且 7 天内采过的站跳过外部额度查询
-    （SimilarWeb/Tranco 限流环境下的自动补齐策略：额度优先花给缺数据的站）；
-    force=True（手动刷新）无视新鲜、逐站全量重查。
+    每个外部源（Tranco / SimilarWeb）各自按复查期决定重查：有值 7 天、确认上游没数据 30 天；
+    force=True（手动全量刷新）无视复查期逐站全查。SimilarWeb 请求按采集出口池分散
+    （见 SimilarWebClient）：被限流的出口冻结换下一个；主轮跑完还剩没拿到结论的站，
+    等出口额度回补自动补采（topup_pending，上限 POPULARITY_TOPUP_SECONDS），补不完的
+    留给下轮定时采集（待补站下轮排最前）。
 
-    返回 {sites, groups, visits, ranked, failed, skipped} 计数。
+    返回 {sites, groups, visits, ranked, failed, skipped, topped_up} 计数；
+    visits/ranked/groups 是「本轮结束时库内的站数/群数」，补采的成果也算进去。
     """
     owns_client = client is None
     if client is None:
         client = build_client(
             timeout=15, headers={"User-Agent": user_agent or DEFAULT_BROWSER_USER_AGENT}
         )
-    stats = {"sites": 0, "groups": 0, "visits": 0, "ranked": 0, "failed": 0, "skipped": 0}
+    stats = {"sites": 0, "groups": 0, "visits": 0, "ranked": 0, "failed": 0, "skipped": 0, "topped_up": 0}
     popularity_doc = dict(store.get_document(POPULARITY_DOC) or {})
     pending = sum(1 for spec in config.sites if needs_query(popularity_doc.get(spec.id)))
     tasklog.emit(
         "开始站点人气采集"
-        + (f"（手动全量刷新）" if force else f"（{pending} 个站待补数据，其余站数据新鲜跳过外部查询）")
+        + (f"（手动全量刷新）" if force else f"（{pending} 个站有数据要补，其余站按复查期跳过外部查询）")
     )
+    # 本轮该查哪些源（补采用）：force 全量刷新时所有源都算该查，靠轮次开始时刻区分
+    # 「本轮查过了」与「旧值还在复查期内」
+    round_start = time.time()
+    due = {
+        spec.id: (
+            force or not visits_current(_entry_traffic(popularity_doc, spec.id), now=round_start),
+            force or not rank_current(_entry_traffic(popularity_doc, spec.id), now=round_start),
+        )
+        for spec in config.sites
+    }
     # SimilarWeb 站内 API 的 WAF 按出口 IP 计额度：整轮共用一个轻客户端（独立于采集 client，
-    # 不走退避重试——它没有"换出口"逻辑），碰壁时经 proxy_switch 换节点续命
+    # 不走退避重试），由它按出口池轮换节点、冻结被限流的出口
     similarweb = SimilarWebClient(user_agent or DEFAULT_BROWSER_USER_AGENT)
     try:
-        for spec in config.sites:
+        for spec in scan_order(config.sites, popularity_doc):
             stats["sites"] += 1
             notice = store.latest_notice(spec.id) or {}
             notice_text = str(notice.get("content") or "")
@@ -561,24 +956,32 @@ def scan_popularity(
                 stats["failed"] += 1
                 tasklog.emit(f"[{spec.id}] 人气采集失败：站点接口、首页都打不开且没有已存公告，保留旧数据", "warn")
                 continue
-            record_popularity(store, spec.id, payload)
+            if not _write_with_retry(record_popularity, store, spec.id, payload):
+                stats["failed"] += 1
+                tasklog.emit(f"[{spec.id}] 人气写库失败（数据库繁忙），保留旧数据、下轮重来", "warn")
+                continue
             groups = payload.get("groups") or []
             traffic = payload.get("traffic") or {}
-            stats["groups"] += len(groups)
-            stats["visits"] += 1 if traffic.get("monthly_visits") else 0
-            stats["ranked"] += 1 if traffic.get("rank") else 0
+            # 跳过复查的站沿用上轮数字：日志按合并后的实际值打印（本轮新值优先）
+            old_traffic = (previous or {}).get("traffic") if isinstance(previous, dict) else {}
+            shown = _merge_traffic(old_traffic if isinstance(old_traffic, dict) else {}, traffic)
             if not force and previous is not None and not needs_query(previous):
                 stats["skipped"] += 1
             detail = "，".join(group["label"] for group in groups) or "未发现交流群"
             tasklog.emit(
                 f"[{spec.id}] 人气：{detail}"
-                + (f"，月访问量约 {traffic['monthly_visits']}" if traffic.get("monthly_visits") else "")
-                + (f"，全网排名 {traffic['rank']}" if traffic.get("rank") else "")
+                + (f"，月访问量约 {shown['monthly_visits']}" if shown.get("monthly_visits") else "")
+                + (f"，全网排名 {shown['rank']}" if shown.get("rank") else "")
             )
+        topup_pending(store, config, similarweb, client, stats, since=round_start, due=due)
+        final_doc = store.get_document(POPULARITY_DOC) or {}
+        stats["visits"] = sum(1 for spec in config.sites if _entry_traffic(final_doc, spec.id).get("monthly_visits"))
+        stats["ranked"] = sum(1 for spec in config.sites if _entry_traffic(final_doc, spec.id).get("rank"))
+        stats["groups"] = sum(len(_entry_groups(final_doc, spec.id)) for spec in config.sites)
         tasklog.emit(
-            f"站点人气采集结束：{stats['sites']} 站（跳过外部查询 {stats['skipped']} 站），"
-            f"发现交流群 {stats['groups']} 个，月访问量 {stats['visits']} 站，"
-            f"排名 {stats['ranked']} 站，失败 {stats['failed']} 站"
+            f"站点人气采集结束：{stats['sites']} 站（跳过外部复查 {stats['skipped']} 站，"
+            f"窗口回补后补采 {stats['topped_up']} 站），交流群 {stats['groups']} 个，"
+            f"月访问量 {stats['visits']} 站，排名 {stats['ranked']} 站，失败 {stats['failed']} 站"
         )
     finally:
         if owns_client:

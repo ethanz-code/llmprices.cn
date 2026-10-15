@@ -102,6 +102,16 @@ def effective_proxy() -> str | None:
     return fallback_proxy() or _local_env_proxy()
 
 
+def invalidate_egress_ip() -> None:
+    """出口 IP 缓存作废：代理节点切换后立刻生效，下一次 XFF 拼装重新探测当前出口。
+
+    缓存默认 5 分钟，节点切换会让 XFF 最多滞后一个缓存周期，会话绑定站（校验
+    请求对端 IP == XFF）可能瞬时对不上，所以切换成功即调用这里。
+    """
+    global _egress_ip_at
+    _egress_ip_at = 0.0
+
+
 def current_egress_ip(*, timeout: float = 8.0) -> str | None:
     """当前采集出口（代理）IP；没有代理或查询失败返回 None（调用方保留 XFF 原文并留痕）。
 

@@ -1,6 +1,7 @@
 """站点配置端点：增删改查（写入前做结构校验）。"""
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -190,14 +191,16 @@ def build_router(store: Store) -> APIRouter:
     def site_popularity_admin() -> dict[str, Any]:
         """人气管理页数据：全部站点（含未启用）的人气与采集状态一览。
 
-        每行带：群链接/人数、访问量、排名、最近一次采集时间（checked_at）、是否待补
-        （needs_query：访问量或排名缺失，或数据超 7 天没刷新）。列表按「待补在前 +
-        采集时间新在前」排好，管理页直接渲染。
+        每行带：群链接/人数、访问量、排名、最近一次采集时间（checked_at）、状态：
+        待补（needs_query：还有外部源没到结论/没到复查期）、无数据（上游明确没有这个站的
+        访问量与排名，不白跑）、正常（有数据或已确认没有且结论新鲜）。列表按「待补在前 +
+        采集时间新在前」排好（与整轮采集顺序一致），管理页直接渲染。
         """
-        from llm_price_monitor.popularity import POPULARITY_DOC, needs_query
+        from llm_price_monitor.popularity import POPULARITY_DOC, needs_query, popularity_order_key, rank_current, visits_current
 
         config = config_from_store(store)
         doc = store.get_document(POPULARITY_DOC) or {}
+        now = time.time()
         rows = []
         for site in config.sites:
             entry = doc.get(site.id) if isinstance(doc.get(site.id), dict) else {}
@@ -213,10 +216,14 @@ def build_router(store: Store) -> APIRouter:
                     "rank": traffic.get("rank"),
                     "rank_source": traffic.get("rank_source"),
                     "checked_at": entry.get("checked_at"),
-                    "needs_query": needs_query(entry),
+                    "needs_query": needs_query(entry, now=now),
+                    "no_data": not traffic.get("monthly_visits")
+                    and not traffic.get("rank")
+                    and visits_current(traffic, now=now)
+                    and rank_current(traffic, now=now),
                 }
             )
-        rows.sort(key=lambda row: (row["needs_query"], -(row["checked_at"] or 0), row["site_id"]))
+        rows.sort(key=lambda row: popularity_order_key(needs_query=row["needs_query"], checked_at=row["checked_at"], site_id=row["site_id"]))
         pending = sum(1 for row in rows if row["needs_query"])
         return {"rows": rows, "pending": pending, "total": len(rows)}
 

@@ -1,12 +1,13 @@
 "use client";
 
 /** 站点人气管理：各站交流群/访问量/排名一览 + 上次取数时间 + 手动补采。
- *  数据来自 /api/sites/popularity/admin（含未启用站，选站要用）；刷新按钮提交
- *  collect-popularity 任务并轮询到结束，全量勾选无视新鲜度逐站重查。 */
+ *  数据来自 /api/sites/popularity/admin（含未启用站，选站要用）；两个按钮都提交
+ *  collect-popularity 任务并轮询到结束：「立即补采」只查还有数据要补的站，
+ *  「全量刷新」无视复查期逐站重查。列表顺序（待补在前）与整轮采集顺序一致。 */
 
 import { useCallback, useEffect, useState } from "react";
 import { DataTable, type DColumn } from "./DataTable";
-import { Btn, Check, LoadingRows, toast } from "./ui";
+import { Btn, LoadingRows, toast } from "./ui";
 import { apiSend, errorText } from "@/lib/api";
 import { getSiteInfo } from "@/lib/sites";
 import { formatTime } from "@/lib/format";
@@ -25,6 +26,7 @@ interface PopularityRow {
   rank_source?: string | null;
   checked_at?: number | null;
   needs_query: boolean;
+  no_data: boolean;
 }
 
 interface PopularityAdminData {
@@ -45,7 +47,6 @@ function freshnessText(checkedAt: number | null | undefined): string {
 export function AdminPopularity() {
   const [data, setData] = useState<PopularityAdminData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [force, setForce] = useState(false);
 
   const reload = useCallback(() => {
     apiSend<PopularityAdminData>("/api/sites/popularity/admin", "GET")
@@ -57,12 +58,13 @@ export function AdminPopularity() {
     reload();
   }, [reload]);
 
-  async function refresh() {
+  async function refresh(force: boolean) {
     setRefreshing(true);
     try {
       const res = await apiSend<{ task_id: string }>("/api/collect/popularity", "POST", { force });
-      toast(force ? "已提交全量刷新（逐站重查外部源，整轮较久）" : "已提交补采（优先查缺数据的站）");
-      for (let i = 0; i < 900; i += 1) {
+      toast(force ? "已提交全量刷新（逐站重查外部源，整轮较久）" : "已提交补采（只查还有数据要补的站）");
+      // 轮询到任务结束：全量刷新可能边等出口额度回补边补采，最长约半小时
+      for (let i = 0; i < 1800; i += 1) {
         const task = await apiSend<{ status: string }>(`/api/tasks/${res.task_id}`, "GET");
         if (task.status !== "running") {
           if (task.status === "done") toast("人气采集完成");
@@ -178,9 +180,20 @@ export function AdminPopularity() {
       width: 90,
       render: (_v, row) =>
         row.needs_query ? (
-          <span className="tag tone-yellow" title="访问量或排名还没拿到（或数据超过一周），下一轮采集会优先补">待补</span>
+          <span className="tag tone-yellow" title="有外部数据还没拿到（或已到复查期），下一轮采集优先补">
+            待补
+          </span>
+        ) : row.no_data ? (
+          <span
+            className="tag tone-gray"
+            title="SimilarWeb 与 Tranco 都没有这个站的数据（站太小，一个月后自动复查一次）"
+          >
+            无数据
+          </span>
         ) : (
-          <span className="tag tag-quiet" title="访问量与排名都拿到了，且一周内更新过">正常</span>
+          <span className="tag tag-quiet" title="访问量与排名都有结论，且都在复查期内">
+            正常
+          </span>
         ),
     },
   ];
@@ -197,16 +210,27 @@ export function AdminPopularity() {
         </div>
         <p style={{ fontSize: 12.5, color: "var(--text-2)", margin: 0, lineHeight: 1.7 }}>
           访问量按 SimilarWeb 公开数据估算（每月更新），排名来自 Tranco 全网榜，群人数按 Telegram 公开页面统计。
-          SimilarWeb 按出口 IP 限流（约 6 次），采集会自动换代理出口接着查；没配代理就等冻结期过了自动补。
-          「待补」的站下一轮定时采集优先轮到，也可以点下面的按钮立即补。
+          SimilarWeb 对单个出口 IP 限流，采集会自动轮换采集出口里的节点把请求分散开；这一轮没轮到的站，下一轮定时采集会补上。
+          「立即补采」只查还有数据要补的站；「全量刷新」无视复查期、逐站重查外部源，更慢也更耗额度。
         </p>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <Btn size="sm" disabled={refreshing} onClick={refresh}>
-            {refreshing ? "人气采集中…" : "立即补采"}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <Btn
+            size="sm"
+            disabled={refreshing}
+            onClick={() => refresh(false)}
+            title="现在就去补还有数据要补的站（缺数据或到复查期的），通常很快"
+          >
+            立即补采
           </Btn>
-          <Check checked={force} onChange={setForce}>
-            <span title="无视数据新鲜度逐站重查外部源（SimilarWeb/Tranco），额度消耗大、整轮更久">全量刷新</span>
-          </Check>
+          <Btn
+            size="sm"
+            disabled={refreshing}
+            onClick={() => refresh(true)}
+            title="无视复查期，逐站重查外部源（SimilarWeb/Tranco），额度消耗大、整轮更久"
+          >
+            全量刷新
+          </Btn>
+          {refreshing && <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>采集中…可以离开这个页面，采集在后台继续</span>}
         </div>
       </div>
 
