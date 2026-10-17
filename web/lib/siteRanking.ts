@@ -1,9 +1,11 @@
 /**
- * 站点综合分：模型数据页（/overview）每个站点行的排序依据。
+ * 站点综合分：模型数据页（/overview）每个站点行的排序依据，也是站点卡（首页站点墙、
+ * /sites 全部站点页）的排序依据（站点级版本见 buildSiteQuality）。
  *
- * 综合分 = 价格 40% + 渠道稳定 20% + 人气 15% + 配置完整 15% + 公告新鲜 10%（各分项 0–1，
+ * 综合分 = 价格 35% + 渠道稳定 20% + 人气 30% + 配置完整 10% + 公告新鲜 5%（各分项 0–1，
  * 权重写死在此），再减去「数据滞后扣分」（价格沿用旧快照时最多扣 10 分，见 stalenessPenalty）。
- * 目标是「价格越低越靠前，同时看配置/公告/渠道的配比」。
+ * 目标是「价格低、人气旺、渠道稳的站靠前」：价格与人气是两项大头，渠道稳定次之，
+ * 配置完整与公告新鲜只做小幅修正。
  *
  * 关键规则：**价格在当前这张表（当前模型）里比**——同一模型下各站的实付成本横向归一，
  * 谁最便宜谁价格分最高；不拿站点跨模型的中位数，否则会出现「本模型里最便宜的站却排在后面」。
@@ -22,17 +24,17 @@ import { calcCost } from "./calculator";
 import { effectiveCnyCachePrice, effectiveCnyPrice } from "./format";
 import { canonicalModel } from "./modelOrder";
 import { hasUsablePrice } from "./priceRows";
-import type { SiteStats } from "./channelStatus";
-import type { OverviewRecord, SiteFlags } from "./types";
+import type { OverviewData, OverviewRecord, SiteChannelSummary, SiteFlags } from "./types";
 import type { SitePopularityMap } from "./popularity";
 
-/** 五项权重（写死；改规则改这里）。价格仍占最大头，人气作为平台规模的独立信号占 15%。 */
+/** 五项权重（写死；改规则改这里）。价格仍是第一权重，人气作为平台规模与跑路风险的
+ *  独立信号与价格接近（30%），渠道稳定看当下能不能用，配置完整与公告新鲜只做小幅修正。 */
 export const SITE_RANK_WEIGHTS = {
-  price: 40,
+  price: 35,
   stability: 20,
-  popularity: 15,
-  completeness: 15,
-  notice: 10,
+  popularity: 30,
+  completeness: 10,
+  notice: 5,
 } as const;
 
 /** 价格项折算成本的用量结构（与花费计算器的默认值无关，见文件头）：输入 96% 命中缓存、
@@ -88,8 +90,8 @@ export interface SiteRankInput {
   records: OverviewRecord[];
   /** 展示汇率（USD→CNY）；与总览表同一规则，缺省回落原币 */
   rate: number | null;
-  /** 渠道检测视图（每站可用率/渠道成功率）；缺省该项取中性分 */
-  views?: SiteStats | null;
+  /** 渠道摘要（每站最新可用率/成功率均值/时段分桶，/api/status/summary）；缺省该项取中性分 */
+  channelSummary?: SiteChannelSummary | null;
   /** 各站配置标志（后端 /api/overview 下发）；缺省该项取中性分 */
   siteFlags?: Record<string, SiteFlags> | null;
   /** 各站最新公告时间（秒级时间戳）；缺省 = 无公告 */
@@ -169,10 +171,11 @@ function priceByModel(records: OverviewRecord[], rate: number | null): Record<st
   return result;
 }
 
-/** 站点渠道稳定项 0–1：近 7 天在售渠道平均可用率（时段分桶按次数加权）与渠道成功率取均值；
- *  两项都拿不到时返回 null（调用方给中性分）。 */
-function stabilityOf(views: SiteStats | null | undefined, siteId: string): number | null {
-  const buckets = views?.uptimeBuckets?.[siteId] ?? [];
+/** 站点渠道稳定项 0–1：近 7 天在售渠道平均可用率（时段分桶按次数加权）与渠道成功率均值
+ *  （后端在摘要里算好）取均值；两项都拿不到时返回 null（调用方给中性分）。 */
+function stabilityOf(summary: SiteChannelSummary | null | undefined, siteId: string): number | null {
+  const entry = summary?.sites?.[siteId];
+  const buckets = entry?.buckets ?? [];
   let weighted = 0;
   let count = 0;
   for (const bucket of buckets) {
@@ -181,11 +184,7 @@ function stabilityOf(views: SiteStats | null | undefined, siteId: string): numbe
     count += bucket.count;
   }
   const availability = count > 0 ? weighted / count : null;
-
-  const rates = (views?.channels?.[siteId] ?? [])
-    .map((channel) => channel.successRate24h)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const success = rates.length > 0 ? rates.reduce((sum, value) => sum + value, 0) / rates.length : null;
+  const success = entry?.success ?? null;
 
   if (availability != null && success != null) return clamp01((availability + success) / 2 / 100);
   if (availability != null) return clamp01(availability / 100);
@@ -200,8 +199,8 @@ function completenessOf(flags: SiteFlags | undefined): number | null {
   return hit / SITE_RANK_CHECKLIST.length;
 }
 
-/** 人气项的分档锚点：月访问量 5 万/月、Telegram 群 500 人、Tranco 排名 100 万为「达标」（1 分），
- *  线性封顶；三个信号取最优，一个都没有 = 0（确实查无公开人气），缺失的信号不奖不罚。
+/** 人气项的分档锚点：月访问量 5 万/月、Telegram 群 500 人、SimilarWeb 全网排名 100 万为「达标」
+ *  （1 分），线性封顶；三个信号取最优，一个都没有 = 0（确实查无公开人气），缺失的信号不奖不罚。
  *  排名是「越小越热」，与访问量/群人数方向相反，单独归一。 */
 const POPULARITY_VISITS_ANCHOR = 50_000;
 const POPULARITY_MEMBERS_ANCHOR = 500;
@@ -246,7 +245,7 @@ export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   const site: Record<string, SiteSideScore> = {};
   for (const siteId of siteIds) {
     site[siteId] = {
-      stability: stabilityOf(input.views, siteId) ?? NEUTRAL,
+      stability: stabilityOf(input.channelSummary, siteId) ?? NEUTRAL,
       popularity: popularityScoreOf(input.sitePopularity?.[siteId]),
       completeness: completenessOf(input.siteFlags?.[siteId]) ?? NEUTRAL,
       notice: noticeFreshness(input.noticeAt?.[siteId], now),
@@ -255,26 +254,125 @@ export function buildSiteRanking(input: SiteRankInput): SiteRanking {
   return { site, priceByModel: priceByModel(input.records, input.rate) };
 }
 
+/** 五项加权（0–100，未扣滞后）：行分与站点级质量分共用同一套权重，改权重只改这里。 */
+function weightedScore(price: number, side: SiteSideScore): number {
+  const weightSum = Object.values(SITE_RANK_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
+  return (
+    ((SITE_RANK_WEIGHTS.price * price +
+      SITE_RANK_WEIGHTS.stability * side.stability +
+      SITE_RANK_WEIGHTS.popularity * side.popularity +
+      SITE_RANK_WEIGHTS.completeness * side.completeness +
+      SITE_RANK_WEIGHTS.notice * side.notice) /
+      weightSum) *
+    100
+  );
+}
+
 /** 单行综合分（0–100）：价格取「当前模型内」的归一值，另外四项取站点级，数据滞后另扣。
  *  传整行而不是 (站点, 模型)：滞后扣分要看这一行自己的 last_price_at。 */
 export function rowScore(ranking: SiteRanking, row: OverviewRecord): SiteScore {
   const side =
     ranking.site[row.site_id] ?? { stability: NEUTRAL, popularity: 0, completeness: NEUTRAL, notice: 0 };
   const price = ranking.priceByModel[canonicalModel(row.model)]?.[row.site_id] ?? 0;
-  const weightSum = Object.values(SITE_RANK_WEIGHTS).reduce((sum, weight) => sum + weight, 0);
-  const weighted =
-    (SITE_RANK_WEIGHTS.price * price +
-      SITE_RANK_WEIGHTS.stability * side.stability +
-      SITE_RANK_WEIGHTS.popularity * side.popularity +
-      SITE_RANK_WEIGHTS.completeness * side.completeness +
-      SITE_RANK_WEIGHTS.notice * side.notice) /
-    weightSum;
   const stale = stalenessPenalty(row);
-  const score = Math.max(0, weighted * 100 - stale);
-  return { score, price, ...side, stale };
+  return { score: Math.max(0, weightedScore(price, side) - stale), price, ...side, stale };
 }
 
 /** 行排序键：综合分越高越靠前；站点不在评分表里视为最低。 */
 export function rowRankScore(ranking: SiteRanking | undefined, row: OverviewRecord): number {
   return ranking ? rowScore(ranking, row).score : -1;
+}
+
+/** 站点级质量分（0–100）：站点卡（首页站点墙、/sites 全部站点页）的排序依据。
+ *  与行综合分同一套权重，差别只在「价格」一项：行分比的是「当前这个模型」内的相对价格，
+ *  站点级没有单一模型可比，取该站在所售各模型内价格分的平均（每个模型等权），
+ *  即「相对别家贵不贵」的跨模型平均——只卖个别便宜模型的站不会因此自动登顶。
+ *  没有任何价格数据的站记 0（不是中性）：没有比价依据就不算「质量好」。
+ *  数据滞后扣分取该站价行里最差的一行（一般全站同源，最差即「本站数据还新不新」）。 */
+export interface SiteQualityScore extends SiteSideScore {
+  /** 质量分 0–100 */
+  score: number;
+  /** 价格项 0–1：所售各模型内价格分的平均；无价格数据为 0 */
+  price: number;
+  /** 参与价格平均的模型数（0 = 没有任何价格数据） */
+  priceModels: number;
+  /** 数据滞后扣分（已从 score 里扣掉），取该站最差一行，0–10 */
+  stale: number;
+}
+
+/** 一步算出全部站点的质量分（站点集合 = 有配置标志的站 ∪ 有价格记录的站）。 */
+export function buildSiteQuality(
+  ranking: SiteRanking,
+  records: OverviewRecord[],
+): Record<string, SiteQualityScore> {
+  // 价格项：priceByModel 已是「逐模型内归一」，这里把各站所售模型的分数收集起来再平均
+  const priceAcc = new Map<string, { sum: number; count: number }>();
+  for (const modelScores of Object.values(ranking.priceByModel)) {
+    for (const [siteId, score] of Object.entries(modelScores)) {
+      const acc = priceAcc.get(siteId) ?? { sum: 0, count: 0 };
+      acc.sum += score;
+      acc.count += 1;
+      priceAcc.set(siteId, acc);
+    }
+  }
+  // 滞后扣分：逐站取最差一行（一般同站各行同源，取最差即「数据是否可信」）
+  const staleBySite = new Map<string, number>();
+  for (const row of records) {
+    staleBySite.set(row.site_id, Math.max(staleBySite.get(row.site_id) ?? 0, stalenessPenalty(row)));
+  }
+  const out: Record<string, SiteQualityScore> = {};
+  const siteIds = new Set([...Object.keys(ranking.site), ...priceAcc.keys(), ...staleBySite.keys()]);
+  for (const siteId of siteIds) {
+    const side =
+      ranking.site[siteId] ?? { stability: NEUTRAL, popularity: 0, completeness: NEUTRAL, notice: 0 };
+    const acc = priceAcc.get(siteId);
+    const price = acc && acc.count > 0 ? acc.sum / acc.count : 0;
+    const stale = staleBySite.get(siteId) ?? 0;
+    out[siteId] = {
+      score: Math.max(0, weightedScore(price, side) - stale),
+      price,
+      priceModels: acc?.count ?? 0,
+      stale,
+      ...side,
+    };
+  }
+  return out;
+}
+
+/** 站点卡统一排序（首页站点墙与 /sites 页共用，规则只此一处）：启用的按质量分从高到低，
+ *  停用的统一排最后；同分按名称（本地化序），顺序稳定。 */
+export function orderSitesByQuality<T extends { id: string; name: string; enabled: boolean }>(
+  sites: T[],
+  quality: Record<string, SiteQualityScore>,
+): T[] {
+  return [...sites].sort((a, b) => {
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+    const diff = (quality[b.id]?.score ?? -1) - (quality[a.id]?.score ?? -1);
+    if (diff !== 0) return diff;
+    return a.name.localeCompare(b.name, "zh");
+  });
+}
+
+/** 从页面取到的原始数据一步算出站点质量分（首页站点墙与 /sites 页共用，口径只此一处）：
+ *  overview 是 /api/overview 的响应（价格记录、站点配置标志、最新公告、汇率），
+ *  channelSummary 是渠道摘要（lib/statusData 的标准取数），sitePopularity 是 /api/sites/popularity。 */
+export function buildSiteQualityFromOverview(
+  overview: OverviewData,
+  channelSummary?: SiteChannelSummary | null,
+  sitePopularity?: SitePopularityMap | null,
+): Record<string, SiteQualityScore> {
+  const records = overview.records;
+  return buildSiteQuality(
+    buildSiteRanking({
+      records,
+      rate: overview.catalog.usd_cny_rate ?? null,
+      channelSummary,
+      siteFlags: overview.site_flags,
+      sitePopularity,
+      noticeAt: Object.fromEntries(
+        Object.entries(overview.notices ?? {}).map(([id, notice]) => [id, notice.captured_at ?? null]),
+      ),
+    }),
+    records,
+  );
 }

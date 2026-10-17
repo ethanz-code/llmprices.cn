@@ -1,13 +1,15 @@
 /** 站点评分规则：价格在「当前模型内」归一、其余四项站点级、数据滞后另扣、缺数据中性、排序主键。 */
 import { describe, expect, it } from "vitest";
 
-import type { SiteStats } from "@/lib/channelStatus";
+import type { SiteChannelSummary } from "@/lib/types";
 import { smartOrderRows } from "@/lib/priceRows";
 import type { SitePopularity } from "@/lib/popularity";
 import {
   STALE_PENALTY_MAX,
+  buildSiteQuality,
   buildSiteRanking,
   effectiveCostCny,
+  orderSitesByQuality,
   popularityScoreOf,
   rowRankScore,
   rowScore,
@@ -27,7 +29,6 @@ function row(over: Partial<OverviewRecord>): OverviewRecord {
     source_url: "https://s1.example",
     captured_at: 100,
     last_price_at: 100,
-    fingerprint: "f",
     discount: null,
     ...over,
   };
@@ -52,13 +53,13 @@ const BARE_FLAGS: SiteFlags = {
   homepage: false,
 };
 
-/** 造一份渠道视图：把给定站点的可用率放进时段分桶（单桶即该站的 7 天可用率）。 */
-function statsWith(availability: Record<string, number>): SiteStats {
-  const uptimeBuckets: SiteStats["uptimeBuckets"] = {};
+/** 造一份渠道摘要：把给定站点的可用率放进时段分桶（单桶即该站的 7 天可用率）。 */
+function statsWith(availability: Record<string, number>): SiteChannelSummary {
+  const sites: SiteChannelSummary["sites"] = {};
   for (const [site, pct] of Object.entries(availability)) {
-    uptimeBuckets[site] = [{ start: 0, end: 60, count: 10, avg: pct, worst: pct, down: [] }];
+    sites[site] = { pct, at: 60, success: null, down: 0, checks: 10, buckets: [{ avg: pct, count: 10 }] };
   }
-  return { channels: {}, availability: {}, uptimeBuckets };
+  return { sites };
 }
 
 describe("effectiveCostCny 按重缓存用量折算的实付成本", () => {
@@ -131,7 +132,7 @@ describe("其余三项：渠道稳定 / 配置完整 / 公告新鲜", () => {
       records: [],
       rate: null,
       siteFlags: { s: FULL_FLAGS, t: FULL_FLAGS },
-      views: statsWith({ s: 80 }),
+      channelSummary: statsWith({ s: 80 }),
     });
     expect(rowScore(ranking, s).stability).toBeCloseTo(0.8, 6);
     expect(rowScore(ranking, t).stability).toBe(0.5);
@@ -173,7 +174,7 @@ describe("其余三项：渠道稳定 / 配置完整 / 公告新鲜", () => {
       records: [cheap, good, spike],
       rate: null,
       siteFlags: { cheap: BARE_FLAGS, good: FULL_FLAGS },
-      views: statsWith({ cheap: 0, good: 100 }),
+      channelSummary: statsWith({ cheap: 0, good: 100 }),
       noticeAt: { cheap: null, good: 1_000_000_000 },
       now: 1_000_000_000,
     });
@@ -297,5 +298,111 @@ describe("smartOrderRows 用行综合分作主排序键", () => {
     const ordered = smartOrderRows(rows, () => 0, null, (r) => rowRankScore(ranking, r));
     expect(ordered[0]).toBe(cheap);
     expect(smartOrderRows(rows, () => 0, null)[0]).toBe(cheap);
+  });
+});
+
+describe("站点级质量分（站点卡排序）", () => {
+  it("价格项取所售模型内价格分的平均：一边最便宜一边最贵 = 0.5", () => {
+    const a1 = row({ site_id: "a", model: "m1", input_price: 1, output_price: 4 });
+    const b1 = row({ site_id: "b", model: "m1", input_price: 10, output_price: 40 });
+    const a2 = row({ site_id: "a", model: "m2", input_price: 10, output_price: 40 });
+    const b2 = row({ site_id: "b", model: "m2", input_price: 1, output_price: 4 });
+    const ranking = buildSiteRanking({ records: [a1, b1, a2, b2], rate: null });
+    const quality = buildSiteQuality(ranking, [a1, b1, a2, b2]);
+    expect(quality.a.price).toBeCloseTo(0.5, 6);
+    expect(quality.b.price).toBeCloseTo(0.5, 6);
+    expect(quality.a.priceModels).toBe(2);
+    expect(quality.a.score).toBeCloseTo(quality.b.score, 6);
+  });
+
+  it("两个模型里都最便宜的站价格分 1，综合分高于各占一个便宜的站", () => {
+    const cheap1 = row({ site_id: "cheap", model: "m1", input_price: 1, output_price: 4 });
+    const mid1 = row({ site_id: "mid", model: "m1", input_price: 3, output_price: 12 });
+    const dear1 = row({ site_id: "dear", model: "m1", input_price: 10, output_price: 40 });
+    const cheap2 = row({ site_id: "cheap", model: "m2", input_price: 1, output_price: 4 });
+    const dear2 = row({ site_id: "mid", model: "m2", input_price: 10, output_price: 40 });
+    const mid2 = row({ site_id: "dear", model: "m2", input_price: 3, output_price: 12 });
+    const records = [cheap1, mid1, dear1, cheap2, dear2, mid2];
+    const quality = buildSiteQuality(buildSiteRanking({ records, rate: null }), records);
+    expect(quality.cheap.price).toBe(1);
+    expect(quality.cheap.score).toBeGreaterThan(quality.mid.score);
+  });
+
+  it("没有任何价格数据的站价格项记 0（不是中性），有数据的站分数更高", () => {
+    const priced = row({ site_id: "priced", model: "m1", input_price: 1, output_price: 4 });
+    const ranking = buildSiteRanking({
+      records: [priced],
+      rate: null,
+      siteFlags: { priced: FULL_FLAGS, silent: FULL_FLAGS },
+    });
+    const quality = buildSiteQuality(ranking, [priced]);
+    expect(quality.silent.price).toBe(0);
+    expect(quality.silent.priceModels).toBe(0);
+    // 只差价格一项：有价站 35 分权重全拿，无价站拿 0；其余四项相同
+    expect(quality.priced.score - quality.silent.score).toBeCloseTo(35, 6);
+  });
+
+  it("数据滞后扣分取该站最差一行，直接压综合分", () => {
+    const fresh = row({ site_id: "s", model: "m1", input_price: 1, output_price: 4 });
+    const stale = row({
+      site_id: "s",
+      model: "m2",
+      input_price: 1,
+      output_price: 4,
+      captured_at: 100 + 5 * 86_400,
+      last_price_at: 100,
+    });
+    const other = row({ site_id: "t", model: "m1", input_price: 1, output_price: 4 });
+    const records = [fresh, stale, other];
+    const quality = buildSiteQuality(buildSiteRanking({ records, rate: null }), records);
+    expect(quality.s.stale).toBeCloseTo(STALE_PENALTY_MAX, 6);
+    expect(quality.t.stale).toBe(0);
+    expect(quality.s.score).toBeLessThan(quality.t.score);
+  });
+
+  it("分数与分项都在合法区间", () => {
+    const a = row({ site_id: "a", model: "m1", input_price: 1, output_price: 4 });
+    const b = row({ site_id: "b", model: "m1", input_price: 10, output_price: 40 });
+    const quality = buildSiteQuality(
+      buildSiteRanking({ records: [a, b], rate: null, siteFlags: { a: FULL_FLAGS, b: BARE_FLAGS } }),
+      [a, b],
+    );
+    for (const s of Object.values(quality)) {
+      expect(s.score).toBeGreaterThanOrEqual(0);
+      expect(s.score).toBeLessThanOrEqual(100);
+      for (const part of [s.price, s.stability, s.popularity, s.completeness, s.notice]) {
+        expect(Number.isFinite(part)).toBe(true);
+        expect(part).toBeGreaterThanOrEqual(0);
+        expect(part).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+});
+
+describe("orderSitesByQuality 站点卡排序", () => {
+  const site = (id: string, enabled = true) => ({ id, name: id, enabled });
+
+  it("启用的按质量分从高到低，停用的统一排最后", () => {
+    const records = [
+      row({ site_id: "good", model: "m1", input_price: 1, output_price: 4 }),
+      row({ site_id: "bad", model: "m1", input_price: 10, output_price: 40 }),
+    ];
+    const ranking = buildSiteRanking({
+      records,
+      rate: null,
+      siteFlags: { good: FULL_FLAGS, bad: BARE_FLAGS, off: FULL_FLAGS },
+      channelSummary: statsWith({ good: 100, bad: 0, off: 100 }),
+    });
+    const quality = buildSiteQuality(ranking, records);
+    const ordered = orderSitesByQuality([site("bad"), site("off", false), site("good")], quality);
+    expect(ordered.map((s) => s.id)).toEqual(["good", "bad", "off"]);
+  });
+
+  it("不改变入参数组；无质量分的站视为最低", () => {
+    const input = [site("b"), site("a", false), site("missing")];
+    const ordered = orderSitesByQuality(input, {});
+    expect(input.map((s) => s.id)).toEqual(["b", "a", "missing"]);
+    // 都有分时按名称序稳定排列（缺失分 = -1 排最后）
+    expect(ordered.map((s) => s.id)).toEqual(["b", "missing", "a"]);
   });
 });
