@@ -10,28 +10,30 @@ import { LoadingRows, Skel } from "./ui";
 
 /* ---------- 通用零件 ---------- */
 
-/** 摘要条骨架：label+value 成对，复用 .page-digest 获得同样的底线与间距。 */
+/** 摘要条骨架：label 在上、value 在下，与真实 .page-digest-item 的 column 排布一致；
+ *  复用 .page-digest 拿到同样的底线与间距，换入时整条高度不跳。 */
 function DigestSkeleton({ labels }: { labels: string[] }) {
   return (
     <div className="page-digest" aria-hidden>
       {labels.map((label, index) => (
-        <span
-          key={label}
-          className="page-digest-item"
-          style={{ display: "flex", alignItems: "baseline", gap: 8 }}
-        >
-          <Skel w={label.length * 13} h={12} delay={index * 90} />
-          <Skel w={56} h={26} delay={index * 90 + 45} />
+        <span key={label} className="page-digest-item">
+          <Skel w={label.length * 13} h={11} delay={index * 90} />
+          <Skel w={56} h={20} delay={index * 90 + 45} />
         </span>
       ))}
     </div>
   );
 }
 
-type Col = number | string;
+/** 列宽：数字即 px；"auto" 与 fr 类不给宽（table-layout:fixed 下自动平分剩余，与真实表一致）；
+ *  其余字符串（如 min(140px,24vw)）原样透传给 <col>。 */
+type Col = number | "auto" | (string & {});
 
-const colsTemplate = (cols: Col[]) =>
-  cols.map((col) => (typeof col === "number" ? `${col}px` : col)).join(" ");
+const colWidth = (col: Col): string | undefined => {
+  if (typeof col === "number") return `${col}px`;
+  if (col === "auto" || col.endsWith("fr)")) return undefined;
+  return col;
+};
 
 /** 单元格条宽：行×列决定 52%–80% 的伪随机宽度，避免整列齐刷刷。 */
 const cellWidth = (row: number, col: number) => `${52 + ((row * 7 + col * 13) % 5) * 7}%`;
@@ -53,24 +55,30 @@ function PagerSkeleton() {
   );
 }
 
-/** 数据表骨架：列模板对应真实表；可选面板头栏（总览页）与分页条。 */
+/** 数据表骨架：直接铺真实 .dtable——列宽交给 <colgroup>、窄屏隐藏列复用 .col-hide-m，
+ *  单元格内距/行高/表头色带/首末列内缩全部来自真实样式，换入时列位与行高零漂移。
+ *  head 为面板头栏（总览/目录/全量渠道）；dense 对应 .dtable-dense；tallRows 表示真实行为
+ *  双行内容（站点 + 分组小字），加高行留白逼近真实行高。 */
 function PanelTable({
   cols,
+  mobileHide = [],
   rows = 12,
   dense = false,
   head = false,
   pager = false,
-  /** 行内容两行高（点阵/双行单元格的表）：加大行留白对齐真实行高 */
   tallRows = false,
 }: {
   cols: Col[];
+  /** 窄屏（≤1024px）隐藏的列下标：与真实列的 mobileHide 一一对应，避免窄屏骨架多出列 */
+  mobileHide?: number[];
   rows?: number;
   dense?: boolean;
-  /** 总览页面板头栏：模型名 + AA 徽标 | 数据时间 · 汇率 */
+  /** 面板头栏：左标题 + 右数据时间/汇率 */
   head?: boolean;
   pager?: boolean;
   tallRows?: boolean;
 }) {
+  const hide = new Set(mobileHide);
   return (
     <div className="panel" style={{ overflow: "hidden" }} aria-hidden>
       {head && (
@@ -89,36 +97,43 @@ function PanelTable({
           <Skel w={226} h={13} delay={90} />
         </div>
       )}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: colsTemplate(cols),
-          columnGap: 12,
-          padding: dense ? "8px 12px" : "10px 12px",
-          borderBottom: "1px solid var(--border)",
-        }}
-      >
-        {cols.map((_, index) => (
-          <Skel key={index} w="58%" h={11} delay={index * 40} />
-        ))}
-      </div>
-      {Array.from({ length: rows }, (_, row) => (
-        <div
-          key={row}
-          style={{
-            display: "grid",
-            gridTemplateColumns: colsTemplate(cols),
-            columnGap: 12,
-            padding: `${tallRows ? 24 : dense ? 10 : 12}px 12px`,
-            borderBottom: row < rows - 1 ? "1px solid var(--border)" : undefined,
-          }}
-        >
-          {cols.map((_, col) => (
-            <Skel key={col} w={cellWidth(row, col)} h={13} delay={row * 130 + col * 47} />
-          ))}
+      {/* .dtable-dense 挂在这层（与 DataTable 同款），窄屏隐藏列靠 .col-hide-m 自动折叠列 */}
+      <div className={`dtable-wrap${dense ? " dtable-dense" : ""}`}>
+        <div className="dtable-scroll">
+          <table className="dtable" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              {cols.map((col, index) => (
+                <col key={index} style={{ width: colWidth(col) }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                {cols.map((_, index) => (
+                  <th key={index} className={hide.has(index) ? "col-hide-m" : undefined}>
+                    <Skel w="58%" h={11} delay={index * 40} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: rows }, (_, row) => (
+                <tr key={row}>
+                  {cols.map((_, col) => (
+                    <td
+                      key={col}
+                      className={hide.has(col) ? "col-hide-m" : undefined}
+                      style={tallRows ? { paddingTop: 18, paddingBottom: 18 } : undefined}
+                    >
+                      <Skel w={cellWidth(row, col)} h={13} delay={row * 130 + col * 47} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
-      {pager && <PagerSkeleton />}
+        {pager && <PagerSkeleton />}
+      </div>
     </div>
   );
 }
@@ -133,8 +148,10 @@ export function OverviewLoading() {
       <div style={{ marginBottom: 16 }} aria-hidden>
         <Skel w={300} h={34} style={{ borderRadius: 6, maxWidth: "100%" }} />
       </div>
+      {/* 列与 OverviewTable 逐列对齐：站点 / 首页实拍 / 输入价 / 输出价 / 缓存价 / 分组 / 折扣 / 渠道 / 公告 */}
       <PanelTable
-        cols={["minmax(0,1.1fr)", 120, 120, 120, 110, 150, 200, "minmax(0,1.1fr)"]}
+        cols={["auto", 88, 120, 120, 120, 110, 150, 200, "auto"]}
+        mobileHide={[1, 4, 5, 6, 7, 8]}
         dense
         head
         pager
@@ -167,8 +184,10 @@ export function RankingsLoading() {
         />
         <Skel w={186} h={12} delay={120} />
       </div>
+      {/* 列与 RankingsTable 对齐：排名 / 模型 / 厂商 / 上下文 / 综合评分 / 速度 / 首字延迟 */}
       <PanelTable
-        cols={["minmax(72px,auto)", "minmax(220px,1.5fr)", 130, 84, 96, 100, 92]}
+        cols={[72, 220, 130, 84, 96, 100, 92]}
+        mobileHide={[2, 3, 5, 6]}
         dense
         pager
         rows={40}
@@ -212,9 +231,67 @@ export function CatalogLoading() {
           delay={100}
         />
         <Skel w={160} h={34} style={{ borderRadius: 6, maxWidth: "100%" }} delay={160} />
+        {/* 右侧簇：榜单链接 + 立即同步按钮，与真实工具栏同为 2 项 */}
         <Skel w={66} h={13} style={{ marginLeft: "auto" }} delay={200} />
+        <Skel w={88} h={34} style={{ borderRadius: 6 }} delay={240} />
       </div>
-      <PanelTable cols={[170, 248, 190, 190, "minmax(0,1fr)", 60]} dense pager tallRows rows={28} />
+      {/* 列与 CatalogTable 对齐：厂商 / 模型(296，为 AA 徽标留宽) / 输入价 / 输出价 / 简介 / 来源 */}
+      <PanelTable
+        cols={[170, 296, 190, 190, "auto", 60]}
+        mobileHide={[3, 4, 5]}
+        dense
+        head
+        pager
+        tallRows
+        rows={28}
+      />
+    </div>
+  );
+}
+
+/** 厂商定价页 · 全量渠道视图骨架：视图切换行（Seg + 说明 + 榜单链接 + 立即同步）
+ *  + 全量渠道自身的筛选行（搜索 + 渠道下拉）+ 面板（头栏 + 7 列表），对齐 CatalogAllTable。 */
+export function CatalogAllLoading() {
+  return (
+    <div className="page">
+      <DigestSkeleton labels={["官方定价模型", "全量渠道模型"]} />
+      <div style={{ display: "grid", gap: 16 }} aria-hidden>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 2,
+              padding: 3,
+              background: "var(--field-bg)",
+              borderRadius: 6,
+            }}
+          >
+            <Skel w={68} h={26} style={{ borderRadius: 4 }} />
+            <Skel w={68} h={26} style={{ borderRadius: 4 }} delay={60} />
+          </div>
+          <Skel w={300} h={13} delay={100} />
+          <Skel w={66} h={13} style={{ marginLeft: "auto" }} delay={140} />
+          <Skel w={88} h={34} style={{ borderRadius: 6 }} delay={180} />
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+          <Skel
+            w={420}
+            h={34}
+            style={{ borderRadius: 6, flex: "1 1 260px", maxWidth: "min(420px, 100%)" }}
+          />
+          <Skel w={200} h={34} style={{ borderRadius: 6, maxWidth: "100%" }} delay={80} />
+        </div>
+        {/* 列与 CatalogAllTable 对齐：渠道/厂商 / 模型 / 价格 / 上下文 / 简介 / 发布 / 来源 */}
+        <PanelTable
+          cols={[190, 230, 180, 180, "auto", 110, 60]}
+          mobileHide={[3, 4, 5, 6]}
+          dense
+          head
+          pager
+          tallRows
+          rows={28}
+        />
+      </div>
     </div>
   );
 }
@@ -277,46 +354,49 @@ export function HistoryLoading() {
   );
 }
 
-/** 渠道状态行骨架：6 列（渠道/状态/延迟/成功率/可用记录/正常次数），对齐 .ch-row 列模板。 */
-const CH_COLS = "minmax(110px,200px) auto auto 1fr minmax(120px,220px) auto";
-
+/** 渠道状态行骨架：7 列（渠道 / 状态 / 延迟·7日可用率 / 成功率·输出速度 / 缓存读写 / 可用记录条 / 正常次数），
+ *  列模板与描边一律交给 .ch-row（gap 8 / padding 5px 0 / border-top），不再另写内距，否则整行错位。 */
 function ChannelRowSkeleton({ row, head = false }: { row: number; head?: boolean }) {
   return (
-    <div
-      className={`ch-row${head ? " ch-head" : ""}`}
-      style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}
-      aria-hidden
-    >
+    <div className={`ch-row${head ? " ch-head" : ""}`} aria-hidden>
       {head ? (
         <>
           <Skel w={44} h={12} />
           <Skel w={32} h={12} delay={20} />
-          <Skel w={96} h={12} delay={40} />
-          <Skel w={92} h={12} delay={60} />
-          <Skel w={72} h={12} delay={80} />
-          <Skel w={56} h={12} delay={100} />
+          <Skel w={104} h={12} delay={40} style={{ justifySelf: "end" }} />
+          <Skel w={92} h={12} delay={60} style={{ justifySelf: "end" }} />
+          <Skel w={96} h={12} delay={80} style={{ justifySelf: "end" }} />
+          <Skel w={72} h={12} delay={100} />
+          <Skel w={56} h={12} delay={120} />
         </>
       ) : (
         <>
-          <div style={{ display: "grid", gap: 4 }}>
+          <span className="ch-name" style={{ display: "grid", gap: 4 }}>
             <Skel w={110} h={13} delay={row * 120} />
             <Skel w={150} h={11} delay={row * 120 + 30} />
-          </div>
-          <Skel w={64} h={22} style={{ borderRadius: 999 }} delay={row * 120 + 50} />
-          <Skel w={104} h={13} delay={row * 120 + 70} />
-          <Skel w={128} h={13} delay={row * 120 + 90} />
-          <div style={{ display: "flex", gap: 3 }}>
-            {Array.from({ length: 15 }, (_, index) => (
-              <Skel
-                key={index}
-                w={7}
-                h={14}
-                style={{ borderRadius: 2, flexShrink: 0 }}
-                delay={row * 120 + index * 12}
-              />
-            ))}
-          </div>
-          <Skel w={48} h={13} delay={row * 120 + 110} />
+          </span>
+          <span className="ch-state">
+            <Skel w={64} h={22} style={{ borderRadius: 999 }} delay={row * 120 + 50} />
+          </span>
+          <Skel w={104} h={13} delay={row * 120 + 70} style={{ justifySelf: "end" }} />
+          <Skel w={112} h={13} delay={row * 120 + 90} style={{ justifySelf: "end" }} />
+          <Skel w={96} h={13} delay={row * 120 + 100} style={{ justifySelf: "end" }} />
+          <span className="ch-upt">
+            <span className="uptime-wrap" style={{ display: "block" }}>
+              <span className="uptime-bars">
+                {Array.from({ length: 18 }, (_, index) => (
+                  <Skel
+                    key={index}
+                    w="100%"
+                    h={30}
+                    style={{ flex: 1, borderRadius: 2.5 }}
+                    delay={row * 120 + index * 10}
+                  />
+                ))}
+              </span>
+            </span>
+          </span>
+          <Skel w={40} h={13} delay={row * 120 + 110} />
         </>
       )}
     </div>
@@ -349,20 +429,27 @@ export function StatusLoading() {
       </div>
       <div style={{ display: "grid", gap: 16 }} aria-hidden>
         <section className="panel" style={{ display: "grid", gap: 14, padding: 16 }}>
-          <div style={{ display: "flex", gap: 3 }}>
-            {Array.from({ length: 28 }, (_, index) => (
-              <Skel
-                key={index}
-                w="100%"
-                h={22}
-                style={{ flex: 1, borderRadius: 3 }}
-                delay={index * 30}
-              />
-            ))}
+          <div className="uptime-wrap">
+            <div className="uptime-bars">
+              {Array.from({ length: 28 }, (_, index) => (
+                <Skel
+                  key={index}
+                  w="100%"
+                  h={30}
+                  style={{ flex: 1, borderRadius: 2.5 }}
+                  delay={index * 30}
+                />
+              ))}
+            </div>
           </div>
-          <div style={{ paddingTop: 4, display: "grid", gap: 18 }}>
-            <Skel w="100%" h={190} style={{ borderRadius: 8 }} delay={220} />
-            <Skel w="100%" h={190} style={{ borderRadius: 8 }} delay={340} />
+          {/* 趋势图：可用率 + 延迟 + TPS 三块，各带一行小节标题，块距与 StatusCharts 的 gap 14 一致 */}
+          <div style={{ paddingTop: 4, display: "grid", gap: 14 }}>
+            {[132, 108, 150].map((titleW, index) => (
+              <div key={index} style={{ display: "grid", gap: 10 }}>
+                <Skel w={titleW} h={16} delay={220 + index * 90} />
+                <Skel w="100%" h={216} style={{ borderRadius: 8 }} delay={260 + index * 90} />
+              </div>
+            ))}
           </div>
         </section>
         <section className="panel" style={{ display: "grid", gap: 2, padding: 16 }}>
@@ -381,7 +468,18 @@ export function StatusLoading() {
           <Skel w="72%" h={13} delay={160} />
           <Skel w="80%" h={13} delay={220} />
         </section>
-        <Skel w={130} h={13} />
+        {/* 站点首页实拍：截图固定 1280×800（比例 1.6），骨架按同比例占位，换入时高度不跳 */}
+        <section className="panel" style={{ display: "grid", gap: 10, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <Skel w={92} h={16} />
+            <Skel w={96} h={12} delay={60} />
+          </div>
+          <Skel
+            w="100%"
+            style={{ aspectRatio: "1280 / 800", height: "auto", borderRadius: 8 }}
+            delay={120}
+          />
+        </section>
       </div>
     </div>
   );
@@ -508,39 +606,53 @@ export function CalcLoading() {
   );
 }
 
-/** 管理面板概览骨架：KPI 统计行 + 主栏（访问统计 / 采集报错 / 最近事件）+ 右栏快捷面板，
- *  对齐 /admin 概览的 dash-grid 布局。 */
+/** 管理面板概览骨架：对齐 /admin 概览——外层 .page 由 admin layout 提供，这里只铺 dash-grid。
+ *  主栏 = 统计条 + 访问统计 + 采集报错 + 最近事件（4 块），右栏 = 快捷入口 + 公开页面（2 块），
+ *  统计条留在主栏内（占左栏宽）而不是铺满整页。 */
 export function AdminLoading() {
   return (
-    <div className="page" aria-hidden>
+    <>
       <h1 className="sr-only">控制台</h1>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 40px", padding: "14px 20px 12px", background: "var(--panel)", borderRadius: 12 }}>
-        {["检测站点", "价格记录", "事件总数", "输入折扣中位数"].map((label, index) => (
-          <div key={label} style={{ display: "grid", gap: 6 }}>
-            <Skel w={label.length * 12} h={12} delay={index * 70} />
-            <Skel w={64} h={20} delay={index * 70 + 30} />
-          </div>
-        ))}
-      </div>
-      <div className="dash-grid" style={{ marginTop: 20 }}>
+      <div className="dash-grid" aria-hidden>
         <div className="dash-main">
-          <div className="panel" style={{ padding: 16 }}>
-            <Skel w={92} h={15} />
-            <Skel w="100%" h={190} style={{ borderRadius: 8, marginTop: 14 }} delay={80} />
+          <div className="dash-stats">
+            {["检测站点", "价格记录", "事件总数", "输入折扣中位数"].map((label, index) => (
+              <div key={label} className="dash-stat">
+                <Skel w={label.length * 12} h={12} delay={index * 70} />
+                <Skel w={64} h={20} style={{ marginTop: 3 }} delay={index * 70 + 30} />
+              </div>
+            ))}
           </div>
-          <div className="panel" style={{ padding: 16 }}>
-            <Skel w={92} h={15} />
-            <LoadingRows rows={4} style={{ marginTop: 14 }} />
-          </div>
-          <div className="panel" style={{ padding: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <Skel w={80} h={15} />
-              <Skel w={64} h={12} delay={60} />
+          <div className="panel">
+            <div className="dash-panel-head">
+              <Skel w={76} h={15} />
             </div>
-            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+            <div style={{ padding: 16 }}>
+              <Skel w="100%" h={120} style={{ borderRadius: 8 }} delay={80} />
+            </div>
+          </div>
+          <div className="panel">
+            <div className="dash-panel-head">
+              <Skel w={92} h={15} />
+            </div>
+            <div style={{ padding: 16 }}>
+              <LoadingRows rows={3} />
+            </div>
+          </div>
+          <div className="panel">
+            <div className="dash-panel-head">
+              <Skel w={80} h={15} />
+              <Skel w={64} h={13} delay={60} />
+            </div>
+            <div className="dash-events">
               {[0, 1, 2].map((row) => (
                 <div key={row} className="event-card">
-                  <Skel w={8} h={8} style={{ borderRadius: "50%", flexShrink: 0, marginTop: 4 }} delay={row * 120} />
+                  <Skel
+                    w={8}
+                    h={8}
+                    style={{ borderRadius: "50%", flexShrink: 0, marginTop: 5 }}
+                    delay={row * 120}
+                  />
                   <div style={{ display: "grid", gap: 6, flex: 1 }}>
                     <Skel w={`${56 - row * 7}%`} h={13} delay={row * 120 + 30} />
                     <Skel w={`${72 - row * 9}%`} h={11} delay={row * 120 + 60} />
@@ -550,16 +662,25 @@ export function AdminLoading() {
             </div>
           </div>
         </div>
-        <aside className="dash-side" style={{ display: "grid", gap: 20 }}>
-          <div className="panel" style={{ padding: 16, display: "grid", gap: 12 }}>
-            <Skel w={76} h={15} />
-            {[0, 1, 2, 3].map((row) => (
-              <Skel key={row} w={`${70 - row * 6}%`} h={13} delay={row * 80} />
-            ))}
-          </div>
-        </aside>
+        <div className="dash-side">
+          {[4, 3].map((count, panel) => (
+            <div key={panel} className="panel">
+              <div className="dash-panel-head">
+                <Skel w={64} h={15} />
+              </div>
+              <div className="dash-quick">
+                {Array.from({ length: count }, (_, row) => (
+                  <div key={row} className="dash-quick-item">
+                    <Skel w={15} h={15} style={{ borderRadius: 4, flexShrink: 0 }} delay={row * 60} />
+                    <Skel w={72} h={13} delay={row * 60 + 30} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -768,8 +889,11 @@ export function LandingLoading() {
           <Skel w="42%" h={11} delay={100} />
         </div>
         <div style={{ marginTop: 16 }}>
+          {/* 与首页最新价用的 SnapshotPreview 同款列：站点 / 模型 / 输入价 / 输出价 / 分组 / 时间 */}
           <PanelTable
-            cols={["minmax(100px,140px)", "minmax(0,1fr)", 130, 130, 140, 150]}
+            cols={["min(140px, 24vw)", "auto", 130, 130, 140, 150]}
+            mobileHide={[3, 4, 5]}
+            dense
             rows={6}
           />
         </div>
