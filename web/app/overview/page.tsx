@@ -1,9 +1,10 @@
 import { apiGet } from "@/lib/api";
 import { buildRankingIndex, type RankingHit } from "@/lib/rankings";
 import { buildSiteRanking, type SiteRanking } from "@/lib/siteRanking";
-import { loadStatusViews } from "@/lib/statusData";
+import { loadSiteChannelSummary } from "@/lib/statusData";
 import { loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
 import { loadSitePopularity, type SitePopularityMap } from "@/lib/popularity";
+import { buildModelIndex, rowsOfGroup, subsetNotices } from "@/lib/modelGroups";
 import { catalogModelOrderIndex, type ModelOrderEntry } from "@/lib/modelOrder";
 import type { CatalogData, OverviewData, RankingsData } from "@/lib/types";
 import { alerts, risk } from "@/lib/copy";
@@ -26,7 +27,12 @@ export const metadata = pageMetadata(
 // 改由每行的懒加载组件进入视口后按需向后端要（见 app/api/channel-dots）。
 // 取数不带会话 cookie：/api/overview 对管理员与访客返回同一份数据（采集异常清单公开脱敏下发），
 // 页面不随登录态分叉。
-export default async function OverviewPage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ model?: string }>;
+}) {
+  const params = await searchParams;
   let data: OverviewData | null = null;
   // 站点综合分：服务端算好（各模型内的价格 + 站点级渠道稳定/配置完整/公告新鲜），只把评分下发给表，
   // 不把渠道原始数据塞进列表（点阵仍是逐行懒加载）
@@ -42,15 +48,13 @@ export default async function OverviewPage() {
   let sitePopularity: SitePopularityMap = {};
   let error: string | null = null;
   try {
-    // 在售模型与分组集合与站点综合分共用同一次 /api/overview：把在飞 Promise 交给 loadStatusViews，不重复请求；
-    // 渠道视图（每站可用率/成功率）SWR 缓存，只服务排序，失败只让「渠道稳定」一项取中性分
-    const overviewPromise = apiGet<OverviewData>("/api/overview");
-    const [overview, rankings, catalog, homepages, statusViews, popularity] = await Promise.all([
-      overviewPromise,
+    // 渠道摘要（每站可用率/成功率）SWR 缓存，只服务排序，失败只让「渠道稳定」一项取中性分
+    const [overview, rankings, catalog, homepages, channelSummary, popularity] = await Promise.all([
+      apiGet<OverviewData>("/api/overview"),
       apiGet<RankingsData>("/api/rankings").catch(() => null),
       apiGet<CatalogData>("/api/catalog").catch(() => null),
       loadSiteHomepages(),
-      loadStatusViews(undefined, overviewPromise).catch(() => null),
+      loadSiteChannelSummary().catch(() => null),
       loadSitePopularity(),
     ]);
     data = overview;
@@ -61,7 +65,7 @@ export default async function OverviewPage() {
     siteRanking = buildSiteRanking({
       records: overview.records,
       rate: overview.catalog.usd_cny_rate ?? null,
-      views: statusViews,
+      channelSummary,
       siteFlags: overview.site_flags,
       sitePopularity: sitePopularity,
       noticeAt: Object.fromEntries(
@@ -71,6 +75,15 @@ export default async function OverviewPage() {
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
+
+  // 模型分组索引：服务端按全量记录算好（lib/modelGroups），首屏只把默认模型的行与这些站的公告
+  // 摘要下发给客户端，其余模型切到时按需拉（/api/model-rows）——列表页不再携带全站几千行；
+  // ?model=<归一键> 可深链到指定模型（页面 Digest 仍用全量记录统计）
+  const modelIndex = data ? buildModelIndex(data.records, modelOrder) : [];
+  const requestedKey = typeof params.model === "string" ? params.model : null;
+  const initialKey = modelIndex.find((group) => group.key === requestedKey)?.key ?? modelIndex[0]?.key ?? null;
+  const initialRows = data && initialKey ? rowsOfGroup(data.records, initialKey) : [];
+  const initialNotices = data ? subsetNotices(data.notices, initialRows) : {};
 
   return (
     <div className="page">
@@ -96,9 +109,10 @@ export default async function OverviewPage() {
       )}
       {data && (
         <OverviewTable
-          data={data}
+          data={{ ...data, records: initialRows, notices: initialNotices }}
+          modelIndex={modelIndex}
+          initialKey={initialKey}
           rankingsIndex={rankingsIndex}
-          modelOrder={modelOrder}
           siteHomepages={siteHomepages}
           siteRanking={siteRanking}
           sitePopularity={sitePopularity}

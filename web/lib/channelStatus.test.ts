@@ -155,7 +155,7 @@ describe("channelDotsBySite 缓存读取/写入指标", () => {
   });
 });
 
-describe("buildMonitoredSets 在售模型与分组集合", () => {
+describe("buildMonitoredSets 渠道监测集", () => {
   it("模型名 ∪ 计价分组名都收，归一去空格忽略大小写", () => {
     const sets = buildMonitoredSets([
       { site_id: "demo", model: "Claude-Opus-5", metadata: { group: "满血CC Max分组" } },
@@ -165,49 +165,75 @@ describe("buildMonitoredSets 在售模型与分组集合", () => {
     expect([...sets["demo"]].sort()).toEqual(["claude-opus-5", "gpt-5.5", "满血cc max分组"]);
     expect(sets["other"]).toEqual(new Set(["m1"]));
   });
+
+  it("监控模型列表收进每站集合；siteIds 里的站即使没有价格行也建基线", () => {
+    const sets = buildMonitoredSets(
+      [{ site_id: "demo", model: "gpt-5.5", metadata: { group: "gpt pro" } }],
+      ["claude-opus-5-5", "GPT-6-Sol"],
+      ["demo", "no-price"],
+    );
+    expect([...sets["demo"]].sort()).toEqual(["claude-opus-5-5", "gpt pro", "gpt-5.5", "gpt-6-sol"]);
+    expect([...sets["no-price"]].sort()).toEqual(["claude-opus-5-5", "gpt-6-sol"]);
+  });
 });
 
-describe("channelDotsBySite 在售范围过滤", () => {
+describe("buildSiteViews 监测范围过滤", () => {
   const items = [
     { name: "GPT Pro", status: "up" },
     { name: "gpt-5.5", status: "down" },
     { name: "福利gpt", status: "up" },
     { name: "科研组", status: "up" },
   ];
+  const filteredNames = (records: ReturnType<typeof record>[], monitored: Parameters<typeof buildSiteViews>[1]) =>
+    (buildSiteViews(records, monitored).channels["demo"] ?? []).map((row) => row.name);
 
   it("只保留对得上监测集的行（大小写/空格不敏感），异常行仍排前", () => {
     const monitored = buildMonitoredSets([
       { site_id: "demo", model: "gpt-5.5", metadata: { group: "gpt pro" } },
     ]);
-    const rows = channelDotsBySite([record("demo", items)], monitored)["demo"];
-    expect(rows.map((row) => row.name)).toEqual(["gpt-5.5", "GPT Pro"]);
+    expect(filteredNames([record("demo", items)], monitored)).toEqual(["gpt-5.5", "GPT Pro"]);
   });
 
-  it("零命中回退全量：状态页产品线与在售完全错开时不滤成白板", () => {
+  it("零命中返回空：状态页全是非监测范围的名字时清空，而不是回退全量", () => {
     const monitored = buildMonitoredSets([
       { site_id: "demo", model: "aws-gpt", metadata: { group: "在售分组" } },
     ]);
-    const rows = channelDotsBySite([record("demo", items)], monitored)["demo"];
-    expect([...rows.map((row) => row.name)].sort()).toEqual(items.map((item) => item.name).sort());
+    expect(filteredNames([record("demo", items)], monitored)).toEqual([]);
   });
 
-  it("监测集缺失的站不受影响（按站隔离）", () => {
+  it("站方全站模型池：非监控列表的老模型滤掉，列表内精确同名保留（routekey 场景）", () => {
+    const poolItems = [
+      { name: "gemini-2.5-flash", status: "down" },
+      { name: "gpt-4o", status: "down" },
+      { name: "gpt-5.6-luna", status: "up" },
+    ];
+    const monitored = buildMonitoredSets([], ["gpt-5.6-luna"], ["demo"]);
+    expect(filteredNames([record("demo", poolItems)], monitored)).toEqual(["gpt-5.6-luna"]);
+  });
+
+  it("严格归一匹配：站方变体名（日期版本尾、thinking 后缀）不做兼容，对不上就是空", () => {
+    const poolItems = [
+      { name: "gpt-5.6-luna-2026-07-09", status: "up" },
+      { name: "claude-opus-5-5-thinking", status: "up" },
+    ];
+    const monitored = buildMonitoredSets([], ["gpt-5.6-luna", "claude-opus-5-5"], ["demo"]);
+    expect(filteredNames([record("demo", poolItems)], monitored)).toEqual([]);
+  });
+
+  it("无监测集的站展示为空：不因缺过滤依据回退全量", () => {
     const monitored = buildMonitoredSets([
       { site_id: "other", model: "m1", metadata: { group: "g" } },
     ]);
-    const rows = channelDotsBySite([record("demo", items)], monitored)["demo"];
-    expect([...rows.map((row) => row.name)].sort()).toEqual(items.map((item) => item.name).sort());
+    expect(filteredNames([record("demo", items)], monitored)).toEqual([]);
   });
 
   it("buildSiteViews 透传：可用率按时段只算过滤后的渠道", () => {
-    // 全量范围四渠道三好 = 75%；在售只留 GPT Pro（好）= 100%
+    // 监测范围只留 GPT Pro（好）= 100%
     const records = [record("demo", items)];
     const monitored = buildMonitoredSets([
       { site_id: "demo", model: "不在售模型", metadata: { group: "gpt pro" } },
     ]);
-    const full = buildSiteViews(records).availability["demo"];
     const filtered = buildSiteViews(records, monitored).availability["demo"];
-    expect(full.at(-1)?.pct).toBe(75);
     expect(filtered.at(-1)?.pct).toBe(100);
   });
 });

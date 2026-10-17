@@ -1,8 +1,9 @@
 /** 检测点阵懒加载的服务端点：列表页不再内嵌渠道数据，行进入视口后由浏览器来这儿按需取。
- *  只拉「够画点阵」的条数（每站最近 45 条），按 站点+分组 短缓存，避免翻页/回退时反复拉。 */
+ *  只拉「够画点阵」的条数（每站最近 45 条），按 站点+分组 短缓存，避免翻页/回退时反复拉。
+ *  点名查行（group 来自列表行的价格分组名，必在监测范围内），不做站级过滤。 */
 import { NextResponse, type NextRequest } from "next/server";
 import { fetchSiteStatus } from "@/lib/statusData";
-import { buildSiteViews, dotsOfGroup, type ChannelDot } from "@/lib/channelStatus";
+import { channelDotsBySite, dotsOfGroup, type ChannelDot } from "@/lib/channelStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -27,8 +28,8 @@ export async function GET(request: NextRequest) {
   let dots: ChannelDot[] | null = null;
   try {
     const records = await fetchSiteStatus(site, undefined, DOTS_PER_CHANNEL);
-    const views = buildSiteViews(records);
-    dots = dotsOfGroup(views.channels[site], group)?.slice(-DOTS_PER_CHANNEL) ?? null;
+    const rows = channelDotsBySite(records)[site];
+    dots = dotsOfGroup(rows, group)?.slice(-DOTS_PER_CHANNEL) ?? null;
   } catch {
     dots = null;
   }

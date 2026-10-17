@@ -134,6 +134,17 @@ def test_build_monitored_sets_union_of_model_and_group():
     assert sets["other"] == {"m1"}
 
 
+def test_build_monitored_sets_merges_pool_and_site_baseline():
+    """监控模型列表收进每站集合；site_ids 里的站即使没有价格行也建基线（只用监控列表过滤）。"""
+    sets = build_monitored_sets(
+        [{"site_id": "demo", "model": "gpt-5.5", "metadata": {"group": "gpt pro"}}],
+        pool=["claude-opus-5-5", "GPT-6-Sol"],
+        site_ids=["demo", "no-price"],
+    )
+    assert sorted(sets["demo"]) == ["claude-opus-5-5", "gpt pro", "gpt-5.5", "gpt-6-sol"]
+    assert sorted(sets["no-price"]) == ["claude-opus-5-5", "gpt-6-sol"]
+
+
 ITEMS = [
     {"name": "GPT Pro", "status": "up"},
     {"name": "gpt-5.5", "status": "down"},
@@ -142,28 +153,78 @@ ITEMS = [
 ]
 
 
+def filtered_names(records: list[dict], monitored, site: str = "demo") -> list[str]:
+    """过滤后的渠道行名：解析/过滤分离后，过滤入口是 build_site_views 的 monitored 参数。"""
+    return [row["name"] for row in build_site_views(records, monitored)["channels"].get(site, [])]
+
+
 def test_monitored_filter_keeps_matching_rows():
     monitored = build_monitored_sets([{"site_id": "demo", "model": "gpt-5.5", "metadata": {"group": "gpt pro"}}])
-    rows = channel_dots_by_site([record("demo", ITEMS)], monitored)["demo"]
-    assert [row["name"] for row in rows] == ["gpt-5.5", "GPT Pro"]
+    assert filtered_names([record("demo", ITEMS)], monitored) == ["gpt-5.5", "GPT Pro"]
 
 
-def test_monitored_filter_falls_back_when_no_match():
+def test_monitored_filter_zero_match_returns_empty():
+    """零命中不回退全量：站方状态页全是非监测范围的名字时清空，而不是全放回来拉低可用率。"""
     monitored = build_monitored_sets([{"site_id": "demo", "model": "aws-gpt", "metadata": {"group": "在售分组"}}])
-    rows = channel_dots_by_site([record("demo", ITEMS)], monitored)["demo"]
-    assert sorted(row["name"] for row in rows) == sorted(item["name"] for item in ITEMS)
+    assert filtered_names([record("demo", ITEMS)], monitored) == []
 
 
-def test_monitored_filter_isolated_per_site():
+def test_monitored_filter_drops_non_pool_old_models():
+    """站方状态页列全站模型池：非监控列表的老模型滤掉，监控列表内精确同名保留（routekey 场景）。"""
+    items = [
+        {"name": "gemini-2.5-flash", "status": "down"},
+        {"name": "gpt-4o", "status": "down"},
+        {"name": "gpt-5.6-luna", "status": "up"},
+    ]
+    monitored = build_monitored_sets([], pool=["gpt-5.6-luna"], site_ids=["demo"])
+    assert filtered_names([record("demo", items)], monitored) == ["gpt-5.6-luna"]
+
+
+def test_monitored_filter_strict_no_suffix_compat():
+    """严格归一匹配：站方变体名（日期版本尾、thinking 后缀）不认——不做后缀兼容，对不上就是空。"""
+    items = [
+        {"name": "gpt-5.6-luna-2026-07-09", "status": "up"},
+        {"name": "claude-opus-5-5-thinking", "status": "up"},
+    ]
+    monitored = build_monitored_sets([], pool=["gpt-5.6-luna", "claude-opus-5-5"], site_ids=["demo"])
+    assert filtered_names([record("demo", items)], monitored) == []
+
+
+def test_monitored_filter_no_baseline_returns_empty():
+    """站无监测集（没有任何过滤依据）也展示为空：不因缺依据回退全量。"""
     monitored = build_monitored_sets([{"site_id": "other", "model": "m1", "metadata": {"group": "g"}}])
-    rows = channel_dots_by_site([record("demo", ITEMS)], monitored)["demo"]
-    assert sorted(row["name"] for row in rows) == sorted(item["name"] for item in ITEMS)
+    assert filtered_names([record("demo", ITEMS)], monitored) == []
 
 
 def test_build_site_views_availability_respects_monitored():
     records = [record("demo", ITEMS)]
     monitored = build_monitored_sets([{"site_id": "demo", "model": "不在售模型", "metadata": {"group": "gpt pro"}}])
-    full = build_site_views(records)["availability"]["demo"]
     filtered = build_site_views(records, monitored)["availability"]["demo"]
-    assert full[-1]["pct"] == 75
     assert filtered[-1]["pct"] == 100
+
+
+def test_summarize_site_views_keeps_only_list_fields():
+    """摘要只留列表页要用的数字：最新可用率点、渠道成功率均值、分桶 avg/count 与 down/checks。
+
+    完整可用率序列（每站几百点、全量约 1.7MB）与渠道行明细不随列表下发——这是 2026-10-16
+    列表页载荷瘦身的口径；前端站点卡与排序只读这里的字段（web/lib/types.ts 的 SiteChannelSummary）。"""
+    from llm_price_monitor.status_views import summarize_site_views
+
+    views = {
+        "availability": {"s": [{"at": 1, "pct": 90, "down": []}, {"at": 2, "pct": 82, "down": ["a", "b"]}]},
+        "channels": {"s": [{"successRate24h": 80.0}, {"successRate24h": 90.0}, {"no_rate": 1}]},
+        "uptimeBuckets": {"s": [{"start": 0, "end": 60, "count": 5, "avg": 88, "worst": 60, "down": ["a"]}, None]},
+    }
+    assert summarize_site_views(views) == {
+        "sites": {
+            "s": {"pct": 82, "at": 2, "success": 85.0, "down": 2, "checks": 2, "buckets": [{"avg": 88, "count": 5}, None]},
+        }
+    }
+
+
+def test_summarize_site_views_tolerates_missing_sections():
+    """缺段/空视图不炸：没算过的库、老文档结构都按空摘要处理。"""
+    from llm_price_monitor.status_views import summarize_site_views
+
+    assert summarize_site_views({}) == {"sites": {}}
+    assert summarize_site_views({"availability": {}, "channels": {}, "uptimeBuckets": {}}) == {"sites": {}}

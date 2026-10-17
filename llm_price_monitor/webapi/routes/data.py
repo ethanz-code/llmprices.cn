@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from llm_price_monitor.catalog import fx
 from llm_price_monitor.catalog.discount import ABOVE_OFFICIAL_MAX_RATIO, build_discount
+from llm_price_monitor.feed_page import notice_excerpt
 from llm_price_monitor.feed_page import slim_events
 from llm_price_monitor.report import summary_row
 from llm_price_monitor.store import Store
@@ -66,6 +67,44 @@ def site_config_flags(sites: Iterable[Any]) -> dict[str, dict[str, bool]]:
     }
 
 
+# /api/overview 下发瘦身：这些键只在库里留档（采集溯源、审计回查），web/ 全量检索确认
+# 没有任何页面读取（2026-10-16 普查；与 feed_page.EVENT_METADATA_KEYS 同一口径——
+# 「不渲染就不下发」）。整包 5.5MB 里证据/倍率/对照字段约占三分之一，剥掉后列表页的
+# 内联载荷同步变小。新增前端读取处要同步从清单移除，否则字段会被裁掉。
+_OVERVIEW_ARCHIVE_ONLY_KEYS = frozenset({
+    # 采集溯源与审计证据：只在库里留档，页面上从不渲染
+    "network_evidence", "page_evidence", "denomination", "billing_expr",
+    "billing_mode", "billing_multiplier", "pricing_version", "request_rules",
+    "adapter", "observed_model", "aliases", "pricing_cny_rate",
+    # newapi 原始倍率与开关：站点价一律以 input/output_price 为准，前端不自行换算
+    "newapi", "model_ratio", "completion_ratio", "cache_ratio",
+    "create_cache_ratio", "group_ratio", "ratio_base_price", "currency",
+    "enable_groups",
+})
+
+# discount 同理：前端只读 input/output 两个折扣值（折扣列、排序、中位数），其余是留档
+_DISCOUNT_ARCHIVE_ONLY_KEYS = frozenset({
+    "source_url", "region", "input_price_cny", "output_price_cny",
+    "official_input_cny", "official_output_cny",
+})
+
+
+def _slim_overview_record(row: dict[str, Any]) -> dict[str, Any]:
+    """records 行瘦身：剥离「只在库里留档」的字段（含顶层 fingerprint 指纹）。"""
+    record = {key: value for key, value in row.items() if key != "fingerprint"}
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        record["metadata"] = {
+            key: value for key, value in metadata.items() if key not in _OVERVIEW_ARCHIVE_ONLY_KEYS
+        }
+    discount = record.get("discount")
+    if isinstance(discount, dict):
+        record["discount"] = {
+            key: value for key, value in discount.items() if key not in _DISCOUNT_ARCHIVE_ONLY_KEYS
+        }
+    return record
+
+
 def build_router(store: Store) -> APIRouter:
     router = APIRouter()
 
@@ -105,7 +144,7 @@ def build_router(store: Store) -> APIRouter:
                 for axis in ("input", "output")
             ):
                 continue
-            records.append({**row, "discount": discount})
+            records.append(_slim_overview_record({**row, "discount": discount}))
         # 本轮表里真正展示的站点：公告与采集异常清单都只认这一批
         shown_sites = {str(row.get("site_id")) for row in records if isinstance(row, dict)}
         # 各站点最新公告（每站一条，原样带给前端做单行摘要；没采集到公告的站点无键）
@@ -113,9 +152,14 @@ def build_router(store: Store) -> APIRouter:
         for site_id in shown_sites:
             notice = store.latest_notice(site_id)
             if isinstance(notice, dict) and notice.get("content"):
-                notices[site_id] = {"content": str(notice["content"]), "captured_at": notice.get("captured_at")}
+                # 列表只渲染一行摘要（悬停最多 6 行）：正文在库里留档，全文走 /api/notice/event
+                notices[site_id] = {
+                    "excerpt": notice_excerpt(str(notice["content"]), 6),
+                    "captured_at": notice.get("captured_at"),
+                }
         # 站点信息完整度：认证凭证、附加采集地址各 1 分（0–2），给前端智能排序用；
         # network.ratio_url（倍率接口）与价格接口同地址、token_refresh（续签）均不计分
+        config = load_config(store)
         site_completeness = {
             site.id: sum(
                 (
@@ -123,14 +167,16 @@ def build_router(store: Store) -> APIRouter:
                     bool(site.networks),
                 )
             )
-            for site in load_config(store).sites
+            for site in config.sites
         }
         # 站点配置标志（结构化）：站点综合分里「配置完整」一项的输入，逐项布尔、前端定清单与权重。
         # 与上面的 site_completeness 是两套规则（那一套只剩兼容用途），新增项以这份为准
-        site_flags = site_config_flags(load_config(store).sites)
+        site_flags = site_config_flags(config.sites)
         return {
             "records": records,
             "notices": notices,
+            # 监控模型列表（管理台配置）：站点详情页渠道行的过滤基准（见 lib/channelStatus.ts）
+            "monitor_models": list(config.settings.monitor_models),
             "site_completeness": site_completeness,
             "site_flags": site_flags,
             # 汇率标准与折扣页一致：优先实时值（拉取失败回落官方价目录缓存并标注）

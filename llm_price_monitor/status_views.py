@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable
@@ -340,16 +341,27 @@ def normalize_channel_name(name: str) -> str:
     return name.strip().lower()
 
 
-def build_monitored_sets(records: list[dict[str, Any]]) -> dict[str, set[str]]:
-    """在售模型与分组集合：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」），与前端同一套规则。"""
-    sets: dict[str, set[str]] = {}
+def build_monitored_sets(
+    records: list[dict[str, Any]],
+    pool: Iterable[str] = (),
+    site_ids: Iterable[str] = (),
+) -> dict[str, set[str]]:
+    """各站渠道监测集（site_id → 归一渠道名集合）：监控模型列表 ∪ 该站价格行「模型名 ∪ 计价分组名」。
+
+    监控模型列表（管理台「监测模型」配置）是过滤基准——站方状态页里的老模型/杂项渠道
+    不在列表内，自然被滤掉；价格行的分组名单独收（分组级状态页对分组名）。site_ids 里
+    的站即使没有价格行也建基线（等于只用监控列表过滤其渠道行），与前端同一套规则。
+
+    匹配是严格归一（去空格忽略大小写）：对不上就是不在范围内，不做任何后缀/前缀兼容。"""
+    pool_keys = {normalize_channel_name(name) for name in pool}
+    sets: dict[str, set[str]] = {site_id: set(pool_keys) for site_id in site_ids}
     for row in records:
         site_id = row.get("site_id")
         if not isinstance(site_id, str):
             continue
-        bucket = sets.setdefault(site_id, set())
+        bucket = sets.setdefault(site_id, set(pool_keys))
         model = row.get("model")
-        if isinstance(model, str):
+        if isinstance(model, str) and model:
             bucket.add(normalize_channel_name(model))
         metadata = row.get("metadata")
         group = metadata.get("group") if isinstance(metadata, dict) else None
@@ -359,17 +371,20 @@ def build_monitored_sets(records: list[dict[str, Any]]) -> dict[str, set[str]]:
 
 
 def _filter_rows_by_monitored(rows: list[dict[str, Any]], monitored: set[str] | None) -> list[dict[str, Any]]:
-    """只留渠道名对得上监测集的行；监测集缺失或一条都对不上时原样返回（防清空）。"""
+    """只留渠道名对得上监测集的行；监测集为空/缺失就对不上任何行，展示为空。
+
+    不回退：零命中、监测集缺失都不放行全量——站方状态页常列全站模型池（含大量非监测
+    范围的老模型），回退会把它们全放回来、把站级可用率拉低；对不上就展示为空。"""
     if not monitored:
-        return rows
-    kept = [row for row in rows if normalize_channel_name(row["name"]) in monitored]
-    return kept if kept else rows
+        return []
+    return [row for row in rows if normalize_channel_name(row["name"]) in monitored]
 
 
-def channel_dots_by_site(
-    records: list[dict[str, Any]], monitored: dict[str, set[str]] | None = None
-) -> dict[str, list[dict[str, Any]]]:
-    """按站点把状态时序合并成「渠道 → 检测点序列」；异常渠道排在前面。"""
+def channel_dots_by_site(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """按站点把状态时序合并成「渠道 → 检测点序列」；异常渠道排在前面。
+
+    纯解析、返回全量渠道行——按监测范围过滤是调用方的显式一步（build_site_views 的
+    monitored 参数），本函数不猜、也不做任何回退。"""
     maps: dict[str, dict[str, list[dict[str, Any]]]] = {}
     metas: dict[str, dict[str, dict[str, Any]]] = {}
     for record in sorted(records, key=lambda item: item.get("captured_at") or 0):
@@ -428,7 +443,7 @@ def channel_dots_by_site(
                 "dots": ordered,
             })
         rows.sort(key=lambda row: 1 if row["ok"] else 0)
-        result[site] = _filter_rows_by_monitored(rows, monitored.get(site) if monitored else None)
+        result[site] = rows
     return result
 
 
@@ -524,14 +539,55 @@ def build_uptime_buckets(points: list[dict[str, Any]], target: int = 28) -> list
     return slots
 
 
-def build_site_views(
-    records: list[dict[str, Any]], monitored: dict[str, set[str]] | None = None
-) -> dict[str, Any]:
+def summarize_site_views(views: dict[str, Any]) -> dict[str, Any]:
+    """渠道视图 → 列表页摘要：每站只留渲染与排序要用的数字。
+
+    列表页（首页站点卡、站点墙、模型数据排序）只用到「最新一个可用率点、各渠道近 24h
+    成功率均值、时段分桶的 avg/count」；完整视图里的可用率时间序列（每站 800+ 点，
+    全量约 1.7MB）与渠道行明细是站点详情页的输入（详情页自己按站拉原始快照解析）。
+    字段名与前端 web/lib/types.ts 的 SiteChannelSummary 对齐。"""
+    availability = views.get("availability") if isinstance(views, dict) else None
+    channels = views.get("channels") if isinstance(views, dict) else None
+    buckets_by_site = views.get("uptimeBuckets") if isinstance(views, dict) else None
+    sites: dict[str, dict[str, Any]] = {}
+    site_ids = set(availability or {}) | set(channels or {}) | set(buckets_by_site or {})
+    for site_id in sorted(site_ids):
+        points = (availability or {}).get(site_id) or []
+        last = points[-1] if isinstance(points, list) and points else None
+        rates = [
+            row.get("successRate24h")
+            for row in ((channels or {}).get(site_id) or [])
+            if isinstance(row, dict) and isinstance(row.get("successRate24h"), (int, float))
+        ]
+        buckets: list[dict[str, Any] | None] = []
+        for bucket in (buckets_by_site or {}).get(site_id) or []:
+            if isinstance(bucket, dict):
+                buckets.append({"avg": bucket.get("avg"), "count": bucket.get("count")})
+            else:
+                buckets.append(None)
+        down = last.get("down") if isinstance(last, dict) else None
+        sites[site_id] = {
+            "pct": last.get("pct") if isinstance(last, dict) else None,
+            "at": last.get("at") if isinstance(last, dict) else None,
+            "success": sum(rates) / len(rates) if rates else None,
+            "down": len(down) if isinstance(down, list) else 0,
+            "checks": len(points) if isinstance(points, list) else 0,
+            "buckets": buckets,
+        }
+    return {"sites": sites}
+
+
+def build_site_views(records: list[dict[str, Any]], monitored: dict[str, set[str]]) -> dict[str, Any]:
     """列表页用的精简视图：channels（不含 dots）+ availability（抽稀）+ uptimeBuckets。
 
-    与前端 buildSiteViews 同源同一套规则，但 channels 去掉 dots、不含 latency——列表页不渲染点阵与
-    延迟趋势，点阵仍由 /api/channel-dots 与详情页按需拉。"""
-    by_site = channel_dots_by_site(records, monitored)
+    monitored（监控模型列表 ∪ 在售模型与分组集合）必传：解析出的渠道行先按监测范围过滤，
+    可用率/时段分桶全部只落在过滤后的行上——没有监测范围的站（无键/空集）渠道视图即为空，
+    不回退全量。与前端 buildSiteViews 同源同一套规则，但 channels 去掉 dots、不含 latency——
+    列表页不渲染点阵与延迟趋势，点阵仍由 /api/channel-dots 与详情页按需拉。"""
+    parsed = channel_dots_by_site(records)
+    by_site: dict[str, list[dict[str, Any]]] = {
+        site: _filter_rows_by_monitored(rows, monitored.get(site)) for site, rows in parsed.items()
+    }
     full = full_availability_from_dots(by_site)
     uptime_buckets: dict[str, list[dict[str, Any] | None]] = {}
     for site, points in full.items():

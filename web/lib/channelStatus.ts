@@ -45,32 +45,39 @@ export interface ChannelDotRow extends ChannelStatus {
 /** 点阵行名归一：去首尾空格、忽略大小写，用于与计价分组名/在售模型与分组集合匹配。 */
 export const normalizeChannelName = (name: string) => name.trim().toLowerCase();
 
-/** 在售模型与分组集合：site_id → 归一后的渠道名集合（在售「模型名 ∪ 计价分组名」）。
- *  渠道状态展示的在售范围匹配依据：渠道行只有对得上在售模型/分组，才与本站访客有关。 */
+/** 各站渠道监测集：site_id → 归一渠道名集合（监控模型列表 ∪ 该站价格行「模型名 ∪ 计价分组名」）。
+ *  渠道状态展示的过滤依据：监控模型列表（管理台「监测模型」配置）是过滤基准——站方状态页里的
+ *  老模型/杂项渠道不在列表内，自然被滤掉；价格行分组名单独收（分组级状态页对分组名）。 */
 export type MonitoredSets = Record<string, Set<string>>;
 
-/** 从最新价格行构建各站监测集：模型名与计价分组名都收——分组级状态页对分组名、
- *  模型级状态页（perf-metrics 系）对模型名；归一规则与点阵行名一致（去空格、忽略大小写）。 */
+/** 从最新价格行与监控模型列表构建各站监测集：模型名、计价分组名、监控列表都收——
+ *  分组级状态页对分组名、模型级状态页（perf-metrics 系）对模型名；
+ *  siteIds 里的站即使没有价格行也建基线（等于只用监控列表过滤其渠道行）。
+ *  匹配是严格归一（去空格忽略大小写）：对不上就是不在范围内，不做任何后缀/前缀兼容。 */
 export function buildMonitoredSets(
   records: { site_id: string; model: string; metadata?: { group?: string | null } }[],
+  pool: Iterable<string> = [],
+  siteIds: Iterable<string> = [],
 ): MonitoredSets {
+  const poolKeys = new Set<string>();
+  for (const name of pool) poolKeys.add(normalizeChannelName(name));
   const sets: MonitoredSets = {};
+  for (const siteId of siteIds) sets[siteId] = new Set(poolKeys);
   for (const row of records) {
-    const set = (sets[row.site_id] ??= new Set<string>());
-    set.add(normalizeChannelName(row.model));
+    const set = (sets[row.site_id] ??= new Set(poolKeys));
+    if (row.model) set.add(normalizeChannelName(row.model));
     if (row.metadata?.group) set.add(normalizeChannelName(row.metadata.group));
   }
   return sets;
 }
 
-/** 渠道行在售范围过滤：只留渠道名对得上监测集的行；监测集缺失（站没采到价格）
- *  或一条都对不上（站点状态页的产品线与在售完全错开，如 1xm 只挂 claude 渠道而在售全是
- *  GPT/Gemini 分组）时原样返回——与后端 filter_status_groups 的防清空回退同哲学，
- *  别把详情页滤成白板。 */
+/** 渠道行过滤：只留渠道名对得上监测集的行；监测集为空/缺失就对不上任何行，展示为空。
+ *  不回退：零命中、监测集缺失都不放行全量——站方状态页常列全站模型池（含大量非监测范围的
+ *  老模型），回退会把它们全放回来、把站级可用率拉低；对不上就展示为空。
+ *  解析（channelDotsBySite）与过滤是分开的两步：要过滤就在这一步显式调用。 */
 export function filterRowsByMonitored(rows: ChannelDotRow[], monitored: Set<string> | undefined): ChannelDotRow[] {
-  if (!monitored || monitored.size === 0) return rows;
-  const kept = rows.filter((row) => monitored.has(normalizeChannelName(row.name)));
-  return kept.length > 0 ? kept : rows;
+  if (!monitored || monitored.size === 0) return [];
+  return rows.filter((row) => monitored.has(normalizeChannelName(row.name)));
 }
 
 
@@ -437,12 +444,11 @@ function dedupeDots(dots: ChannelDot[]): ChannelDot[] {
 /**
  * 按站点把状态时序合并成「渠道 → 检测点序列」：渠道快照里自带时间线时直接采用
  * （逐分钟，密度高），否则每次采集记一个点；异常渠道排在前面。
- * 传入 monitored（在售模型与分组集合）时按站做在售范围过滤：渠道视图、可用率/延迟序列、
- * 时段分桶全部只落在售模型/分组上，站级 KPI 随之变成「在售范围」。
+ * 纯解析、返回全量渠道行——按监测范围过滤是调用方的显式一步（filterRowsByMonitored /
+ * buildSiteViews 的 monitored 参数），本函数不猜、也不做任何回退。
  */
 export function channelDotsBySite(
   records: { site_id: string; captured_at: number; data: unknown }[],
-  monitored?: MonitoredSets,
 ): Record<string, ChannelDotRow[]> {
   const maps: Record<string, Map<string, ChannelDot[]>> = {};
   const metas: Record<string, Map<string, RawChannel>> = {};
@@ -503,7 +509,7 @@ export function channelDotsBySite(
       };
     });
     rows.sort((a, b) => Number(a.ok) - Number(b.ok));
-    result[site] = filterRowsByMonitored(rows, monitored?.[site]);
+    result[site] = rows;
   }
   return result;
 }
@@ -745,15 +751,21 @@ export interface SiteStats {
   uptimeBuckets: Record<string, (UptimeBucket | null)[]>;
 }
 
-/** 详情页视图集合：渠道行、可用率序列、延迟序列共享同一次 channelDotsBySite 全量走查，
- *  避免页面把同一批记录解析三遍。
+/** 详情页视图集合：渠道行、可用率序列、延迟序列共享同一次解析全量走查，
+ *  避免页面把同一批记录解析三遍。monitored（监控模型列表 ∪ 在售模型与分组集合）必传：
+ *  解析出的渠道行先按监测范围过滤，可用率/延迟/时段分桶全部只落在过滤后的行上——
+ *  没有监测范围的站（无键/空集）渠道视图即为空，不回退全量。
  *  两个规则：availability 是最差值降采样后的序列（画图用，毛刺不丢）；uptimeBuckets 用抽稀前的
  *  全量序列分桶（数字用）——最差值降采样「每格只留最差点」会把均值压悲观，区块平均率必须看全量。 */
 export function buildSiteViews(
   records: { site_id: string; captured_at: number; data: unknown }[],
-  monitored?: MonitoredSets,
+  monitored: MonitoredSets,
 ): SiteViews {
-  const bySite = channelDotsBySite(records, monitored);
+  const parsed = channelDotsBySite(records);
+  const bySite: Record<string, ChannelDotRow[]> = {};
+  for (const [site, rows] of Object.entries(parsed)) {
+    bySite[site] = filterRowsByMonitored(rows, monitored[site]);
+  }
   const fullAvailability = fullAvailabilityFromDots(bySite);
   const uptimeBuckets: Record<string, (UptimeBucket | null)[]> = {};
   for (const [site, points] of Object.entries(fullAvailability)) {

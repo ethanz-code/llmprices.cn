@@ -5,22 +5,16 @@ import {
   eventMeta,
   formatPrice,
   formatTime,
-  formatTimeAgo,
   isNoticeEvent,
   toCnyPrice,
 } from "@/lib/format";
 import { getSiteInfo, loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
 import { canonicalModel, lowestPriceRowPerModel, orderByReleaseDesc } from "@/lib/priceRows";
 import { foldEvents, noticeText } from "@/lib/events";
-import {
-  buildSiteViews,
-  chartToneVar,
-  rateLevel,
-  type RateLevel,
-  type SiteStats,
-  type UptimeBucket,
-} from "@/lib/channelStatus";
-import { loadStatusViews } from "@/lib/statusData";
+import { rateLevel, type RateLevel } from "@/lib/channelStatus";
+import { buildSiteQualityFromOverview, orderSitesByQuality } from "@/lib/siteRanking";
+import { loadSitePopularity, type SitePopularityMap } from "@/lib/popularity";
+import { loadSiteChannelSummary } from "@/lib/statusData";
 import type {
   CatalogData,
   DiscountInfo,
@@ -30,6 +24,8 @@ import type {
   MetaData,
   OverviewData,
   RankingsData,
+  SiteChannelSummary,
+  SummaryBucket,
 } from "@/lib/types";
 import { SectionRail } from "@/components/SectionRail";
 import { Reveal } from "@/components/Reveal";
@@ -39,6 +35,7 @@ import type { GlobeSite, SiteGeo } from "@/components/SiteMapFlat";
 import { HeroTrendChart } from "@/components/HeroTrendChart";
 import { SnapshotPreview } from "@/components/SnapshotPreview";
 import { SiteAlert } from "@/components/SiteAlert";
+import { SiteCard, UptimeStrip } from "@/components/SiteCard";
 import { DajuChartNap, DajuNap, DajuYarn } from "@/components/DajuArt";
 import { FaqList } from "@/components/FaqList";
 import { JsonLd } from "@/components/JsonLd";
@@ -61,8 +58,8 @@ interface LandingData {
   meta: MetaData | null;
   feed: FeedData | null;
   history: HistoryListData | null;
-  /** 渠道检测视图（与站点详情页同一套规则，lib/statusData.ts 统一取数） */
-  statusViews: SiteStats;
+  /** 渠道摘要（每站最新可用率/成功率/时段分桶）：站点卡与星球用，见 lib/statusData */
+  channelSummary: SiteChannelSummary;
   /** 站点 IP 归属地：服务端取好传给首屏地球，读接口封锁后浏览器不再直接调 */
   geo: Record<string, SiteGeo>;
   /** AA 榜单：首页速览用，拉取失败只影响榜单小节 */
@@ -71,11 +68,16 @@ interface LandingData {
   catalog: CatalogData | null;
   /** 站点首页覆盖表：站名链接用，拉取失败退回内置映射/来源域名后备 */
   homepages: SiteHomepages;
+  /** 站点人气：站点卡质量分「人气」一项的输入，拉取失败按无数据计（loadSitePopularity 自带后备） */
+  popularity: SitePopularityMap;
   error: string | null;
 }
 
-/** 行列表封顶：首页只列这么多行，其余进「还有 N 个站点」链接 */
-const SITE_ROW_MAX = 18;
+/** 站点墙封顶：首页只列这么多张卡（质量分最高的在前），其余进「还有 N 个站点」卡（→ /sites） */
+const SITE_CARD_MAX = 18;
+
+/** 首屏胶囊轮播的站数上限：只取质量序前 10（站点不足 10 个就全上） */
+const HERO_TICKER_MAX = 10;
 
 /** 最新事件侧栏展示条数：feed 取 8 条折叠后截到这里，渲染处直接整组上 */
 const LATEST_EVENTS_SHOWN = 5;
@@ -84,13 +86,13 @@ async function loadLanding(): Promise<LandingData> {
   try {
     // 统一事件流（价格+公告已合并）；渠道检测拉取失败只影响星球与站点卡片，不阻塞整页
     const overviewPromise = apiGet<OverviewData>("/api/overview");
-    const [overview, meta, feed, statusViews, geo, rankings, catalog, history, homepages] = await Promise.all([
+    const [overview, meta, feed, channelSummary, geo, rankings, catalog, history, homepages, popularity] = await Promise.all([
       overviewPromise,
       apiGet<MetaData>("/api/meta"),
       apiGet<FeedData>("/api/feed?events_limit=8&notice_limit=8").catch(() => null),
-      // 渠道视图与站点检测详情页同一套规则：一个请求拿全站算好的可用率/时段分桶（后端 /api/status/views）。
-      // 曾经逐站拉 21 份原始快照共约 49MB 再在 Node 解析，瓶颈是体积不是请求数，现改由后端算好下发。
-      loadStatusViews().catch(() => buildSiteViews([])),
+      // 渠道摘要与站点检测详情页同一套规则：一个请求拿全站算好的可用率/时段分桶（后端 /api/status/summary）。
+      // 曾经逐站拉 21 份原始快照共约 49MB 再在 Node 解析；整份视图（含 1.7MB 可用率序列）也不随列表下发。
+      loadSiteChannelSummary().catch(() => ({ sites: {} })),
 
       // 站点定位较慢（DNS + 归属地查询），失败只影响地球落点，不阻塞整页
       apiGet<{ geo: Record<string, SiteGeo> }>("/api/geo").catch(() => ({ geo: {} })),
@@ -100,19 +102,22 @@ async function loadLanding(): Promise<LandingData> {
       apiGet<HistoryListData>("/api/history?limit=1000").catch(() => null),
       // 站点首页覆盖表：站名外链用（loadSiteHomepages 自带后备，取不到返回空表）
       loadSiteHomepages(),
+      // 站点人气：站点卡质量分用（loadSitePopularity 自带后备，取不到返回空表按无数据计）
+      loadSitePopularity(),
     ]);
-    return { overview, meta, feed, history, statusViews, geo: geo.geo, rankings, catalog, homepages, error: null };
+    return { overview, meta, feed, history, channelSummary, geo: geo.geo, rankings, catalog, homepages, popularity, error: null };
   } catch (cause) {
     return {
       overview: null,
       meta: null,
       feed: null,
       history: null,
-      statusViews: buildSiteViews([]),
+      channelSummary: { sites: {} },
       geo: {},
       rankings: null,
       catalog: null,
       homepages: {},
+      popularity: {},
       error: cause instanceof Error ? cause.message : String(cause),
     };
   }
@@ -156,21 +161,15 @@ function collectSites(overview: OverviewData | null, meta: MetaData | null) {
   }));
 }
 
-/** 静态可用率色块条：与详情页 StatusUptimeBars 同一套分桶与三档色（chartToneVar），
- *  纯展示不带悬停——外层卡片本身可点进详情看交互版；不足 2 桶（数据太少）不渲染。 */
-function UptimeStrip({ buckets }: { buckets: (UptimeBucket | null)[] }) {
-  if (buckets.length < 2) return null;
-  return (
-    <span className="uptime-strip" aria-hidden>
-      {buckets.map((bucket, index) => (
-        <span
-          key={index}
-          className={`uptime-strip-slot${bucket ? "" : " is-empty"}`}
-          style={bucket ? { background: chartToneVar[rateLevel(bucket.avg)] } : undefined}
-        />
-      ))}
-    </span>
-  );
+/** Fisher-Yates 洗牌（返回新数组）：轮播胶囊席位顺序随机、集合不变；
+ *  必须在服务端、每请求洗一次——客户端渲染时洗会与 SSR 输出不一致，触发水合报错。 */
+function shuffled<T>(items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 /** bento 小卡的微缩示例：三种能力各配一块「真实数据缩影」（调价 diff / 近 7 天探测色块 /
@@ -187,7 +186,7 @@ function BentoDemo({
   kind: keyof typeof BENTO_ICONS;
   event: EventRow | null;
   eventSite: string | null;
-  buckets: (UptimeBucket | null)[] | null;
+  buckets: (SummaryBucket | null)[] | null;
   bucketSite: string | null;
   discount: DiscountInfo | null;
   rate: number | null;
@@ -244,7 +243,7 @@ function BentoDemo({
 }
 
 export default async function LandingPage() {
-  const { overview, meta, feed, history, statusViews, geo, rankings, catalog, homepages, error } = await loadLanding();
+  const { overview, meta, feed, history, channelSummary, geo, rankings, catalog, homepages, popularity, error } = await loadLanding();
   // JSON-LD 里的站点地址要绝对 URL，与 metadataBase 同一推导方式
   const origin = await siteOrigin();
   const records = overview?.records ?? [];
@@ -261,53 +260,41 @@ export default async function LandingPage() {
 
   // 站点检测档案：可用率序列供星球悬停与行列表状态共用；
   // 阈值与详情页一致：可用率 80/60 三档，延迟 1000/3000ms 三档
-  const siteViews = statusViews;
-  const availBySite = siteViews.availability;
-  const bucketsBySite = siteViews.uptimeBuckets;
-  const globeSites: GlobeSite[] = sites.map((site) => {
-    const series = availBySite[site.id] ?? [];
-    const latestPoint = series[series.length - 1];
-    // 节点百分比与详情页顶部时段色块同一套规则：最新一个时段区块的平均正常率
-    // （uptimeBuckets 由服务端用抽稀前的全量序列分桶，均值不受「最差值降采样只留最差」影响）
-    const siteBuckets = bucketsBySite[site.id] ?? [];
+  const summarySites = channelSummary.sites;
+  // 站点质量序：按质量分从高到低——与 /overview 同一套权重（价格 35 / 渠道稳定 20 / 人气 30 /
+  // 配置完整 10 / 公告新鲜 5，见 lib/siteRanking），停用站统一排最后；装配与排序函数与
+  // /sites 全部站点页共用，两处顺序不会分叉。概览拉取失败时质量分为空表，
+  // 排序自动退回名称序（orderSitesByQuality 对缺省分的定义）。
+  // 下游三处共用这一份序：首屏胶囊轮播（前 HERO_TICKER_MAX 个）、站点卡墙（前 SITE_CARD_MAX 个）、示例卡随机池。
+  const siteQuality = overview
+    ? buildSiteQualityFromOverview(overview, channelSummary, popularity)
+    : {};
+  const orderedSites = orderSitesByQuality(
+    sites.map((site) => ({ ...site, name: getSiteInfo(site.id, site.sourceUrl).name })),
+    siteQuality,
+  );
+  const wallSites = orderedSites.slice(0, SITE_CARD_MAX);
+
+  // 星球地图仍铺全部站点；每站的可用率取最新时段区块均值（uptimeBuckets 由服务端用抽稀前的
+  // 全量序列分桶，均价不受「最差值降采样只留最差」影响），阈值与详情页同一套
+  const globeSites: GlobeSite[] = orderedSites.map((site) => {
+    const entry = summarySites[site.id];
+    const siteBuckets = entry?.buckets ?? [];
     const latestBucket = siteBuckets[siteBuckets.length - 1];
-    const availability = latestBucket ? latestBucket.avg : null;
     return {
       id: site.id,
-      name: getSiteInfo(site.id, site.sourceUrl).name,
+      name: site.name,
       models: site.models,
       enabled: site.enabled,
-      availability,
-      down: latestPoint?.down.length ?? 0,
-      checks: series.length,
+      availability: latestBucket ? latestBucket.avg : null,
+      down: entry?.down ?? 0,
+      checks: entry?.checks ?? 0,
     };
   });
-  // 有检测档案但解析不出时间线的站点，文案与「未接入」区分开
-
-  // 行列表（Statuspage 模式）：down 站排最前、warn 次之、无数据其后、停用排最后，封顶取前 SITE_ROW_MAX 行；
-  // 平均可用率只算启用且有检测数据的站点，停用站的旧数据不掺进来
-  const LEVEL_RANK: Record<RateLevel | "none" | "off", number> = {
-    down: 0,
-    warn: 1,
-    ok: 2,
-    none: 3,
-    off: 4,
-  };
-  const rankOf = (site: (typeof sites)[number]) => {
-    if (!site.enabled) return LEVEL_RANK.off;
-    const latest = (availBySite[site.id] ?? []).slice(-1)[0];
-    if (!latest) return LEVEL_RANK.none;
-    return LEVEL_RANK[rateLevel(latest.pct)];
-  };
-  const orderedSites = [...sites].sort((a, b) => rankOf(a) - rankOf(b));
-  const wallSites = orderedSites.slice(0, SITE_ROW_MAX);
-  /** 站点卡状态色：正常档半强度（大面积绿不抢眼），异常全色；阈值与详情页共用 */
-  const levelColor = (level: RateLevel) =>
-    level === "ok"
-      ? "color-mix(in srgb, var(--chart-ok) 55%, transparent)"
-      : level === "warn"
-        ? "var(--chart-warn)"
-        : "var(--chart-down)";
+  // 首屏胶囊轮播只展示质量序前 10（最多 10 个；站点不足 10 个就全上）：
+  // 不再把全部站点（含大量低可用率/待检测站）铺在首屏，避免看起来像一锅随机渠道；
+  // 顺序每次刷新打乱（用户 2026-10-16 定「可以随机换顺序」），洗牌在服务端做（见 shuffled 注释）
+  const tickerSites = shuffled(globeSites.slice(0, HERO_TICKER_MAX));
 
   // 首页代表行规则：每个模型归一合并后只留加权单价最低的一行，按目录发布日期倒序（新模型在前），
   // 与总览页模型下拉同一套规则；目录没收录的模型排在最后按名称
@@ -327,18 +314,21 @@ export default async function LandingPage() {
   const demoEventSite = demoEvent
     ? getSiteInfo(demoEvent.site_id, demoEvent.current?.source_url ?? demoEvent.previous?.source_url).name
     : null;
-  // 只取色块够画（≥2 桶）的启用站随机挑一个：force-dynamic 下每次请求重渲染，刷新即换示例
-  const demoBucketCandidates = sites.filter((site) => site.enabled && (bucketsBySite[site.id]?.length ?? 0) >= 2);
+  // 探测色块示例的随机池 = 质量序前 10 的启用站里有足够检测数据的（最多 10 个；站点不足就全上）：
+  // force-dynamic 下每次请求重渲染，刷新即换示例
+  const demoBucketCandidates = orderedSites
+    .slice(0, HERO_TICKER_MAX)
+    .filter((site) => site.enabled && (summarySites[site.id]?.buckets.length ?? 0) >= 2);
   const demoBucketSite = demoBucketCandidates[Math.floor(Math.random() * demoBucketCandidates.length)] ?? null;
-  const demoBuckets = demoBucketSite ? (bucketsBySite[demoBucketSite.id] ?? null) : null;
-  const demoBucketName = demoBucketSite ? getSiteInfo(demoBucketSite.id, demoBucketSite.sourceUrl).name : null;
+  const demoBuckets = demoBucketSite ? (summarySites[demoBucketSite.id]?.buckets ?? null) : null;
+  const demoBucketName = demoBucketSite?.name ?? null;
   const demoDiscount = parentRows[0]?.discount ?? null;
 
   // 快照表附加规则：站点三档状态点（与站点墙同一套）+ 数据新鲜度
   const siteLevelBySite: Record<string, RateLevel | null> = {};
   for (const site of sites) {
-    const latest = (availBySite[site.id] ?? []).slice(-1)[0];
-    siteLevelBySite[site.id] = site.enabled && latest ? rateLevel(latest.pct) : null;
+    const entry = summarySites[site.id];
+    siteLevelBySite[site.id] = site.enabled && entry?.pct != null ? rateLevel(entry.pct) : null;
   }
   const snapshotAt = records.length > 0 ? Math.max(...records.map((row) => row.captured_at)) : null;
 
@@ -371,6 +361,7 @@ export default async function LandingPage() {
         <SectionRail />
         <HeroArea
           sites={globeSites}
+          tickerSites={tickerSites}
           geo={geo}
           main={
             <>
@@ -549,56 +540,30 @@ export default async function LandingPage() {
               <div className="landing-section-title">
                 <h2>{home.sections.sites}</h2>
               </div>
+              <Link href="/sites" className="landing-more">
+                {home.viewAll}
+              </Link>
             </div>
             <p className="landing-section-sub">{home.sectionSubs.sites}</p>
             {sites.length > 0 ? (
               <div className="site-grid">
                   {wallSites.map((site) => {
-                    const info = getSiteInfo(site.id, site.sourceUrl);
-                    const statusHref = `/overview/status/${encodeURIComponent(site.id)}`;
-                    const latest = (availBySite[site.id] ?? []).slice(-1)[0];
-                    const pct = site.enabled && latest ? latest.pct : null;
-                    const level = pct != null ? rateLevel(pct) : null;
-                    const buckets = site.enabled ? (bucketsBySite[site.id] ?? []) : [];
+                    const entry = summarySites[site.id];
+                    const pct = site.enabled && entry?.pct != null ? entry.pct : null;
                     return (
-                      <Link
+                      <SiteCard
                         key={site.id}
-                        href={statusHref}
-                        className={`site-card${site.enabled ? "" : " site-card--off"}`}
-                        title={`${info.name} · ${pct != null ? `最新正常 ${pct}%` : site.enabled ? home.empty.siteNoCheckRecord : home.empty.siteDisabled}`}
-                      >
-                        <span className="site-card-head">
-                          <span
-                            aria-hidden
-                            className="site-card-dot"
-                            style={{
-                              background:
-                                level != null
-                                  ? levelColor(level)
-                                  : "var(--text-3)",
-                            }}
-                          />
-                          <span className="site-card-name">{info.name}</span>
-                          <span
-                            className="site-card-avg mono num"
-                            style={level ? { color: levelColor(level) } : undefined}
-                          >
-                            {pct != null ? `${pct}%` : "—"}
-                          </span>
-                        </span>
-                        <UptimeStrip buckets={buckets} />
-                        <span className="site-card-meta">
-                          {latest
-                            ? `${formatTimeAgo(latest.at)}检测`
-                            : site.enabled
-                              ? home.empty.siteNoCheckRecord
-                              : home.empty.siteDisabled}
-                        </span>
-                      </Link>
+                        id={site.id}
+                        name={site.name}
+                        enabled={site.enabled}
+                        pct={pct}
+                        checkedAt={entry?.at ?? null}
+                        buckets={site.enabled ? (entry?.buckets ?? []) : []}
+                      />
                     );
                   })}
                   {sites.length > wallSites.length && (
-                    <Link href="/overview" className="site-card site-card--more">
+                    <Link href="/sites" className="site-card site-card--more">
                       <span className="site-card-more-label">
                         {home.sitesOverview.more(sites.length - wallSites.length)}
                       </span>

@@ -1,15 +1,10 @@
 /** 与后端 llm_price_monitor 输出结构对应的类型定义。 */
 
+/** 站点价折扣（/api/overview）：只下发前端要用的两个折扣值（折扣列/排序/中位数）；
+ *  原币实付、官方参考价与折扣基准来源只在库里留档（后端 _DISCOUNT_ARCHIVE_ONLY_KEYS）。 */
 export interface DiscountInfo {
   input: number | null;
   output: number | null;
-  input_price_cny: number | null;
-  output_price_cny: number | null;
-  official_input_cny: number | null;
-  official_output_cny: number | null;
-  source_url: string;
-  /** 折扣基准规则：cn=国内站官方价 / global=国际站官方价；旧快照无此字段 */
-  region?: "cn" | "global" | null;
 }
 
 /** 站点价记录的采集元数据：后端 metadata JSON 的已知字段（其余自由键原样透传）。 */
@@ -63,12 +58,53 @@ export interface PriceRecord {
   last_price_at?: number | null;
   source_url: string;
   captured_at: number;
-  fingerprint: string;
   metadata?: PriceMetadata;
 }
 
 export interface OverviewRecord extends PriceRecord {
   discount: DiscountInfo | null;
+}
+
+/** 计算器页的站点价行：整包 overview 里计算器实际用到的字段，页面按此瘦身下发。
+ *  别把整包 OverviewData 传给客户端组件——整份会内联进 HTML，体积差一个量级。 */
+export interface CalcPriceRow {
+  site_id: string;
+  model: string;
+  input_price: number | null;
+  output_price: number | null;
+  unit: string;
+  /** 分组名：同站同名模型按分组各占一条候选，候选 value 靠它破重 */
+  group: string;
+  cache_read_price: number | null;
+  cache_create_price: number | null;
+}
+
+/** 站点渠道摘要（后端 /api/status/summary）：列表页画站点卡与排序只用这些数字。
+ *  完整可用率序列（每站几百点、全量约 1.7MB）与渠道行明细不随列表下发——需要完整视图走
+ *  /api/status/views，站点详情页自己按站拉原始快照解析（要画点阵与延迟趋势）。 */
+export interface SiteChannelSummaryEntry {
+  /** 最新一个可用率点（0–100）；无检测记录为 null */
+  pct: number | null;
+  /** 该点的时间戳（秒级） */
+  at: number | null;
+  /** 各渠道近 24h 成功率均值（0–100）；无渠道数据为 null */
+  success: number | null;
+  /** 最新点里的异常渠道数（首页星球悬停用） */
+  down: number;
+  /** 近 7 天可用率点数（首页星球「已检测 N 次」用） */
+  checks: number;
+  /** 近 7 天时段色块：avg 画色块、count 参与排序加权；无数据的槽位为 null */
+  buckets: (SummaryBucket | null)[];
+}
+
+/** 时段色块（摘要版）：相对完整 UptimeBucket 只留画色块与排序加权要用的两项。 */
+export interface SummaryBucket {
+  avg: number;
+  count: number;
+}
+
+export interface SiteChannelSummary {
+  sites: Record<string, SiteChannelSummaryEntry>;
 }
 
 interface CatalogMeta {
@@ -82,10 +118,12 @@ interface CatalogMeta {
 export interface OverviewData {
   records: OverviewRecord[];
   catalog: CatalogMeta;
+  /** 监控模型列表（管理台配置）：站点详情页渠道行的过滤基准（见 lib/channelStatus.ts） */
+  monitor_models?: string[];
   /** 本轮价格采集异常的站点（公开下发，只含站点与状态）：价格表上方的提示条用它 */
   collect_alerts?: CollectAlert[];
   /** 各站点最新公告（每站一条；没采集到公告的站点无键） */
-  notices?: Record<string, { content: string; captured_at?: number | null }>;
+  notices?: Record<string, { excerpt: string; captured_at?: number | null }>;
   /** 各站点配置信息完整度（0–3）：监控模型、认证凭证、附加采集地址各 1 分；兼容用途，站点综合分走 site_flags */
   site_completeness?: Record<string, number>;
   /** 各站点配置标志（结构化）：站点综合分里「配置完整」一项的输入（见 lib/siteRanking） */
