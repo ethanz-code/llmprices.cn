@@ -136,6 +136,33 @@ def test_overview_attaches_discount_and_catalog_context(workspace: Path):
     assert data["site_completeness"] == {"demo": 0}
 
 
+def test_overview_drops_archive_only_fields(workspace: Path):
+    """列表下发瘦身：证据/倍率等「只在库里留档」的字段不出接口（web/ 全量检索零读取）。
+
+    /api/overview 整包 5.5MB 里这些字段约占三分之一，剥掉后各页面的内联载荷同步变小
+    （2026-10-16 页面变慢修复）；前端新增读取处要同步从后端清单移除，本用例守住剥离面。"""
+    (workspace / "var" / "latest.json").write_text(json.dumps({
+        "demo:demo-model:default": {
+            **_latest_record(),
+            "metadata": {
+                "group": "default",
+                "pricing_rules": {"groups": []},
+                "cache_read_price": 0.1,
+                "network_evidence": [{"payload_sha256": "x" * 64}],
+                "denomination": {"quota_per_unit": 500000.0},
+                "enable_groups": ["claude"],
+                "billing_expr": "p * 2",
+            },
+        },
+    }), encoding="utf-8")
+    client = TestClient(create_app(_config(workspace)))
+    record = client.get("/api/overview").json()["records"][0]
+    assert "fingerprint" not in record
+    assert set(record["metadata"]) == {"group", "pricing_rules", "cache_read_price"}
+    # discount 只留前端要用的两个折扣值（其余原币实付/官方参考价在库里留档）
+    assert set(record["discount"]) == {"input", "output"}
+
+
 def test_overview_site_id_filters_records(workspace: Path):
     """site_id 参数只保留该站记录：站点检测详情页取本站在售模型与分组集合用，省全量序列化。"""
     (workspace / "var" / "latest.json").write_text(json.dumps({
@@ -170,6 +197,13 @@ def test_status_views_endpoint_parses_and_filters_onsale(workspace: Path):
     assert "dots" not in views["channels"]["demo"][0]  # 列表页不下发点阵
     assert views["availability"]["demo"][-1]["pct"] == 100
     assert views["uptimeBuckets"]["demo"]
+
+    # 列表页摘要：只给渲染与排序要用的数字，可用率序列与渠道行明细不随列表下发
+    summary = client.get("/api/status/summary").json()
+    entry = summary["sites"]["demo"]
+    assert entry["pct"] == 100 and entry["checks"] >= 1 and entry["down"] == 0
+    assert set(entry) == {"pct", "at", "success", "down", "checks", "buckets"}
+    assert all(set(bucket) == {"avg", "count"} for bucket in entry["buckets"] if bucket)
 
 
 def test_rankings_endpoint_paginates_searches_sorts(workspace: Path):
@@ -1493,6 +1527,55 @@ def test_task_logs_persist_and_restore_after_restart(tmp_path: Path):
     release.set()
 
 
+def test_task_persist_slims_old_results(tmp_path: Path):
+    """写盘瘦身：只有最新一条任务保留完整 result，更早的走 *_total 摘要。
+
+    单条 collect-status 的 result 有 1.7 MB（85 站的原始快照），十条完整结果会把
+    tasks 文档撑到 14 MB、任务进行中每几秒整份重写一次（2026-10-16 页面变慢定位）。"""
+    from llm_price_monitor.store import Store
+    from llm_price_monitor.webapi import tasks
+
+    tasks.reset()
+    store = Store(tmp_path / "monitor.db")
+    tasks.attach_store(store)
+    records = [{"site_id": "s1", "model": "m1"}]
+    with tasks._lock:
+        tasks._tasks.clear()
+        for index, started in enumerate((100.0, 200.0)):
+            tasks._tasks[f"t{index}"] = {
+                "id": f"t{index}", "kind": "collect-status", "status": "done",
+                "started_at": started, "finished_at": started + 1, "error": None,
+                "logs": [], "result": {"records": records, "events": [], "errors": []},
+            }
+    tasks._persist(force=True)
+    runs = store.get_document("tasks")["runs"]
+    assert runs[0]["id"] == "t1" and runs[0]["result"]["records"] == records  # 最新一条保留完整 result
+    assert runs[1]["result"]["records_total"] == 1 and "records" not in runs[1]["result"]
+
+
+def test_task_persist_coalesces_rapid_writes(tmp_path: Path):
+    """落盘节流：合并窗口内的连续写盘不立即落盘、由尾随定时器补写，force 立即落盘。"""
+    from llm_price_monitor.store import Store
+    from llm_price_monitor.webapi import tasks
+
+    tasks.reset()
+    store = Store(tmp_path / "monitor.db")
+    tasks.attach_store(store)
+    writes: list[str] = []
+    original = store.set_document
+
+    def counting_set_document(name: str, document: dict) -> None:
+        writes.append(name)
+        original(name, document)
+
+    store.set_document = counting_set_document  # type: ignore[method-assign]
+    tasks._last_persist_at = time.time()
+    tasks._persist()  # 窗口内：只安排尾随补写
+    assert writes == [] and tasks._persist_timer is not None
+    tasks._persist(force=True)  # 终态：立即落盘并收掉尾随定时器
+    assert writes == ["tasks"] and tasks._persist_timer is None
+
+
 def test_tasklog_emit_without_binding_is_noop():
     """CLI 直跑采集函数时没有绑定日志出口，emit 静默跳过。"""
     from llm_price_monitor import tasklog
@@ -2295,7 +2378,8 @@ def test_admin_get_routes_denied_to_anonymous_by_default(workspace: Path, monkey
     public_gets = {
         "/api/health", "/api/auth/state", "/api/assistant/status",
         "/api/meta", "/api/overview", "/api/latest", "/api/feed", "/api/history",
-        "/api/status", "/api/status/latest", "/api/status/views", "/api/status/events", "/api/notice",
+        "/api/status", "/api/status/latest", "/api/status/views", "/api/status/summary",
+        "/api/status/events", "/api/notice",
         # 单条公告正文（事件流只下发摘要，详情弹窗按需取全文）：与 /api/notice 同为公开读
         "/api/notice/event",
         "/api/rankings", "/api/catalog", "/api/catalog/all", "/api/geo", "/api/discovery",

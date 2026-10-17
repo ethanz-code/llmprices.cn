@@ -7,28 +7,26 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Calculator, optionFromCatalog, optionFromRecord } from "@/components/Calculator";
 import { calculator } from "@/lib/copy";
 import { EMPTY_STATE } from "@/lib/calculator";
-import type { CatalogData, CatalogEntry, OverviewData, OverviewRecord } from "@/lib/types";
+import type { CalcPriceRow, CatalogData, CatalogEntry } from "@/lib/types";
 
 /** 目录条目：只填取价关心的字段，其余用不到 */
 function entry(over: Partial<CatalogEntry>): CatalogEntry {
   return { found: true, model: "m", vendor: "v", currency: "USD", ...over } as CatalogEntry;
 }
 
-/** 站点价记录：只填取价关心的字段 */
-function record(over: Partial<OverviewRecord>): OverviewRecord {
+/** 站点价行：只填取价关心的字段（与页面下发的 CalcPriceRow 同构） */
+function priceRow(over: Partial<CalcPriceRow>): CalcPriceRow {
   return {
     site_id: "s",
     model: "m",
     input_price: null,
     output_price: null,
     unit: "USD/1M tokens",
-    price_status: "confirmed",
-    requires_auth: false,
-    source_url: "",
-    captured_at: 0,
-    fingerprint: "",
+    group: "",
+    cache_read_price: null,
+    cache_create_price: null,
     ...over,
-  } as OverviewRecord;
+  };
 }
 
 describe("optionFromCatalog 取价接线", () => {
@@ -73,13 +71,15 @@ describe("optionFromCatalog 取价接线", () => {
 });
 
 describe("optionFromRecord 取价接线", () => {
-  it("缓存读/写价取自记录 metadata，币种沿用 unit", () => {
-    const opt = optionFromRecord(record({
+  it("缓存读/写价取自行上的摊平字段，币种沿用 unit", () => {
+    const opt = optionFromRecord(priceRow({
       model: "gpt-6.1-sol",
       input_price: 2,
       output_price: 10,
       unit: "USD/1M tokens",
-      metadata: { group: "默认", cache_read_price: 0.1, cache_create_price: 2.5 },
+      group: "默认",
+      cache_read_price: 0.1,
+      cache_create_price: 2.5,
     }));
     expect(opt.prices).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 });
     expect(opt.currency).toBe("USD");
@@ -88,7 +88,7 @@ describe("optionFromRecord 取价接线", () => {
   });
 
   it("站点没给缓存价时留空", () => {
-    const opt = optionFromRecord(record({ input_price: 1, output_price: 2 }));
+    const opt = optionFromRecord(priceRow({ input_price: 1, output_price: 2 }));
     expect(opt.prices.cacheRead).toBeNull();
     expect(opt.prices.cacheWrite).toBeNull();
   });
@@ -109,21 +109,19 @@ const catalog = {
   },
 } as unknown as CatalogData;
 
-const overview = {
-  records: [record({
-    site_id: "302",
-    model: "gpt-6.1-sol",
-    input_price: 2,
-    output_price: 10,
-    metadata: { cache_read_price: 0.1, cache_create_price: 2.5 },
-  })],
-  catalog: { enabled: true },
-} as unknown as OverviewData;
+const priceRows = [priceRow({
+  site_id: "302",
+  model: "gpt-6.1-sol",
+  input_price: 2,
+  output_price: 10,
+  cache_read_price: 0.1,
+  cache_create_price: 2.5,
+})];
 
 describe("Calculator 渲染冒烟", () => {
   it("四档单价、三个用量输入、默认规则 96/2 都在位", () => {
     const html = renderToStaticMarkup(
-      <Calculator catalog={catalog} overview={overview} initial={EMPTY_STATE} />,
+      <Calculator catalog={catalog} priceRows={priceRows} initial={EMPTY_STATE} />,
     );
     for (const label of ["输入", "输出", "缓存读取", "缓存写入", "总用量", "缓存命中率", "输出占比"]) {
       expect(html).toContain(label);
@@ -139,7 +137,7 @@ describe("Calculator 渲染冒烟", () => {
     const html = renderToStaticMarkup(
       <Calculator
         catalog={catalog}
-        overview={overview}
+        priceRows={priceRows}
         initial={{
           ...EMPTY_STATE,
           prices: {
@@ -161,7 +159,7 @@ describe("Calculator 渲染冒烟", () => {
     const html = renderToStaticMarkup(
       <Calculator
         catalog={catalog}
-        overview={overview}
+        priceRows={priceRows}
         initial={{
           ...EMPTY_STATE,
           model: "claude-sonnet",
@@ -177,7 +175,7 @@ describe("Calculator 渲染冒烟", () => {
     const html = renderToStaticMarkup(
       <Calculator
         catalog={catalog}
-        overview={overview}
+        priceRows={priceRows}
         initial={{
           ...EMPTY_STATE,
           model: "claude-sonnet",
@@ -191,7 +189,7 @@ describe("Calculator 渲染冒烟", () => {
 
   it("两个数据源都缺失时不抛错，落空态", () => {
     const html = renderToStaticMarkup(
-      <Calculator catalog={null} overview={null} initial={EMPTY_STATE} />,
+      <Calculator catalog={null} priceRows={null} initial={EMPTY_STATE} />,
     );
     expect(html).toContain("花费结果");
   });

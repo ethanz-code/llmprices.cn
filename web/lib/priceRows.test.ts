@@ -15,7 +15,6 @@ function row(over: Partial<OverviewRecord>): OverviewRecord {
     requires_auth: false,
     source_url: "https://s1.example",
     captured_at: 100,
-    fingerprint: "f",
     discount: null,
     ...over,
   };

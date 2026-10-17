@@ -10,7 +10,7 @@ import { calculator } from "@/lib/copy";
 import { compareByReleaseDesc } from "@/lib/modelOrder";
 import { vendorDisplay } from "@/lib/vendorNames";
 import { ShareCalcButton } from "./ShareCalcButton";
-import type { CatalogData, CatalogEntry, OverviewData, OverviewRecord } from "@/lib/types";
+import type { CalcPriceRow, CatalogData, CatalogEntry } from "@/lib/types";
 import {
   DEFAULT_HIT_RATE,
   DEFAULT_OUTPUT_SHARE,
@@ -81,21 +81,20 @@ export function optionFromCatalog(key: string, entry: CatalogEntry): Option {
   };
 }
 
-/** 站点价记录 → 候选模型：缓存读/写价从记录 metadata 取（与 input/output 同币种同计价单位），
- *  站点没给就留空。同一站点同名模型可能按分组各有一条价：value 带上分组保证唯一，
+/** 站点价行 → 候选模型：缓存读/写价用行上的摊平字段（与 input/output 同币种同计价单位），
+ *  站点没给就是空。同一站点同名模型可能按分组各有一条价：value 带上分组保证唯一，
  *  选中态才不会亮一排。导出供单测钉住接线。 */
-export function optionFromRecord(row: OverviewRecord): Option {
+export function optionFromRecord(row: CalcPriceRow): Option {
   const unit = row.unit || "";
-  const group = row.metadata?.group ?? "";
   return {
-    value: group ? `${row.model}:${group}` : row.model,
+    value: row.group ? `${row.model}:${row.group}` : row.model,
     label: row.model,
-    sub: group,
+    sub: row.group,
     prices: {
       input: row.input_price ?? null,
       output: row.output_price ?? null,
-      cacheRead: row.metadata?.cache_read_price ?? null,
-      cacheWrite: row.metadata?.cache_create_price ?? null,
+      cacheRead: row.cache_read_price,
+      cacheWrite: row.cache_create_price,
     },
     currency: unit.split("/")[0]?.trim().toUpperCase() || "",
   };
@@ -103,11 +102,12 @@ export function optionFromRecord(row: OverviewRecord): Option {
 
 export function Calculator({
   catalog,
-  overview,
+  priceRows,
   initial,
 }: {
   catalog: CatalogData | null;
-  overview: OverviewData | null;
+  /** 站点价行（页面已按 CalcPriceRow 瘦身）：整包 overview 不下发，避免几 MB 数据内联进 HTML */
+  priceRows: CalcPriceRow[] | null;
   initial: CalcState;
 }) {
   const [source, setSource] = useState<CalcSource>(initial.source);
@@ -128,11 +128,11 @@ export function Calculator({
   /** 站点价模式下的站点清单：只保留有可用价的站点。 */
   const siteOptions = useMemo(() => {
     const ids = new Set<string>();
-    for (const row of overview?.records ?? []) {
+    for (const row of priceRows ?? []) {
       if (row.input_price != null || row.output_price != null) ids.add(row.site_id);
     }
     return [...ids].sort().map((id) => ({ value: id, label: getSiteInfo(id).name || id }));
-  }, [overview]);
+  }, [priceRows]);
 
   /** 候选模型：厂商模式走目录，站点模式走该站的价格记录（同模型同分组各占一项）。 */
   const options = useMemo<Option[]>(() => {
@@ -145,7 +145,7 @@ export function Calculator({
     if (!site) return [];
     const seen = new Set<string>();
     const list: Option[] = [];
-    for (const row of overview?.records ?? []) {
+    for (const row of priceRows ?? []) {
       if (row.site_id !== site || (row.input_price == null && row.output_price == null)) continue;
       const option = optionFromRecord(row);
       if (seen.has(option.value)) continue;
@@ -153,7 +153,7 @@ export function Calculator({
       list.push(option);
     }
     return list.sort((a, b) => a.label.localeCompare(b.label));
-  }, [source, site, catalog, overview]);
+  }, [source, site, catalog, priceRows]);
 
   /** 厂商官方价 + 未搜索时按厂商分节；搜索与站点模式返回 null 走平铺。 */
   const groups = useMemo(() => {
