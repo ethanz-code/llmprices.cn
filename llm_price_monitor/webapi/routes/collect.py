@@ -1,11 +1,11 @@
 """采集与后台任务端点：全量采集 + 价格/渠道状态/站点公告拆分采集 + 任务状态查询。
 
-全量采集一次跑三类（手动动作）；拆分端点与后台调度器（webapi.scheduler）共用
-jobs.py 的任务体，让三类采集能按各自周期独立执行。
+任务体统一登记在 webapi/job_registry.py，默认由独立子进程执行（tasks.submit_remote）：
+采集的解析与写库不再与 API 争 CPU，页面在采集期保持毫秒级响应（2026-10-16 拆进程）。
 """
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException
@@ -16,7 +16,7 @@ from llm_price_monitor.report import attach_catalog_discounts, run_once, summary
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import tasks
 from llm_price_monitor.webapi.deps import load_config
-from llm_price_monitor.webapi.jobs import notice_scan_job, popularity_scan_job, price_scan_job, screenshot_scan_job, status_scan_job
+from llm_price_monitor.webapi.job_registry import UnknownSite, resolve_sites
 
 
 class CollectBody(BaseModel):
@@ -27,25 +27,14 @@ class CollectBody(BaseModel):
     force: bool = False
 
 
-def _resolve_sites(config: MonitorConfig, body: CollectBody) -> MonitorConfig:
-    if body.site_id:
-        sites = tuple(site for site in config.sites if site.id == body.site_id)
-        if not sites:
-            raise HTTPException(status_code=400, detail=f"配置中不存在站点: {body.site_id}")
-        # 显式单站请求视作手动测试：扫描会跳过停用站点，这里强制启用
-        return replace(config, sites=(replace(sites[0], enabled=True),))
-    if body.site_ids is not None:
-        wanted = {site_id for site_id in body.site_ids if site_id}
-        sites = tuple(site for site in config.sites if site.id in wanted and site.enabled)
-        if not sites:
-            raise HTTPException(status_code=400, detail="所选站点不存在或均已停用")
-        # 批量采集是正式动作，只针对启用中的站点，不改变各自启用状态
-        return replace(config, sites=sites)
-    return config
 
 
-def _full_collect_job(config: MonitorConfig, store: Store, persist: bool) -> Callable[[], dict[str, Any]]:
-    """全量采集任务体：价格+渠道状态+站点公告一次跑完，结果附加官方折扣供预览。"""
+
+def full_collect_job(config: MonitorConfig, store: Store, persist: bool) -> Callable[[], dict[str, Any]]:
+    """全量采集任务体：价格+渠道状态+站点公告一次跑完，结果附加官方折扣供预览。
+
+    由 webapi/job_registry.py 延迟导入（模块顶部导入会形成环）；任务体在本模块持有
+    run_once 的模块级引用，测试按 collect_routes.run_once 打桩即生效。"""
     def _run() -> dict[str, Any]:
         report = run_once(config, store=store, persist=persist)
         output = attach_catalog_discounts(asdict(report), store.get_document("catalog"))
@@ -82,10 +71,15 @@ def _full_collect_job(config: MonitorConfig, store: Store, persist: bool) -> Cal
 def build_router(store: Store) -> APIRouter:
     router = APIRouter()
 
-    def _submit(kind: str, body: CollectBody, make_job: Callable[[MonitorConfig, Store], Callable[[], dict[str, Any]]]) -> dict[str, str]:
-        config = _resolve_sites(load_config(store), body)
+    def _submit(kind: str, body: CollectBody) -> dict[str, str]:
+        """校验站点参数后转交任务注册表：默认独立子进程执行（见 tasks.submit_remote）。"""
+        params = body.model_dump()
         try:
-            task_id = tasks.submit(kind, make_job(config, store))
+            resolve_sites(load_config(store), params)
+        except UnknownSite as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            task_id = tasks.submit_remote(kind, params)
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"task_id": task_id}
@@ -94,29 +88,29 @@ def build_router(store: Store) -> APIRouter:
     def collect(body: CollectBody) -> dict[str, str]:
         # 单站请求是测试采集，任务列表单独标记，不与正式全量采集混在同一类型里
         kind = "collect-test" if body.site_id else "collect"
-        return _submit(kind, body, lambda config, _store: _full_collect_job(config, _store, body.persist))
+        return _submit(kind, body)
 
     @router.post("/api/collect/price")
     def collect_price(body: CollectBody) -> dict[str, str]:
-        return _submit("collect-price", body, price_scan_job)
+        return _submit("collect-price", body)
 
     @router.post("/api/collect/status")
     def collect_status(body: CollectBody) -> dict[str, str]:
-        return _submit("collect-status", body, status_scan_job)
+        return _submit("collect-status", body)
 
     @router.post("/api/collect/notice")
     def collect_notice(body: CollectBody) -> dict[str, str]:
-        return _submit("collect-notice", body, notice_scan_job)
+        return _submit("collect-notice", body)
 
     @router.post("/api/collect/screenshot")
     def collect_screenshot(body: CollectBody) -> dict[str, str]:
         """手动触发站点截图：与定时任务同一任务体，可指定站点。"""
-        return _submit("collect-screenshot", body, screenshot_scan_job)
+        return _submit("collect-screenshot", body)
 
     @router.post("/api/collect/popularity")
     def collect_popularity(body: CollectBody) -> dict[str, str]:
         """手动触发站点人气采集：与定时任务同一任务体，可指定站点；force=全量刷新（无视数据新鲜度）。"""
-        return _submit("collect-popularity", body, lambda config, store: popularity_scan_job(config, store, force=body.force))
+        return _submit("collect-popularity", body)
 
     @router.get("/api/tasks")
     def list_tasks() -> dict[str, Any]:

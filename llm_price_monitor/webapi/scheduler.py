@@ -2,7 +2,7 @@
 
 间隔读自设置文档 settings.schedule（分钟，0 = 关闭该项定时），常驻线程每
 CHECK_INTERVAL_SECONDS 检查一轮：改配置下一轮即生效；到点且对应任务无运行中
-实例时提交任务注册表，正忙或提交失败等下一轮。上次提交时间持久化到
+实例时提交任务注册表（默认起独立子进程执行，见 tasks.submit_remote），正忙或提交失败等下一轮。上次提交时间持久化到
 schedule_state 文档，重启后按真实间隔计算，不会重启即全量请求站点点。
 """
 from __future__ import annotations
@@ -14,17 +14,6 @@ import time
 from llm_price_monitor.config import schedule_from_raw
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import tasks
-from llm_price_monitor.webapi.deps import load_config
-from llm_price_monitor.webapi.jobs import (
-    catalog_refresh_job,
-    discovery_refresh_job,
-    notice_scan_job,
-    popularity_scan_job,
-    price_scan_job,
-    rankings_refresh_job,
-    screenshot_scan_job,
-    status_scan_job,
-)
 
 CHECK_INTERVAL_SECONDS = 30
 
@@ -49,22 +38,7 @@ _KIND_BY_KEY = {
 }
 
 
-def _job_for(key: str, store: Store):
-    if key == "price":
-        return price_scan_job(load_config(store), store)
-    if key == "status":
-        return status_scan_job(load_config(store), store)
-    if key == "notice":
-        return notice_scan_job(load_config(store), store)
-    if key == "rankings":
-        return rankings_refresh_job(store)
-    if key == "discovery":
-        return discovery_refresh_job(store)
-    if key == "screenshot":
-        return screenshot_scan_job(load_config(store), store)
-    if key == "popularity":
-        return popularity_scan_job(load_config(store), store)
-    return catalog_refresh_job(store)
+
 
 
 def _run_due(store: Store) -> None:
@@ -83,7 +57,7 @@ def _run_due(store: Store) -> None:
         if now - float(state.get(key) or 0) < minutes * 60:
             continue
         try:
-            tasks.submit(kind, _job_for(key, store))
+            tasks.submit_remote(kind, store=store)
         except RuntimeError:
             continue
         state[key] = now

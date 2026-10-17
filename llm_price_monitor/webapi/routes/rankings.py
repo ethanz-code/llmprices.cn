@@ -14,7 +14,6 @@ from fastapi import APIRouter, HTTPException
 from llm_price_monitor.store import Store
 from llm_price_monitor.text_search import loose_key
 from llm_price_monitor.webapi import tasks
-from llm_price_monitor.webapi.jobs import rankings_refresh_job
 
 # 可排序字段（前端列 dataIndex）；其余按自然顺序（榜单自带排名）返回
 _SORT_KEYS = {"rank", "intelligence_index", "median_output_tokens_per_second", "latency_first_chunk_seconds"}
@@ -74,7 +73,7 @@ def build_router(store: Store) -> APIRouter:
     @router.post("/api/rankings/refresh")
     def rankings_refresh() -> dict[str, str]:
         try:
-            task_id = tasks.submit("rankings-refresh", rankings_refresh_job(store))
+            task_id = tasks.submit_remote("rankings-refresh")
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"task_id": task_id}

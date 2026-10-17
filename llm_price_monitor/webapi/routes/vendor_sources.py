@@ -14,7 +14,6 @@ from pydantic import BaseModel
 from llm_price_monitor.catalog import vendor_sources
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import tasks
-from llm_price_monitor.webapi.jobs import catalog_refresh_job, vendor_source_refresh_job
 
 _log = logging.getLogger("llm_price_monitor.webapi.routes.vendor_sources")
 
@@ -98,7 +97,7 @@ def build_router(store: Store) -> APIRouter:
         if vendor not in vendor_sources.load_sources(store):
             raise HTTPException(status_code=404, detail=f"厂商定价源不存在: {vendor}")
         try:
-            task_id = tasks.submit("vendor-source-refresh", vendor_source_refresh_job(store, vendor))
+            task_id = tasks.submit_remote("vendor-source-refresh", {"vendor": vendor})
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"task_id": task_id}
@@ -109,7 +108,7 @@ def build_router(store: Store) -> APIRouter:
 def _submit_catalog_refresh_silently(store: Store) -> str | None:
     """后台提交目录刷新以恢复 models.dev 基准；冲突（刷新进行中）时留痕跳过。"""
     try:
-        return tasks.submit("catalog-refresh", catalog_refresh_job(store))
+        return tasks.submit_remote("catalog-refresh")
     except RuntimeError as exc:
         _log.warning("删除厂商源后的目录自动刷新未触发（已有同类任务在跑）：%s", exc)
         return None

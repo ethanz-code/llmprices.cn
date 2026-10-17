@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException
 from llm_price_monitor.catalog.all_page import DEFAULT_PAGE_SIZE, page_catalog_all
 from llm_price_monitor.store import Store
 from llm_price_monitor.webapi import tasks
-from llm_price_monitor.webapi.jobs import catalog_refresh_job
 
 
 def build_router(store: Store) -> APIRouter:
@@ -58,7 +57,7 @@ def build_router(store: Store) -> APIRouter:
     @router.post("/api/catalog/refresh")
     def catalog_refresh() -> dict[str, str]:
         try:
-            task_id = tasks.submit("catalog-refresh", catalog_refresh_job(store))
+            task_id = tasks.submit_remote("catalog-refresh")
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"task_id": task_id}

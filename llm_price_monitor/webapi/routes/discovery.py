@@ -21,7 +21,6 @@ from llm_price_monitor import discover
 from llm_price_monitor.store import Store
 from llm_price_monitor.text_search import loose_key
 from llm_price_monitor.webapi import tasks
-from llm_price_monitor.webapi.jobs import discovery_refresh_job
 
 # 单页条数上限：候选站列表数千条，防止一次请求把整池拉进来
 _PAGE_LIMIT_MAX = 500
@@ -192,7 +191,7 @@ def build_router(store: Store) -> APIRouter:
     def discovery_refresh() -> dict[str, str]:
         # 任务体与后台调度共用（jobs.discovery_refresh_job）：手动点「刷新发现」与定时项同路
         try:
-            return {"task_id": tasks.submit("discovery-refresh", discovery_refresh_job(store))}
+            return {"task_id": tasks.submit_remote("discovery-refresh")}
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
