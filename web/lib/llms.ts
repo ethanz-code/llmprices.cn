@@ -12,6 +12,7 @@ const PAGES = [
   { path: "/catalog", name: "厂商定价", note: "AI 厂商官方目录价与全量渠道比价，可切换视图" },
   { path: "/rankings", name: "模型榜单", note: "第三方评测的综合评分排名" },
   { path: "/history", name: "事件追踪", note: "价格变动与站点公告的时间线事件流" },
+  { path: "/sites", name: "检测中的站点", note: "全部检测站点一览：渠道可用率与最近检测时间，按综合情况排序" },
   { path: "/discover", name: "新站发现", note: "自动收录的中转站清单：站点简介、7 天可用率与响应耗时、是否已纳入监控" },
   { path: "/calculator", name: "花费计算", note: "按单价与用量估算花费，支持缓存命中率与厂商官方价对比" },
   { path: "/articles", name: "文章资讯", note: "中转站避坑长文：低价从哪来、模型降智、计费倍率、隐私与跑路风险" },
@@ -26,7 +27,7 @@ function articleLines(origin: string): string[] {
 /** 监控站点清单行：检测档案页链接 + 站点自身地址（对大模型是关键实体信息） */
 function siteLines(origin: string, sites: SiteMeta[]): string[] {
   if (sites.length === 0) {
-    return ["（检测站点清单暂时拉取不到，可稍后重试或从首页「检测中的站点」小节获取。）"];
+    return ["（检测站点清单暂时拉取不到，可稍后重试或从「检测中的站点」页获取。）"];
   }
   return sites.map((row) => {
     const info = getSiteInfo(row.id, row.url);

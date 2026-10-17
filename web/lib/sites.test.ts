@@ -1,7 +1,7 @@
 /** 站点信息解析：官网取「管理台配置的首页 > 内置映射 > 来源 URL 域名」三级后备。 */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";
+import { getSiteInfo, loadSiteHomepages, loadSiteLinks } from "@/lib/sites";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -43,5 +43,32 @@ describe("loadSiteHomepages", () => {
   it("接口失败退回空表，不抛错", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
     await expect(loadSiteHomepages()).resolves.toEqual({});
+  });
+});
+
+describe("loadSiteLinks", () => {
+  it("一次拿到首页覆盖与全部站点的主域名后备", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              homepages: { h: "https://h.test/" },
+              origins: { h: "https://h.test/", demo: "https://demo.test/" },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    await expect(loadSiteLinks()).resolves.toEqual({
+      homepages: { h: "https://h.test/" },
+      origins: { h: "https://h.test/", demo: "https://demo.test/" },
+    });
+  });
+
+  it("接口失败两张表都退回空表", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("boom", { status: 500 })));
+    await expect(loadSiteLinks()).resolves.toEqual({ homepages: {}, origins: {} });
   });
 });

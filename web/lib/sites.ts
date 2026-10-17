@@ -11,6 +11,15 @@ export interface SiteInfo {
 /** 站点首页覆盖表：site_id → 管理台配置的首页地址（只含配过的站） */
 export type SiteHomepages = Record<string, string>;
 
+/** 站点主域名后备表：site_id → 站点根地址（后端从采集地址推导，已配首页的站同值）。
+ *  公告事件没有来源 URL，站名外链用它代替 originOf(sourceUrl)。 */
+export type SiteOrigins = Record<string, string>;
+
+export interface SiteLinkTables {
+  homepages: SiteHomepages;
+  origins: SiteOrigins;
+}
+
 const SITE_MAP: Record<string, SiteInfo> = {
   sudocode: { name: "SudoCode", homepage: "https://sudocode.chat" },
   cun: { name: "CUN.AI", homepage: "https://www.cun.ai" },
@@ -31,14 +40,19 @@ function originOf(url: string): string | null {
   }
 }
 
+/** 服务端一次读取站名外链需要的两张表；拉不到返回空表，站名链接退回内置映射/来源域名，不阻塞页面。 */
+export async function loadSiteLinks(): Promise<SiteLinkTables> {
+  try {
+    const data = await apiGet<{ homepages?: SiteHomepages; origins?: SiteOrigins }>("/api/sites/homepages");
+    return { homepages: data.homepages ?? {}, origins: data.origins ?? {} };
+  } catch {
+    return { homepages: {}, origins: {} };
+  }
+}
+
 /** 服务端读取站点首页覆盖表；拉不到返回空表，站名链接退回内置映射/来源域名后备，不阻塞页面。 */
 export async function loadSiteHomepages(): Promise<SiteHomepages> {
-  try {
-    const data = await apiGet<{ homepages?: SiteHomepages }>("/api/sites/homepages");
-    return data.homepages ?? {};
-  } catch {
-    return {};
-  }
+  return (await loadSiteLinks()).homepages;
 }
 
 /** 解析站点信息：名称按内置映射（没有就用 id）；官网按「配置的首页 > 内置映射 > 来源 URL 域名」。
