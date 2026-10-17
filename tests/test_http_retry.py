@@ -1,4 +1,6 @@
 """传输层退避重试：幂等请求遇抖动重试、额度用尽抛出、POST 不重试、留痕日志。"""
+import threading
+
 import httpx
 import pytest
 
@@ -99,17 +101,35 @@ _PROXY_ENV_VARS = ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "HTTP
 
 @pytest.fixture
 def spy_http_transport(monkeypatch):
-    """替身 HTTPTransport：记下收到的 proxy 参数，其余行为不变。"""
+    """替身 HTTPTransport：记下收到的 proxy 参数，其余行为不变。
+
+    后台采集线程（上一个测试启动、teardown 只置停止位不 join）可能在本测试执行期间
+    还活着并调 build_client()，实例与主测试的实例混进同一个类属性列表，
+    `== [None, "..."]` 这类断言就会随机失败。这里按实例隔离：只认本测试登记过的实例。
+    """
+    # 按线程登记：后台采集线程（上一个测试启动、teardown 只置停止位不 join）可能在
+    # 本测试执行期间还活着并调 build_client()，实例若混进同一个列表，`== [None, ...]`
+    # 这类断言就会随机失败（全量跑才暴露，单独跑本文件不复现）
+    owned: dict[int, list[str | None]] = {}
 
     class Spy(httpx.HTTPTransport):
-        proxies_seen: list[str | None] = []
-
         def __init__(self, *, proxy: str | None = None, **kwargs) -> None:
-            self.proxies_seen.append(proxy)
+            owned.setdefault(threading.get_ident(), []).append(proxy)
             super().__init__(**kwargs)
 
     monkeypatch.setattr("llm_price_monitor.http_retry.httpx.HTTPTransport", Spy)
-    return Spy
+
+    class SpyView:
+        """主线程登记的 proxy 参数（测试自己建的那些），按登记顺序。
+
+        多处断言的用例用 clear() 分段，行为与共享列表一致。
+        """
+
+        @property
+        def proxies_seen(self) -> list[str | None]:
+            return owned.setdefault(threading.get_ident(), [])
+
+    return SpyView()
 
 
 def test_default_transport_reads_proxy_env(monkeypatch, spy_http_transport):
@@ -128,6 +148,9 @@ def test_panel_fallback_proxy_beats_proxy_env(monkeypatch, spy_http_transport):
     with build_client() as client:
         assert isinstance(client._transport, FallbackTransport)
     assert spy_http_transport.proxies_seen == [None, "http://127.0.0.1:7899"]
+    # egress._provider 是模块级全局，不清场会让后续测试读到 7899 而断言失败
+    # （同文件其余用例都以 configure_provider(None) 收尾，这里漏了）
+    egress.configure_provider(None)
 
 
 def test_default_transport_prefers_https_over_all_proxy(monkeypatch, spy_http_transport):
