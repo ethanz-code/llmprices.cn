@@ -5,7 +5,7 @@ import { Empty, Pick } from "./ui";
 import { IconSync } from "./icons";
 import { ToneTag } from "./ToneTag";
 import { RiskLink } from "./RiskLink";
-import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
+import { getSiteInfo, type SiteHomepages, type SiteOrigins } from "@/lib/sites";
 import type { EventRow } from "@/lib/types";
 import { dayKey, dayLabel, eventMeta, formatTime, isNoticeEvent } from "@/lib/format";
 import { foldEvents, noticeText } from "@/lib/events";
@@ -32,10 +32,13 @@ function EventFeed({
   events,
   rate,
   siteHomepages,
+  siteOrigins,
 }: {
   events: FeedEvent[];
   rate?: number | null;
   siteHomepages?: SiteHomepages;
+  /** 公告事件拿不到来源 URL：站名外链用站点主域名后备 */
+  siteOrigins?: SiteOrigins;
 }) {
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<FeedEvent | null>(null);
@@ -81,6 +84,8 @@ function EventFeed({
         const event = group[0];
         if (isNoticeEvent(event)) {
           const meta = eventMeta(event.kind);
+          // 公告事件没有来源地址：用站点主域名后备，避免站名链接是空 href
+          const site = getSiteInfo(event.site_id, siteOrigins?.[event.site_id], siteHomepages);
           return (
             <div
               key={`${event.site_id}:${event.kind}:${event.detected_at}`}
@@ -92,8 +97,8 @@ function EventFeed({
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <KindTag kind={event.kind} />
                   <span onClick={(e) => e.stopPropagation()}>
-                    <RiskLink href={getSiteInfo(event.site_id, undefined, siteHomepages).homepage} variant="site">
-                      <span>{getSiteInfo(event.site_id, undefined, siteHomepages).name}</span>
+                    <RiskLink href={site.homepage} variant="site">
+                      <span>{site.name}</span>
                     </RiskLink>
                   </span>
                   <span className="mono" style={{ color: "var(--text-3)", fontSize: 12, marginLeft: "auto" }}>
@@ -109,22 +114,19 @@ function EventFeed({
         }
         const key = `${event.site_id}:${event.model}:${event.kind}:${event.detected_at}`;
         const open = openKeys.has(key);
+        const site = getSiteInfo(
+          event.site_id,
+          event.current?.source_url ?? event.previous?.source_url ?? siteOrigins?.[event.site_id],
+          siteHomepages,
+        );
         return (
           <div key={key} className="event-card" style={{ cursor: "pointer" }} onClick={() => setDetail(event)}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <KindTag kind={event.kind} />
                 <span onClick={(e) => e.stopPropagation()}>
-                  <RiskLink
-                    href={
-                      getSiteInfo(event.site_id, event.current?.source_url ?? event.previous?.source_url, siteHomepages)
-                        .homepage
-                    }
-                    variant="site"
-                  >
-                    <span>
-                      {getSiteInfo(event.site_id, event.current?.source_url ?? event.previous?.source_url, siteHomepages).name}
-                    </span>
+                  <RiskLink href={site.homepage} variant="site">
+                    <span>{site.name}</span>
                   </RiskLink>
                 </span>
                 <span className="mono" style={{ color: "var(--text-2)" }}>{event.model}</span>
@@ -177,7 +179,13 @@ function EventFeed({
         })}
       </section>
       ))}
-      <EventDetailModal event={detail} rate={rate} onClose={() => setDetail(null)} siteHomepages={siteHomepages} />
+      <EventDetailModal
+        event={detail}
+        rate={rate}
+        onClose={() => setDetail(null)}
+        siteHomepages={siteHomepages}
+        siteOrigins={siteOrigins}
+      />
     </div>
   );
 }
@@ -186,6 +194,7 @@ export function HistoryView({
   feed,
   history,
   siteHomepages,
+  siteOrigins,
 }: {
   /** 价格事件与公告事件已按时间合并、按新到旧排序的动态流 */
   feed: FeedEvent[];
@@ -193,6 +202,8 @@ export function HistoryView({
   history: HistoryListData;
   /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
   siteHomepages?: SiteHomepages;
+  /** 站点主域名后备表：公告事件没有来源地址时，站名链接用它 */
+  siteOrigins?: SiteOrigins;
 }) {
   // 站点价统一按 RMB 展示：汇率由历史接口附带（厂厂商价快照标准）
   const rate = history.rate ?? null;
@@ -222,7 +233,12 @@ export function HistoryView({
         />
       </div>
 
-      <EventFeed events={filteredEvents} rate={rate} siteHomepages={siteHomepages} />
+      <EventFeed
+        events={filteredEvents}
+        rate={rate}
+        siteHomepages={siteHomepages}
+        siteOrigins={siteOrigins}
+      />
     </div>
   );
 }

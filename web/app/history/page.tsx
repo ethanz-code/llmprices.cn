@@ -3,7 +3,7 @@ import type { FeedData, HistoryListData } from "@/lib/types";
 import { PageDigest } from "@/components/PageDigest";
 import { SiteAlert } from "@/components/SiteAlert";
 import { HistoryView } from "@/components/HistoryView";
-import { loadSiteHomepages, type SiteHomepages } from "@/lib/sites";
+import { loadSiteLinks, type SiteHomepages, type SiteOrigins } from "@/lib/sites";
 import { alerts } from "@/lib/copy";
 import { formatCount } from "@/lib/format";
 import { pageMetadata } from "@/lib/seo";
@@ -20,15 +20,21 @@ export default async function HistoryPage() {
   let feed: FeedData | null = null;
   let history: HistoryListData | null = null;
   let error: string | null = null;
-  // 站点首页覆盖表：事件卡站名外链用；拉取失败退回内置映射/来源域名后备
+  // 站点首页覆盖表与主域名后备表：事件卡站名外链用。公告事件没有来源地址，
+  // 没有覆盖配置的站靠 origins 兜底；拉取失败退回内置映射/来源域名后备
   let siteHomepages: SiteHomepages = {};
+  let siteOrigins: SiteOrigins = {};
   try {
     // 事件流已由 /api/feed 统一合并（价格+公告），历史记录独立取
-    [feed, history, siteHomepages] = await Promise.all([
+    const [feedData, historyData, links] = await Promise.all([
       apiGet<FeedData>("/api/feed?events_limit=300&notice_limit=100"),
       apiGet<HistoryListData>("/api/history?limit=500"),
-      loadSiteHomepages(),
+      loadSiteLinks(),
     ]);
+    feed = feedData;
+    history = historyData;
+    siteHomepages = links.homepages;
+    siteOrigins = links.origins;
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
@@ -50,6 +56,7 @@ export default async function HistoryPage() {
           feed={feed.events}
           history={history}
           siteHomepages={siteHomepages}
+          siteOrigins={siteOrigins}
         />
       )}
     </div>

@@ -218,16 +218,23 @@ def test_purge_and_rename_move_screenshot(workspace: Path, monkeypatch):
 
 
 def test_homepages_endpoint_lists_configured_sites(workspace: Path):
-    """首页覆盖表：只含配过 homepage 的站；公开可读；改配置后即时生效。"""
+    """首页表：homepages 只含配过 homepage 的站，origins 覆盖全部有采集地址的站；公开可读。"""
     client = TestClient(_app(workspace))
-    assert client.get("/api/sites/homepages").json() == {"homepages": {}}
+    # 没配首页时 homepages 为空，origins 从 seed 站的采集地址推导（公告事件没有来源 URL 时用它）
+    assert client.get("/api/sites/homepages").json() == {
+        "homepages": {},
+        "origins": {"demo": "https://demo.test/"},
+    }
     assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200
     assert client.post(
         "/api/sites",
         json={"config": {"id": "h", "homepage": "https://h.test/", "network": {"url": "https://api.h.test/v1"}}},
     ).status_code == 200
-    # 未配 homepage 的站（seed 的 demo）不进表
-    assert client.get("/api/sites/homepages").json() == {"homepages": {"h": "https://h.test/"}}
+    # 未配 homepage 的站（seed 的 demo）不进 homepages，但两个站都在 origins 里
+    assert client.get("/api/sites/homepages").json() == {
+        "homepages": {"h": "https://h.test/"},
+        "origins": {"demo": "https://demo.test/", "h": "https://h.test/"},
+    }
 
 
 def test_site_homepage_roundtrip_through_api(workspace: Path):
@@ -268,10 +275,11 @@ def test_remove_screenshot_tolerates_missing(tmp_path, monkeypatch):
 
 def test_manual_collect_endpoint_uses_screenshot_job(workspace: Path, monkeypatch):
     """手动触发走截图任务体，结果进任务记录。"""
-    import llm_price_monitor.webapi.routes.collect as collect_routes
+    import llm_price_monitor.webapi.jobs as jobs
 
+    # 任务体统一登记在 webapi/job_registry，构建时经 jobs 模块取用：打桩打在 jobs 上
     monkeypatch.setattr(
-        collect_routes, "screenshot_scan_job", lambda config, store: (lambda: {"captured": 1, "skipped": 0, "failed": 0})
+        jobs, "screenshot_scan_job", lambda config, store: (lambda: {"captured": 1, "skipped": 0, "failed": 0})
     )
     client = TestClient(_app(workspace))
     assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200

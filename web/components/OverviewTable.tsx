@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { DataTable, type DColumn } from "./DataTable";
-import { Empty, Input } from "./ui";
+import { Btn, Empty, Input } from "./ui";
 import { IconChevronDown, IconSearch } from "./icons";
 import { DajuSit } from "./DajuArt";
 import { ToneTag } from "./ToneTag";
@@ -12,7 +12,8 @@ import { RiskLink } from "./RiskLink";
 import { TermTip } from "./TermTip";
 import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
 import { effectiveCnyCachePrice, effectiveCnyPrice, formatDiscount, formatIsoMinute, formatTime, noticeExcerpt, recordStatusKey, rowReason, statusMeta } from "@/lib/format";
-import { canonicalModel, hasUsablePrice, smartOrderRows } from "@/lib/priceRows";
+import { planOf, type ModelGroupMeta } from "@/lib/modelGroups";
+import { smartOrderRows } from "@/lib/priceRows";
 import { rowRankScore, rowScore, type SiteRanking, type SiteScore } from "@/lib/siteRanking";
 import { popularityBadge, popularitySortValue, type SitePopularityMap } from "@/lib/popularity";
 import { modelOrderCompare, type ModelOrderEntry } from "@/lib/modelOrder";
@@ -28,11 +29,8 @@ const rowKeyOf = (row: OverviewRecord) =>
   `${row.site_id}:${row.model}:${row.unit}:${row.metadata?.group ?? ""}`;
 
 /** 订阅套餐行（套餐制站）：行代表套餐本身，无 token 价，套餐信息跨列渲染。 */
-const planOf = (row: OverviewRecord) => row.metadata?.plan ?? null;
 
 /** 订阅套餐统一入口的模型分组键与展示名：所有套餐行归并到这一个下拉项里。 */
-const SUBSCRIPTION_GROUP_KEY = "__subscription__";
-const SUBSCRIPTION_LABEL = "订阅套餐";
 
 /** 定价页当前模型：只存在这台浏览器里，刷新后还停在上次选的那个。 */
 const ACTIVE_MODEL_KEY = "overview-active-model";
@@ -48,33 +46,22 @@ function siteScoreTitle(score: SiteScore): string {
   ].join("\n");
 }
 
-interface ModelGroup {
-  /** 归一后的分组键：大小写/连字符等写法差异不产生重复的表 */
-  key: string;
-  /** 展示名：该组内出现次数最多的写法 */
-  model: string;
-  /** 其余写法（语义相同、字符不同），在表头标注 */
-  aliases: string[];
-  rows: OverviewRecord[];
-  sites: number;
-  priced: boolean;
-}
-
 export function OverviewTable({
   data,
+  modelIndex,
+  initialKey,
   rankingsIndex = {},
-  modelOrder = {},
   siteHomepages,
   siteRanking,
   sitePopularity,
 }: {
   data: OverviewData;
+  /** 模型分组索引（服务端按全量记录算好，见 lib/modelGroups）：一次只展示一个模型，行数据按需拉 */
+  modelIndex: ModelGroupMeta[];
+  /** 首屏已随 data 带行的模型归一键（页面算好的默认模型） */
+  initialKey: string | null;
   /** AA 榜单匹配索引：给当前选中模型挂排名徽标；榜单未生成时缺省不显示 */
   rankingsIndex?: Record<string, RankingHit>;
-  /** 模型名归一键（canonicalModel）→ 目录排序依据（厂商序+发布日期）：模型下拉按
-   *  「厂商分块+发布倒序」排的依据，与站点管理监控模型多选同一套（见 lib/modelOrder），
-   *  页面服务端从 /api/catalog 提炼；缺省退化为按名称。 */
-  modelOrder?: Record<string, ModelOrderEntry>;
   /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
   siteHomepages?: SiteHomepages;
   /** 站点评分（服务端算好，见 lib/siteRanking）：行排序主键，缺省退回按价格排 */
@@ -101,57 +88,63 @@ export function OverviewTable({
     setModelReady(true);
   }, []);
 
-  const models = useMemo<ModelGroup[]>(() => {
-    const byModel = new Map<string, { rows: OverviewRecord[]; names: Map<string, number> }>();
-    // 订阅套餐行统一归并成一个「订阅套餐」条目：套餐名（几十个）不进模型下拉刷屏，
-    // 点进这一项后的表里才逐行展开各套餐
-    let subscriptionRows: OverviewRecord[] | null = null;
-    for (const row of records) {
-      if (planOf(row)) {
-        subscriptionRows = [...(subscriptionRows ?? []), row];
-        continue;
-      }
-      const key = canonicalModel(row.model);
-      let entry = byModel.get(key);
-      if (!entry) {
-        entry = { rows: [], names: new Map() };
-        byModel.set(key, entry);
-      }
-      entry.rows.push(row);
-      entry.names.set(row.model, (entry.names.get(row.model) ?? 0) + 1);
-    }
-    const groups = [...byModel.entries()].map(([key, entry]) => {
-      // 展示名取出现最多的一种写法，其余写法记为别名
-      const ranked = [...entry.names.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-      return {
-        key,
-        model: ranked[0][0],
-        aliases: ranked.slice(1).map(([name]) => name),
-        rows: entry.rows,
-        sites: new Set(entry.rows.map((row) => row.site_id)).size,
-        priced: entry.rows.some(hasUsablePrice),
-      };
-    });
-    if (subscriptionRows) {
-      groups.push({
-        key: SUBSCRIPTION_GROUP_KEY,
-        model: SUBSCRIPTION_LABEL,
-        aliases: [],
-        rows: subscriptionRows,
-        sites: new Set(subscriptionRows.map((row) => row.site_id)).size,
-        priced: true,
-      });
-    }
-    // 目录排序排序（厂商分块+发布倒序，与站点管理监控模型多选同一套）：同厂商的模型
-    // 挨在一起，目录没收录的模型（站点自有命名）排在最后按名称；页面没传目录索引时退化为纯名称序。
-    // 订阅套餐统一项固定排最后（不是某个模型，入口性质）
-    const compare = modelOrderCompare(modelOrder);
-    groups.sort((a, b) => compare({ key: a.key, name: a.model }, { key: b.key, name: b.model }));
-    groups.sort((a, b) => Number(a.key === SUBSCRIPTION_GROUP_KEY) - Number(b.key === SUBSCRIPTION_GROUP_KEY));
-    return groups;
-  }, [records, modelOrder]);
+  // 分组索引由服务端按全量记录算好（lib/modelGroups.buildModelIndex）：首屏只随 data 带默认模型的行，
+  // 其余模型切到时按需拉（web/app/api/model-rows），不再把全站几千行塞进首屏 HTML。
+  const models = modelIndex;
+  const [rowsByKey, setRowsByKey] = useState<Record<string, OverviewRecord[]>>(() =>
+    initialKey ? { [initialKey]: data.records } : {},
+  );
+  const [notices, setNotices] = useState<NonNullable<OverviewData["notices"]>>(() => data.notices ?? {});
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  // 请求代号：setLoadingKey 会让本 effect 因依赖变化重跑，不能用 cleanup 的取消标记
+  // 丢掉进行中的请求（那会把 loadingKey 永久留在原地，表一直停在「正在加载」）。
+  // 只有最后一次发起的请求能落库，切走再切回会重新发起。
+  const requestRef = useRef(0);
 
   const active = models.find((group) => group.key === activeModel) ?? models[0];
+  const activeRows = active ? rowsByKey[active.key] ?? null : null;
+
+  // 切到还没带行的模型：按需取该模型的行与公告（服务端按同一把归组键过滤）。失败停在失败态，
+  // 由表内空态的重试按钮手动重来，避免依赖变化时无限重试
+  useEffect(() => {
+    const key = active?.key;
+    if (!key || rowsByKey[key] || loadingKey === key || failedKey === key) return;
+    const requestId = ++requestRef.current;
+    setLoadingKey(key);
+    fetch(`/api/model-rows?key=${encodeURIComponent(key)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ rows: OverviewRecord[]; notices: OverviewData["notices"] }>;
+      })
+      .then((payload) => {
+        if (requestRef.current !== requestId) return;
+        setRowsByKey((prev) => ({ ...prev, [key]: payload.rows ?? [] }));
+        setNotices((prev) => ({ ...prev, ...(payload.notices ?? {}) }));
+      })
+      .catch(() => {
+        if (requestRef.current === requestId) setFailedKey(key);
+      })
+      .finally(() => {
+        if (requestRef.current === requestId) setLoadingKey(null);
+      });
+  }, [active?.key, rowsByKey, loadingKey, failedKey]);
+
+  // 切换模型：顺手把 ?model=<归一键> 写进 URL（首个模型清掉参数），刷新/分享/爬虫都落到同一张表
+  const selectModel = useCallback(
+    (key: string) => {
+      setActiveModel(key);
+      try {
+        const url = new URL(window.location.href);
+        if (key === models[0]?.key) url.searchParams.delete("model");
+        else url.searchParams.set("model", key);
+        window.history.replaceState(null, "", url.toString());
+      } catch {
+        // 环境不支持改 URL 只影响分享，不影响切换
+      }
+    },
+    [models],
+  );
 
   // 订阅套餐行跨列：从「输入价」列起合并 5 列（输入/输出/缓存/分组/折扣），一张卡讲清套餐；
   // 站点/人气列与渠道/公告列照常。模型列（表头即套餐名）不重复，卡里放价与额度等关键信息。
@@ -223,13 +216,13 @@ export function OverviewTable({
   const parentRows = useMemo(
     () =>
       smartOrderRows(
-        active?.rows ?? [],
+        activeRows ?? [],
         // 数据滞后已并入行综合分（siteRanking.stalenessPenalty），这里不再重复扣，按纯加权单价破平
         () => 0,
         rate,
         (row) => rowRankScore(siteRanking, row),
       ),
-    [active, rate, siteRanking],
+    [activeRows, rate, siteRanking],
   );
 
   // 每站首行的行键：站点综合分与公告都只在首行展示——同站点多分组行贴的是同一个分/同一份公告，
@@ -419,10 +412,10 @@ export function OverviewTable({
       // 唯一不设宽的列：吸收全部剩余宽度（文本越宽越好读）；最多 2 行，悬停看更长摘要
       mobileHide: true,
       render: (_v: unknown, row) => {
-        const notice = data.notices?.[row.site_id];
-        if (!notice?.content || !firstRowKeys.has(rowKeyOf(row))) return <span style={{ color: "var(--text-3)" }}>—</span>;
+        const notice = notices[row.site_id];
+        if (!notice?.excerpt || !firstRowKeys.has(rowKeyOf(row))) return <span style={{ color: "var(--text-3)" }}>—</span>;
         const tip = [
-          noticeExcerpt(notice.content, 6),
+          notice.excerpt,
           notice.captured_at ? `发布于 ${formatTime(notice.captured_at)}` : null,
         ]
           .filter(Boolean)
@@ -443,7 +436,7 @@ export function OverviewTable({
                 lineHeight: 1.55,
               }}
             >
-              {noticeExcerpt(notice.content, 2)}
+              {noticeExcerpt(notice.excerpt, 2)}
             </span>
           </Link>
         );
@@ -454,7 +447,7 @@ export function OverviewTable({
   return (
     <>
       <CollectAlerts alerts={data.collect_alerts ?? []} />
-      {models.length > 0 && <ModelPicker models={models} activeKey={active?.key} onSelect={setActiveModel} />}
+      {models.length > 0 && <ModelPicker models={models} activeKey={active?.key} onSelect={selectModel} />}
       <div className="panel rise-in" style={{ overflow: "hidden" }}>
         <div
           style={{
@@ -503,11 +496,28 @@ export function OverviewTable({
           rowSpanOf={subscriptionSpan}
           onRowClick={(row) => router.push(`/overview/status/${encodeURIComponent(row.site_id)}`)}
           empty={
-            <Empty
-              icon={<DajuSit width={30} />}
-              title="还没有价格数据"
-              description="我们采完一轮数据后，这里就会展示各站点的最新价格。"
-            />
+            activeRows === null ? (
+              failedKey === active?.key ? (
+                <Empty
+                  icon={<DajuSit width={30} />}
+                  title="这个模型的价格没加载出来"
+                  description="网络或服务波动导致的，重试一下就好。"
+                  action={<Btn onClick={() => setFailedKey(null)}>重试</Btn>}
+                />
+              ) : (
+                <Empty
+                  icon={<DajuSit width={30} />}
+                  title="正在加载这个模型的价格…"
+                  description="只拉当前要看的这张表，稍等一下。"
+                />
+              )
+            ) : (
+              <Empty
+                icon={<DajuSit width={30} />}
+                title="还没有价格数据"
+                description="我们采完一轮数据后，这里就会展示各站点的最新价格。"
+              />
+            )
           }
         />
       </div>
@@ -521,7 +531,7 @@ function ModelPicker({
   activeKey,
   onSelect,
 }: {
-  models: ModelGroup[];
+  models: ModelGroupMeta[];
   activeKey?: string;
   onSelect: (key: string) => void;
 }) {

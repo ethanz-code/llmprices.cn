@@ -171,13 +171,19 @@ def build_router(store: Store) -> APIRouter:
 
     @router.get("/api/sites/homepages")
     def site_homepages() -> dict[str, Any]:
-        """站点首页覆盖表（site_id → 配置的首页地址，只含配过的站）。
+        """站点首页表：homepages 是管理台显式配置的覆盖值，origins 是全部站点的主域名后备。
 
-        公开页面的站名链接用它替换「来源 URL 域名」后备：入口在 API 子域、
-        来源域名不是可看页面的站点（如 4aicode）靠它链到真实首页。没配的站不进表。
+        公开页面的站名链接优先用 homepages；没有配置的站（如公告事件拿不到来源 URL）
+        用 origins 里的主域名，避免渲染成空链接。origins 的推导规则与截图一致：
+        配置了首页用它，否则取采集地址的源站根地址。
         """
+        from llm_price_monitor.screenshot import site_homepage
+
         config = config_from_store(store)
-        return {"homepages": {site.id: site.homepage for site in config.sites if site.homepage}}
+        return {
+            "homepages": {site.id: site.homepage for site in config.sites if site.homepage},
+            "origins": {site.id: homepage for site in config.sites if (homepage := site_homepage(site))},
+        }
 
     @router.get("/api/sites/popularity")
     def site_popularity() -> dict[str, Any]:

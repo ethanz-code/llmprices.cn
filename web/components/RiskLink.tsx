@@ -26,6 +26,9 @@ export function RiskLink({
   const [open, setOpen] = useState(false);
   const [skip, setSkip] = useState(false);
 
+  // 拿不到站点地址时只显示文字：空 href 点开是个没有目标的确认框，不如不渲染链接
+  if (!href) return <span className={variant === "site" ? "site-link" : undefined}>{children}</span>;
+
   let host = href;
   try {
     host = new URL(href).host;

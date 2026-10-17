@@ -9,7 +9,7 @@ import { RiskLink } from "./RiskLink";
 import { NoticeBody } from "./NoticeBody";
 import { apiGet } from "@/lib/api";
 import { noticeText } from "@/lib/events";
-import { getSiteInfo, type SiteHomepages } from "@/lib/sites";
+import { getSiteInfo, type SiteHomepages, type SiteOrigins } from "@/lib/sites";
 import {
   CACHE_PRICE_LABELS,
   cachePriceText,
@@ -223,6 +223,7 @@ export function EventDetailModal({
   rate,
   onClose,
   siteHomepages,
+  siteOrigins,
 }: {
   event: FeedEvent | null;
   /** 展示汇率（USD→CNY），价格折算用 */
@@ -230,11 +231,15 @@ export function EventDetailModal({
   onClose: () => void;
   /** 站点首页覆盖表（管理台为站点配置的首页地址）：站名链接优先用它 */
   siteHomepages?: SiteHomepages;
+  /** 站点主域名后备表：公告事件没有来源地址时给站名链接用 */
+  siteOrigins?: SiteOrigins;
 }) {
   if (!event) return null;
   const meta = eventMeta(event.kind);
-  // 公告事件没有价格行、拿不到来源地址；价格事件用最近一次的来源地址回退官网
-  const sourceUrl = isNoticeEvent(event) ? undefined : event.current?.source_url ?? event.previous?.source_url;
+  // 公告事件没有价格行、拿不到来源地址：退到站点主域名后备，避免链到空地址
+  const sourceUrl =
+    (isNoticeEvent(event) ? undefined : event.current?.source_url ?? event.previous?.source_url) ??
+    siteOrigins?.[event.site_id];
   const site = getSiteInfo(event.site_id, sourceUrl, siteHomepages);
   if (isNoticeEvent(event)) {
     return (
