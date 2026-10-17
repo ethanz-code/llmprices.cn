@@ -47,12 +47,15 @@ export function SiteFooter() {
         </div>
       </div>
       <div className="site-footer-meta">
-        <span>© 2026 {site.name}</span>
-        {footer.icp ? (
-          <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
-            {footer.icp}
-          </a>
-        ) : null}
+        {/* 版权与备案号同属左侧一组，导航链接保持在右 */}
+        <span className="site-footer-meta-left">
+          <span>© 2026 {site.name}</span>
+          {footer.icp ? (
+            <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
+              {footer.icp}
+            </a>
+          ) : null}
+        </span>
         <span className="site-footer-meta-links">
           <Link href="/history">{footer.links.history}</Link>
           <Link href="/articles">{footer.links.articles}</Link>

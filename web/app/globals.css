@@ -3820,6 +3820,14 @@ button.footer-icon {
   flex-wrap: wrap;
 }
 
+.site-footer-meta-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
 .site-footer-meta-links {
   display: inline-flex;
   align-items: center;
@@ -3840,13 +3848,13 @@ button.footer-icon {
 }
 
 /* 备案号链接与 meta 行其他链接同款式 */
-.site-footer-meta > a {
+.site-footer-meta-left a {
   color: var(--text-3);
   text-decoration: none;
   transition: color var(--dur);
 }
 
-.site-footer-meta > a:hover {
+.site-footer-meta-left a:hover {
   color: var(--text);
 }
 
