@@ -4,7 +4,9 @@
  *  （cobe 3D 球已退役，桌面与手机同一张图，断点处只换布局不改数据）；
  *  站点按 IP 归属地落点（geo 由服务端页取好传入，浏览器不再直接调数据接口）；
  *  节点画成状态色亮星，悬停地图亮星或轮播胶囊两处互相点亮，点击进检测档案；
- *  两排恒滚动：半条轨道不足一屏宽时自动复制节点补满，实现无缝循环，悬停暂停。 */
+ *  两排恒滚动：半条轨道不足一屏宽时自动复制节点补满，实现无缝循环，悬停暂停。
+ *  地图铺全部站点；底部胶囊轮播只放调用方给的子集（tickerSites，服务端算好：现为质量序前 10、
+ *  每请求随机洗牌），按给定顺序渲染、不再在组件内重排——首屏只露质量靠前的站，不再铺全部。 */
 
 import { useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -17,22 +19,17 @@ const TONE_TEXT: Record<"ok" | "warn" | "down", string> = {
   down: "var(--tone-red-text)",
 };
 
-/** 排序权重：异常的站浮到最前面，健康的沉底，未知/停用排最后。 */
-function sortWeight(site: GlobeSite): number {
-  if (site.availability != null) {
-    const level = rateLevel(site.availability);
-    return level === "down" ? 0 : level === "warn" ? 1 : 3;
-  }
-  return site.enabled ? 2 : 4;
-}
-
 export function HeroArea({
   sites,
+  tickerSites,
   geo,
   main,
   side,
 }: {
+  /** 星球地图的落点：全部站点 */
   sites: GlobeSite[];
+  /** 底部胶囊轮播：调用方已按质量序截好（最多 10 个），按给定顺序渲染 */
+  tickerSites: GlobeSite[];
   geo: Record<string, SiteGeo>;
   main: ReactNode;
   /** AA 式 LAUNCH 侧栏位：右侧最新动态公告列，不传则保持双列 */
@@ -40,8 +37,6 @@ export function HeroArea({
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const router = useRouter();
-
-  const sorted = [...sites].sort((a, b) => sortWeight(a) - sortWeight(b));
 
   const chip = (site: GlobeSite, row: number, ghost = false, copy = 0) => {
     const tone =
@@ -80,10 +75,10 @@ export function HeroArea({
     );
   };
 
-  // 两排节点：上排正序、下排倒序；节点多时两排反向无缝滚动
+  // 两排节点：上排正序、下排接续；节点多时两排反向无缝滚动
   const rows = [
-    { items: sorted.slice(0, Math.ceil(sorted.length / 2)), reverse: false },
-    { items: sorted.slice(Math.ceil(sorted.length / 2)), reverse: true },
+    { items: tickerSites.slice(0, Math.ceil(tickerSites.length / 2)), reverse: false },
+    { items: tickerSites.slice(Math.ceil(tickerSites.length / 2)), reverse: true },
   ].filter((row) => row.items.length > 0);
 
   return (
