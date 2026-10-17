@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -20,7 +21,15 @@ from llm_price_monitor.ai import (
 )
 from llm_price_monitor.config import AIConfig, ModelTarget, PriceMonitorError, SiteSpec, load_config, sites_from_raw
 from llm_price_monitor.evidence import decode_response_body as _decode_response_body, is_preferred_response_url as _is_preferred_response_url, repair_mojibake as _repair_mojibake, slim_pricing_payload as _slim_pricing_payload, target_page_text as _target_page_text
-from llm_price_monitor.report import GROUP_REMOVED_MISSES, _persist_scan_results, classify, fingerprint, record_dict, run_once
+from llm_price_monitor.report import (
+    GROUP_REMOVED_MISSES,
+    _persist_scan_results,
+    _sanity_context,
+    classify,
+    fingerprint,
+    record_dict,
+    run_once,
+)
 from llm_price_monitor.store import Store
 from llm_price_monitor.useragent import DEFAULT_BROWSER_USER_AGENT, choose_user_agent
 from llm_price_monitor.tracker import PriceRecord
@@ -3488,13 +3497,16 @@ def test_price_sanity_rereads_catalog_each_site(tmp_path: Path, monkeypatch):
                                  "list": {"input": 0.446429, "output": 0.892857}, "source_url": "https://demo.test"}},
     }
     store = Store(tmp_path / "monitor.db")
-    calls = {"n": 0}
+    # 采集是并行的（所有站的采集线程先一起开工，主线程再按顺序收结果），要验「中途修正目录」
+    # 就必须让修正发生在首站处理完之后：二站的采集线程等这个事件，避免两个站的采集窗口重叠、
+    # 首站的 sanity 判据读到已修正的新目录而拿不到待复核标记（断言随机失败）
+    first_settled = threading.Event()
 
-    def collect(*_args):
-        # 两个站返回同样的真实价 0.6 元（厂商 3 元 × 站点 0.2 折）；
-        # 首站采完、二站开始前目录修正，二站应按新判据放行同一价格
-        calls["n"] += 1
-        if calls["n"] >= 2:
+    def collect(self, spec, *_args):
+        # 两个站返回同样的真实价 0.6 元（厂商 3 元 × 站点 0.2 折）
+        if spec.id == "second":
+            if not first_settled.wait(timeout=30):
+                raise AssertionError("首站未在 30 秒内处理完，二站放弃修正目录")
             store.set_document("catalog", good_catalog)
         return [PriceRecord("demo-model", 0.6, 1.2, "CNY/1M tokens", "https://demo.test/pricing", 0, {"group": "default"})]
 
@@ -3506,8 +3518,22 @@ def test_price_sanity_rereads_catalog_each_site(tmp_path: Path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     store.set_document("catalog", bad_catalog)
+    # sanity 判据是每站现读的（_scan_prices 对每个站点各读一次），借首站读判据的时机做顺序闸：
+    # 首站读过判据即视为首站已进入处理，放行二站去修正目录
+    real_sanity_context = _sanity_context
+
+    def gated_sanity_context(store_arg):
+        models, rate = real_sanity_context(store_arg)
+        if store_arg is store and not first_settled.is_set():
+            first_settled.set()
+        return models, rate
+
+    monkeypatch.setattr("llm_price_monitor.report.scans._sanity_context", gated_sanity_context)
     monkeypatch.setattr(NetworkAdapter, "collect", collect)
-    run_once(load_config(config_path), store=store, client=httpx.Client())
+    try:
+        run_once(load_config(config_path), store=store, client=httpx.Client())
+    finally:
+        first_settled.set()
 
     # 首站 0.6 对坏判据 2022 元 = 0.0003 倍：首轮只挂待复核标记不作废，价照常入库
     first = store.latest_all()["first:demo-model:default"]
