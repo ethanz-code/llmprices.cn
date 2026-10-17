@@ -3,16 +3,17 @@
 /** 站点人气管理：各站交流群/访问量/排名一览 + 上次取数时间 + 手动补采。
  *  数据来自 /api/sites/popularity/admin（含未启用站，选站要用）；两个按钮都提交
  *  collect-popularity 任务并轮询到结束：「立即补采」只查还有数据要补的站，
- *  「全量刷新」无视复查期逐站重查。列表顺序（待补在前）与整轮采集顺序一致。
+ *  「全量刷新」无视复查期逐站重查。列表顺序（待补在前）与整轮采集顺序一致；
+ *  状态标签可分「全部/待补/正常/无数据」筛选，标签上直接带数量。
  *  每行的「趋势」按钮打开该站的人气趋势图（后端逐轮记点，详情页同图）。 */
 
 import { useCallback, useEffect, useState } from "react";
 import { DataTable, type DColumn } from "./DataTable";
-import { Btn, LoadingRows, Modal, toast } from "./ui";
+import { Btn, LoadingRows, Modal, Seg, toast } from "./ui";
 import { apiSend, errorText } from "@/lib/api";
 import { getSiteInfo } from "@/lib/sites";
 import { formatTime } from "@/lib/format";
-import { groupKindLabel, loadSitePopularityHistory, type PopularityPoint, type SiteGroup } from "@/lib/popularity";
+import { groupKindLabel, loadSitePopularityHistory, rankSourceLabel, type PopularityPoint, type SiteGroup } from "@/lib/popularity";
 import { PopularityTrendChart } from "./PopularityTrendChart";
 import { formatCompact } from "@/lib/format";
 import { IconUsers } from "./icons";
@@ -37,6 +38,16 @@ interface PopularityAdminData {
   total: number;
 }
 
+/** 状态筛选：全部 / 待补 / 正常 / 无数据。 */
+type StatusFilter = "all" | "pending" | "normal" | "no_data";
+
+/** 行状态口径：状态标签与筛选标签共用，避免两处判定漂移。 */
+function rowStatus(row: PopularityRow): Exclude<StatusFilter, "all"> {
+  if (row.needs_query) return "pending";
+  if (row.no_data) return "no_data";
+  return "normal";
+}
+
 /** 采集时间分档文案：刚采/几天前/一周以上/还没采过。 */
 function freshnessText(checkedAt: number | null | undefined): string {
   if (!checkedAt) return "还没采过";
@@ -49,6 +60,8 @@ function freshnessText(checkedAt: number | null | undefined): string {
 export function AdminPopularity() {
   const [data, setData] = useState<PopularityAdminData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // 状态筛选：清扫待补和数据缺口时先切到对应视图，比在全部里翻找省事
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   // 趋势弹窗：打开时按需拉该站的点（列表接口不带序列，避免整表膨胀）
   const [trendSite, setTrendSite] = useState<string | null>(null);
   const [trendPoints, setTrendPoints] = useState<PopularityPoint[] | null>(null);
@@ -169,7 +182,7 @@ export function AdminPopularity() {
       sorter: (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
       render: (_v, row) =>
         row.rank ? (
-          <span className="mono" title="Tranco 全网榜，越靠前越热">
+          <span className="mono" title="全网排名，越靠前越热">
             {formatCompact(row.rank)}
           </span>
         ) : (
@@ -196,25 +209,42 @@ export function AdminPopularity() {
       key: "needs_query",
       title: "状态",
       width: 90,
-      render: (_v, row) =>
-        row.needs_query ? (
-          <span className="tag tone-yellow" title="有外部数据还没拿到（或已到复查期），下一轮采集优先补">
-            待补
-          </span>
-        ) : row.no_data ? (
-          <span
-            className="tag tone-gray"
-            title="SimilarWeb 与 Tranco 都没有这个站的数据（站太小，一个月后自动复查一次）"
-          >
-            无数据
-          </span>
-        ) : (
+      render: (_v, row) => {
+        const status = rowStatus(row);
+        if (status === "pending") {
+          return (
+            <span className="tag tone-yellow" title="有外部数据还没拿到（或已到复查期），下一轮采集优先补">
+              待补
+            </span>
+          );
+        }
+        if (status === "no_data") {
+          return (
+            <span
+              className="tag tone-gray"
+              title="SimilarWeb 没有这个站的数据（站太小或没被收录，一个月后自动复查一次）"
+            >
+              无数据
+            </span>
+          );
+        }
+        return (
           <span className="tag tag-quiet" title="访问量与排名都有结论，且都在复查期内">
             正常
           </span>
-        ),
+        );
+      },
     },
   ];
+
+  // 状态标签上的数字按当前行算，与切筛选后的实际条数一致
+  const statusCounts: Record<StatusFilter, number> = { all: 0, pending: 0, normal: 0, no_data: 0 };
+  for (const row of data?.rows ?? []) {
+    statusCounts.all += 1;
+    statusCounts[rowStatus(row)] += 1;
+  }
+  const visibleRows =
+    statusFilter === "all" ? (data?.rows ?? []) : (data?.rows ?? []).filter((row) => rowStatus(row) === statusFilter);
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -227,7 +257,7 @@ export function AdminPopularity() {
           </span>
         </div>
         <p style={{ fontSize: 12.5, color: "var(--text-2)", margin: 0, lineHeight: 1.7 }}>
-          访问量按 SimilarWeb 公开数据估算（每月更新），排名来自 Tranco 全网榜，群人数按 Telegram 公开页面统计。
+          访问量与排名都来自 SimilarWeb（每月更新），群人数按 Telegram 公开页面统计。
           SimilarWeb 对单个出口 IP 限流，采集会自动轮换采集出口里的节点把请求分散开；这一轮没轮到的站，下一轮定时采集会补上。
           「立即补采」只查还有数据要补的站；「全量刷新」无视复查期、逐站重查外部源，更慢也更耗额度。
         </p>
@@ -244,7 +274,7 @@ export function AdminPopularity() {
             size="sm"
             disabled={refreshing}
             onClick={() => refresh(true)}
-            title="无视复查期，逐站重查外部源（SimilarWeb/Tranco），额度消耗大、整轮更久"
+            title="无视复查期，逐站重查外部源（SimilarWeb），额度消耗大、整轮更久"
           >
             全量刷新
           </Btn>
@@ -263,15 +293,42 @@ export function AdminPopularity() {
             <p style={{ color: "var(--text-3)", marginTop: 10 }}>还没有站点。先到「站点管理」添加。</p>
           </div>
         ) : (
-          <DataTable<PopularityRow>
-            rowKey="site_id"
-            columns={columns}
-            rows={data.rows}
-            paginated
-            defaultPageSize={20}
-            pageSizeStorageKey="admin-popularity"
-            scrollX={800}
-          />
+          <>
+            {/* 状态筛选：标签直接带数量，待补和无数据各有多少一眼可见 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 10,
+                padding: "12px 16px",
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              <Seg
+                value={statusFilter}
+                onChange={(next) => setStatusFilter(next as StatusFilter)}
+                options={[
+                  { value: "all", label: <>全部 <span className="mono" style={{ opacity: 0.6 }}>{statusCounts.all}</span></> },
+                  { value: "pending", label: <>待补 <span className="mono" style={{ opacity: 0.6 }}>{statusCounts.pending}</span></> },
+                  { value: "normal", label: <>正常 <span className="mono" style={{ opacity: 0.6 }}>{statusCounts.normal}</span></> },
+                  { value: "no_data", label: <>无数据 <span className="mono" style={{ opacity: 0.6 }}>{statusCounts.no_data}</span></> },
+                ]}
+              />
+            </div>
+            <DataTable<PopularityRow>
+              /* 切筛选重挂：页码/排序回到初始，避免停在上一次的页码上 */
+              key={statusFilter}
+              rowKey="site_id"
+              columns={columns}
+              rows={visibleRows}
+              paginated
+              defaultPageSize={20}
+              pageSizeStorageKey="admin-popularity"
+              scrollX={800}
+              empty={statusFilter === "all" ? "暂无数据" : "这个状态下没有站点，切回「全部」看看别的。"}
+            />
+          </>
         )}
       </div>
 
