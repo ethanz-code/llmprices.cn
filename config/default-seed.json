@@ -7,6 +7,10 @@
     "retention_status_days": 90,
     "retention_ai_log_days": 7,
     "assistant_daily_limit": 10,
+    "ai_ignored_errors": [],
+    "monitor_models": [],
+    "monitor_models_dismissed": [],
+    "monitor_model_max_age_months": 3,
     "fallback_proxy": null,
     "schedule": {
       "price": 180,
@@ -15,7 +19,8 @@
       "catalog": 1440,
       "rankings": 1440,
       "discovery": 1440,
-      "screenshot": 1440
+      "screenshot": 1440,
+      "popularity": 1440
     }
   },
   "ai": {
