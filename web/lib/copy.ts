@@ -246,6 +246,8 @@ export const footer = {
     github: "GitHub 仓库",
     mail: "邮件联系",
   },
+  /** ICP 备案号：工信部核准后挂在页脚，链接到 beian.miit.gov.cn；未备案的站点留空则不渲染这一项 */
+  icp: "鲁ICP备2024099705号-3",
   /** 企业微信二维码：直接平铺在页脚右列（企业联系人名片码，非客服），替换 web/public/wecom-qr.png 即可生效 */
   wecomQrSrc: "/wecom-qr.png",
   /** 客服入口的固定说法：页脚二维码旁、各处「找客服」文案共用 */

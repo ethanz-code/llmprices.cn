@@ -48,6 +48,11 @@ export function SiteFooter() {
       </div>
       <div className="site-footer-meta">
         <span>© 2026 {site.name}</span>
+        {footer.icp ? (
+          <a href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">
+            {footer.icp}
+          </a>
+        ) : null}
         <span className="site-footer-meta-links">
           <Link href="/history">{footer.links.history}</Link>
           <Link href="/articles">{footer.links.articles}</Link>

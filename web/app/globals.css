@@ -3839,6 +3839,17 @@ button.footer-icon {
   color: var(--text);
 }
 
+/* 备案号链接与 meta 行其他链接同款式 */
+.site-footer-meta > a {
+  color: var(--text-3);
+  text-decoration: none;
+  transition: color var(--dur);
+}
+
+.site-footer-meta > a:hover {
+  color: var(--text);
+}
+
 /* 提建议按钮与链接同款式 */
 .site-footer-meta-links button {
   background: none;
