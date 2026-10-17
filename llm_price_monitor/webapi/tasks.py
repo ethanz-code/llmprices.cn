@@ -7,8 +7,12 @@ warn/error 抄送流水（task_errors 文档），独立于任务日志的滚动
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import os
 import re
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -28,10 +32,24 @@ MAX_TASK_LOG_LINES = 500
 # 全量写盘会让 tasks 文档膨胀到十几 MB；更早的任务只留一条归档说明（内存里日志不裁）
 KEEP_LOGGED_RUNS = 10
 
+# 保留完整 result 的最近任务数：单条 collect-status 的 result 有 1.7 MB（85 站的原始快照），
+# 留 10 条会把 tasks 文档撑到 14 MB——任务进行中这份文档每几秒整份重写一次、管理台还每 4 秒
+# 整份读一次，写锁会把页面读库挡在外面（2026-10-16 页面变慢定位）。前端列表只读
+# *_total / models_found 计数，所以除最新一条外一律改用 _slim_result 摘要。
+KEEP_FULL_RESULT_RUNS = 1
+
+# 落盘合并窗口（秒）：任务进行中每行日志都会调 _persist()，不合并就是每 1–3 秒整份重写
+# 十几 MB 的文档；窗口内的后续变更由尾随定时器补写，任务创建/终态走 force 立即落盘。
+_PERSIST_MIN_INTERVAL = 3.0
+
 _lock = threading.Lock()
+# 写盘串行锁：只护住 store.set_document，避免合并窗口外的两次写盘交错互相覆盖
+_write_lock = threading.Lock()
 _tasks: dict[str, dict[str, Any]] = {}
 _RUNNING_KINDS: dict[str, str] = {}
 _store: Any = None
+_last_persist_at = 0.0
+_persist_timer: threading.Timer | None = None
 
 # 异常卡片的持久化流水：warn/error 日志写入任务日志时同步抄送一份（上限条数滚动淘汰）。
 # 任务日志只给最近 KEEP_LOGGED_RUNS 个任务保留、更早的归档省略，异常历史靠这份流水留存；
@@ -78,7 +96,7 @@ def attach_store(store: Any) -> None:
             _tasks[entry["id"]] = entry
         _journal[:] = _merge_journal([item for item in journal if isinstance(item, dict)])
     if marked_failed:
-        _persist()
+        _persist(force=True)
 
 
 def _slim_result(result: Any) -> Any:
@@ -98,19 +116,29 @@ def _slim_result(result: Any) -> Any:
     return slim
 
 
-def _persist() -> None:
-    """把最近的任务记录（含日志）写入存储；未接入存储时跳过。"""
+def _persist(*, force: bool = False) -> None:
+    """把最近的任务记录（含日志）写入存储；未接入存储时跳过。
+
+    写盘按 _PERSIST_MIN_INTERVAL 合并：非 force 调用落在窗口内时只安排一次尾随补写，
+    保证「最后一次变更」不丢；force 用于任务创建、终态与重启标记，状态转换即时落盘。"""
     store = _store
     if store is None:
         return
+    global _last_persist_at, _persist_timer
     with _lock:
+        now = time.time()
+        if not force and now - _last_persist_at < _PERSIST_MIN_INTERVAL:
+            _schedule_trailing_persist(_PERSIST_MIN_INTERVAL - (now - _last_persist_at))
+            return
+        _last_persist_at = now
+        if _persist_timer is not None:
+            _persist_timer.cancel()
+            _persist_timer = None
         max_runs = MAX_TASK_RUNS
         items = sorted(_tasks.values(), key=lambda item: str(item["started_at"]), reverse=True)
         snapshot = [dict(item, logs=list(item["logs"])) for item in items[:max_runs]]
         for index, entry in enumerate(snapshot):
-            if index < KEEP_LOGGED_RUNS:
-                continue
-            if entry["logs"]:
+            if index >= KEEP_LOGGED_RUNS and entry["logs"]:
                 entry["logs"] = [
                     {
                         "time": entry.get("finished_at") or entry["started_at"],
@@ -118,12 +146,24 @@ def _persist() -> None:
                         "level": "info",
                     }
                 ]
-            if entry.get("result") is not None:
+            if index >= KEEP_FULL_RESULT_RUNS and entry.get("result") is not None:
                 entry["result"] = _slim_result(entry["result"])
-    try:
-        store.set_document("tasks", {"runs": snapshot})
-    except Exception as exc:  # 写盘失败不阻断采集：日志属辅助信息，任务状态仍在内存可用
-        _log.warning("任务记录写盘失败：%s", exc)
+    with _write_lock:
+        try:
+            store.set_document("tasks", {"runs": snapshot})
+        except Exception as exc:  # 写盘失败不阻断采集：日志属辅助信息，任务状态仍在内存可用
+            _log.warning("任务记录写盘失败：%s", exc)
+
+
+def _schedule_trailing_persist(delay: float) -> None:
+    """合并窗口的尾随落盘：窗口内没有新写入时补一次 force 写盘（调用方须持有 _lock）。"""
+    global _persist_timer
+    if _persist_timer is not None:
+        return
+    timer = threading.Timer(max(delay, 0.0), lambda: _persist(force=True))
+    timer.daemon = True
+    _persist_timer = timer
+    timer.start()
 
 
 def _append_log(task_id: str, message: str, level: str) -> None:
@@ -170,8 +210,8 @@ def _persist_journal() -> None:
         _log.warning("异常流水写盘失败：%s", exc)
 
 
-def submit(kind: str, fn: Callable[[], Any]) -> str:
-    """提交后台任务并立即返回 task_id；同一 kind 同时只允许一个运行中的任务。"""
+def _register(kind: str) -> str:
+    """冲突检查 + 建任务条目 + 立即落盘：线程版与子进程版共用同一套注册表语义。"""
     with _lock:
         conflict = _conflict_of(kind)
         if conflict:
@@ -194,7 +234,27 @@ def submit(kind: str, fn: Callable[[], Any]) -> str:
             "logs": [],
         }
         _RUNNING_KINDS[kind] = task_id
-    _persist()
+    _persist(force=True)
+    return task_id
+
+
+def _finish(task_id: str, *, status: str, result: Any = None, error: str | None = None) -> None:
+    """任务收尾（线程版与子进程版共用）：写终态、释放 kind 占用、立即落盘。
+
+    reset() 可能已把任务清出注册表（测试清场）；条目不存在时静默退出。"""
+    with _lock:
+        entry = _tasks.get(task_id)
+        if entry is not None:
+            entry.update(status=status, result=result, error=error, finished_at=time.time())
+            _RUNNING_KINDS.pop(str(entry["kind"]), None)
+    _persist(force=True)
+
+
+def submit(kind: str, fn: Callable[[], Any]) -> str:
+    """提交后台任务并立即返回 task_id；同一 kind 同时只允许一个运行中的任务。
+
+    任务体在本进程线程里跑：测试与显式传任务的调用走这条路径；生产走 submit_remote。"""
+    task_id = _register(kind)
 
     def _write_log(message: str, level: str) -> None:
         _append_log(task_id, message, level)
@@ -205,25 +265,104 @@ def submit(kind: str, fn: Callable[[], Any]) -> str:
             result = fn()
         except Exception as exc:  # 后台线程后备：任何异常都落到任务状态里供前端展示
             _append_log(task_id, f"任务失败：{exc}", "error")
-            with _lock:
-                # reset() 可能已把任务清出注册表（测试清场）；条目不存在时静默退出
-                entry = _tasks.get(task_id)
-                if entry is not None:
-                    entry.update(status="failed", error=str(exc), finished_at=time.time())
-                _RUNNING_KINDS.pop(kind, None)
-            _persist()
+            _finish(task_id, status="failed", error=str(exc))
         else:
-            with _lock:
-                entry = _tasks.get(task_id)
-                if entry is not None:
-                    entry.update(status="done", result=result, finished_at=time.time())
-                _RUNNING_KINDS.pop(kind, None)
-            _persist()
+            _finish(task_id, status="done", result=result)
         finally:
             tasklog.unbind()
 
     threading.Thread(target=_run, daemon=True, name=f"webapi-{kind}-{task_id[:8]}").start()
     return task_id
+
+
+# 任务执行方式：process = 采集类任务体跑在独立子进程（默认，采集期不再与页面请求争 CPU）；
+# inline = 在本进程线程里跑（测试用：路由级用例要 monkeypatch 任务体、也不真打外站）。
+# 两种模式的注册表语义完全一致（同冲突判定、同落盘、同日志）。
+_TASK_MODE_ENV = "PRICE_MONITOR_TASK_MODE"
+
+# 子进程入口：sys.executable 保证用同一个虚拟环境（容器里同样成立，部署无需改动）
+_REMOTE_COMMAND: list[str] = [sys.executable, "-m", "llm_price_monitor.webapi.task_runner"]
+
+
+def submit_remote(kind: str, params: dict[str, Any] | None = None, *, store: Any = None) -> str:
+    """提交采集/刷新任务：默认起独立子进程执行，主进程只收日志与结果。
+
+    拆进程的动机（2026-10-16 根治采集期页面变慢）：此前任务体与 API 同进程，一轮采集的
+    解析与写库会把接口从毫秒级拖到秒级（GIL 与 CPU 争用）；拆开后两者互不干扰。
+    子进程继承 cwd 与环境变量，DB 走 PRICE_MONITOR_DB 或工作目录下的 var/monitor.db。
+
+    store 只在 inline 模式（测试）用得上：直接调调度器的用例没经过 create_app，
+    注册表里没有接入存储，由调用方把自己的 store 传进来构建任务体。"""
+    if os.environ.get(_TASK_MODE_ENV) == "inline":
+        target = store or _store
+        if target is None:
+            raise RuntimeError("任务执行器未接入存储，无法在进程内构建任务体")
+        from llm_price_monitor.webapi.job_registry import build_job
+
+        return submit(kind, build_job(kind, params or {}, target))
+    task_id = _register(kind)
+    command = [*_REMOTE_COMMAND, "--kind", kind, "--params", json.dumps(params or {}, ensure_ascii=False)]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            # stderr 合并进 stdout：一边读一边转日志，避免两条管道写满后互相等成死锁
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            cwd=os.getcwd(),
+            env=os.environ.copy(),
+        )
+    except OSError as exc:
+        # 起不来就地把任务置为失败：前端在任务列表里能看到原因，不用猜
+        _finish(task_id, status="failed", error=f"子进程启动失败：{exc}")
+        return task_id
+    threading.Thread(
+        target=_pump_remote,
+        args=(task_id, process),
+        daemon=True,
+        name=f"webapi-remote-{task_id[:8]}",
+    ).start()
+    return task_id
+
+
+def _pump_remote(task_id: str, process: subprocess.Popen[str]) -> None:
+    """读子进程输出：JSON 行收成日志/结果/错误，其余原样按日志转存；退出后写终态。"""
+    result: Any = None
+    error: str | None = None
+    saw_result = False
+    for raw in process.stdout or []:
+        line = raw.strip()
+        if not line:
+            continue
+        payload: Any = None
+        if line.startswith("{"):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                payload = None
+        if not isinstance(payload, dict):
+            _append_log(task_id, line[:500], "info")
+            continue
+        line_kind = payload.get("type")
+        if line_kind == "log":
+            _append_log(task_id, str(payload.get("message") or ""), str(payload.get("level") or "info"))
+        elif line_kind == "result":
+            result = payload.get("result")
+            saw_result = True
+        elif line_kind == "error":
+            error = str(payload.get("error") or "任务失败")
+    code = process.wait()
+    if error is None and code != 0:
+        error = f"任务进程异常退出（退出码 {code}）"
+    elif error is None and not saw_result:
+        # runner 一定以 result 或 error 收场：两头都没有说明子进程没跑完就没了
+        error = "任务进程没有返回结果"
+    if error is not None:
+        _append_log(task_id, f"任务失败：{error}", "error")
+        _finish(task_id, status="failed", error=error)
+    else:
+        _finish(task_id, status="done", result=result)
 
 
 def is_running(kind: str) -> bool:
@@ -245,11 +384,17 @@ def get(task_id: str) -> dict[str, Any] | None:
 
 def reset() -> None:
     """清空任务注册表并解除持久化（仅测试使用）：注册表进程内共享，测试间需要显式清场。"""
-    global _store
+    global _store, _last_persist_at, _persist_timer
     with _lock:
         _tasks.clear()
         _RUNNING_KINDS.clear()
         _journal.clear()
+        # 合并窗口状态一并清场：残留的窗口时间戳会让下一个测试的首写被节流，
+        # 悬着的尾随定时器也会在别的用例里补一次落盘
+        _last_persist_at = 0.0
+        if _persist_timer is not None:
+            _persist_timer.cancel()
+            _persist_timer = None
     _store = None
 
 

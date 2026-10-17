@@ -6,6 +6,7 @@ _MAX_ROW_LIMIT 定义在包 __init__（tests/test_store.py 对 `llm_price_monito
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from collections.abc import Iterator
@@ -15,6 +16,8 @@ from typing import Any
 from llm_price_monitor import store as _store_pkg
 
 from .schema import _SCHEMA, _migrate_price_records
+
+_log = logging.getLogger(__name__)
 
 
 def _dumps(value: Any) -> str:
@@ -26,6 +29,14 @@ class StoreBase:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
+            # WAL：读不再被写阻塞（默认 delete journal 下，采集写入期间页面读库要排在写锁后面，
+            # 2026-10-16 页面变慢定位）。journal_mode 是库级持久设置，开一次即可；
+            # 手工备份 monitor.db 时须连 -wal/-shm 一起拷（或无活动连接时再拷）。
+            # 拿不到独占窗口时（重载瞬间旧进程仍在写）不阻塞启动，下次启动会再试。
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+            except sqlite3.OperationalError as exc:
+                _log.warning("开启 WAL 失败，保持原 journal 模式：%s", exc)
             conn.executescript(_SCHEMA)
             self._migrate_price_records(conn)
 
