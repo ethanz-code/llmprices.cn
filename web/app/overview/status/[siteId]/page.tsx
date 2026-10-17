@@ -21,10 +21,11 @@ import {
 } from "@/lib/channelStatus";
 import type { Tone } from "@/components/ToneTag";
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import { getSiteInfo, loadSiteHomepages } from "@/lib/sites";
 import { loadSiteScreenshots, shotSrc } from "@/lib/screenshots";
-import { groupKindLabel, groupPlatformLabel, loadSitePopularity, loadSitePopularityHistory, type PopularityPoint, type SitePopularity } from "@/lib/popularity";
-import { PopularityTrendChart } from "@/components/PopularityTrendChart";
+import { groupKindLabel, groupPlatformLabel, loadSitePopularity, loadSitePopularityHistory, rankSourceLabel, type PopularityPoint, type SitePopularity } from "@/lib/popularity";
+import { PopularityRankChart, PopularityVisitsChart } from "@/components/PopularityTrendChart";
 import { formatCompact } from "@/lib/format";
 import type { NoticeSnapshot, OverviewData, StatusSnapshot } from "@/lib/types";
 import { pageMetadata } from "@/lib/seo";
@@ -178,70 +179,130 @@ async function ScreenshotSection({ siteId }: { siteId: string }) {
   );
 }
 
-/** 站点人气：交流群、月访问量估算与全网排名——判断站点规模与售后渠道的公开信息，
- *  采集不到任何一项时整块不渲染（与截图区同一套规则）。 */
+/** 标签列宽：交流群与规模指标共用，值从同一列起排（4 个汉字 + 余量）。 */
+const LABEL_W = 56;
+
+/** 一行「标签 + 值 + 附注」：交流群与规模指标共用同一套排版，标签定宽左对齐。 */
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+      <span style={{ color: "var(--text-3)", fontSize: 12.5, flex: `0 0 ${LABEL_W}px` }}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** 指标值：等宽、比正文大一档，一眼能抓住数字。 */
+function MetaValue({ children }: { children: ReactNode }) {
+  return (
+    <span className="mono" style={{ fontSize: 15, fontWeight: 550 }}>
+      {children}
+    </span>
+  );
+}
+
+/** 站点人气：交流群 + 规模指标（月访问量/全网排名）与各自的趋势图——判断站点规模与售后渠道的
+ *  公开信息。采集不到任何一项时整块不渲染（与截图区同一套规则）。
+ *
+ *  每个信号一行：标签 → 值 → 变化/上次 → 来源，紧跟它自己的图；来源只在行内标一次，
+ *  图里不再重复写。 */
 function PopularitySection({ popularity, history }: { popularity?: SitePopularity; history?: PopularityPoint[] }) {
   if (!popularity) return null;
   const groups = popularity.groups ?? [];
   const traffic = popularity.traffic ?? {};
-  const hasTraffic = traffic.monthly_visits != null || traffic.rank != null;
-  if (groups.length === 0 && !hasTraffic) return null;
+  const points = history ?? [];
+  const hasVisits = traffic.monthly_visits != null;
+  const hasRank = traffic.rank != null;
+  if (groups.length === 0 && !hasVisits && !hasRank) return null;
+  // 排名「上次」取自我们自己攒的点，不足两个点或值没变就不显示
+  const rankSeries = points.filter((point) => point.rank != null && point.rank_source !== "tranco").map((point) => point.rank as number);
+  const prevRank = rankSeries.length >= 2 ? rankSeries[rankSeries.length - 2] : null;
+  const change = traffic.visits_change;
+  const changeShown = typeof change === "number" && Math.abs(change) >= 0.005;
+  const visitPoints = points.filter((point) => point.visits != null).length;
+  const rankPoints = points.filter((point) => point.rank != null && point.rank_source !== "tranco").length;
   return (
-    <section className="panel" style={{ display: "grid", gap: 10, padding: 16 }}>
-      <h3 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+    <section className="panel" style={{ display: "grid", padding: 16 }}>
+      <h3 className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
         站点人气
         <TermTip term="site_popularity" />
         <span style={{ color: "var(--text-3)", fontWeight: 400, fontSize: 12.5 }}>
           {popularity.checked_at ? `${formatTime(popularity.checked_at)} 更新` : ""}
         </span>
       </h3>
-      <div style={{ display: "grid", gap: 8, fontSize: 13.5 }}>
-        {groups.length > 0 && (
-          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>交流群</span>
-            {groups.map((group) => (
-              <span key={`${group.label}:${group.url}`} title={group.title} style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
-                {group.url ? (
-                  <a className="mono" href={group.url} target="_blank" rel="noreferrer">
-                    {group.label}
-                  </a>
-                ) : (
-                  <span className="mono">{group.label}</span>
+      {groups.length > 0 && (
+        <MetaRow label="交流群">
+          {groups.map((group) => (
+            <span key={`${group.label}:${group.url}`} title={group.title} style={{ display: "inline-flex", alignItems: "baseline", gap: 6 }}>
+              {group.url ? (
+                <a className="mono" href={group.url} target="_blank" rel="noreferrer">
+                  {group.label}
+                </a>
+              ) : (
+                <span className="mono">{group.label}</span>
+              )}
+              <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>
+                {/* 标签里已经带平台名的不再重复（「QQ 群 123」后跟一个「QQ」很傻）；人数照常标 */}
+                {!group.label.toLowerCase().includes(groupPlatformLabel(group.type).toLowerCase()) &&
+                  groupPlatformLabel(group.type)}
+                {group.members != null &&
+                  `${group.label.toLowerCase().includes(groupPlatformLabel(group.type).toLowerCase()) ? "" : " "}${groupKindLabel(group)} · ${formatCompact(group.members)} 人`}
+                {group.online != null ? `（${formatCompact(group.online)} 在线）` : ""}
+              </span>
+            </span>
+          ))}
+        </MetaRow>
+      )}
+      {(hasVisits || hasRank) && (
+        <div
+          style={{
+            display: "grid",
+            gap: 16,
+            minWidth: 0,
+            ...(groups.length > 0 ? { borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 } : {}),
+          }}
+        >
+          {hasVisits && (
+            <div style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              <MetaRow label="月访问量">
+                <MetaValue>{formatCompact(traffic.monthly_visits as number)}</MetaValue>
+                {changeShown && (
+                  <span style={{ fontSize: 12.5, color: (change as number) >= 0 ? "var(--chart-ok)" : "var(--chart-down)" }}>
+                    较上月 {(change as number) >= 0 ? "↑" : "↓"}
+                    {(Math.abs(change as number) * 100).toFixed(1)}%
+                  </span>
                 )}
-                <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>
-                  {group.type === "telegram"
-                    ? `${groupPlatformLabel(group.type)}${group.members != null ? ` ${groupKindLabel(group)}` : ""}`
-                    : groupPlatformLabel(group.type)}
-                  {group.members != null ? ` · ${formatCompact(group.members)} 人` : ""}
-                  {group.online != null ? `（${formatCompact(group.online)} 在线）` : ""}
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
-        {hasTraffic && (
-          <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
-            <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>热度</span>
-            {traffic.monthly_visits != null && (
-              <span>
-                月访问量约 <b className="mono">{formatCompact(traffic.monthly_visits)}</b>
-                <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>（按公开数据估算）</span>
-              </span>
-            )}
-            {traffic.rank != null && (
-              <span>
-                全网排名约 <b className="mono">{formatCompact(traffic.rank)}</b>
-                <span style={{ color: "var(--text-3)", fontSize: 12.5 }}>（Tranco 榜）</span>
-              </span>
-            )}
-          </div>
-        )}
-        {history && history.length > 0 && (
-          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 2 }}>
-            <PopularityTrendChart points={history} />
-          </div>
-        )}
-      </div>
+                <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>SimilarWeb 公开估算</span>
+              </MetaRow>
+              {visitPoints >= 2 ? (
+                <PopularityVisitsChart points={points} />
+              ) : (
+                <p style={{ color: "var(--text-3)", fontSize: 12.5, lineHeight: 1.7, margin: 0, paddingLeft: LABEL_W + 10 }}>
+                  趋势从今天开始积累：每轮采集记一个点，攒够两个就能画出第一条线（当前 {visitPoints} 个）。
+                </p>
+              )}
+            </div>
+          )}
+          {hasRank && (
+            <div style={{ display: "grid", gap: 6, minWidth: 0 }}>
+              <MetaRow label="全网排名">
+                <MetaValue>{formatCompact(traffic.rank as number)}</MetaValue>
+                {prevRank != null && prevRank !== traffic.rank && (
+                  <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>上次 {formatCompact(prevRank)}</span>
+                )}
+                <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>{rankSourceLabel(traffic.rank_source)}</span>
+              </MetaRow>
+              {rankPoints >= 2 ? (
+                <PopularityRankChart points={points} />
+              ) : (
+                <p style={{ color: "var(--text-3)", fontSize: 12.5, lineHeight: 1.7, margin: 0, paddingLeft: LABEL_W + 10 }}>
+                  趋势从今天开始积累：每轮采集记一个点，攒够两个就能画出第一条线（当前 {rankPoints} 个）。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -331,10 +392,10 @@ export default async function StatusDetailPage({
     error = cause instanceof Error ? cause.message : String(cause);
   }
 
-  // monitored 由本站在售价格行构建；overview 拉取失败时 undefined = 不过滤，保持全量
+  // monitored 由监控模型列表 + 本站在售价格行构建；overview 拉取失败时为空集 = 渠道区展示为空（不回退全量）
   const views = buildSiteViews(
     records,
-    overview ? buildMonitoredSets(overview.records) : undefined,
+    buildMonitoredSets(overview?.records ?? [], overview?.monitor_models ?? [], [siteId]),
   );
   const series = views.availability[siteId] ?? [];
   const channels = views.channels[siteId] ?? [];
@@ -378,6 +439,12 @@ export default async function StatusDetailPage({
                   <StatusCharts availability={series} channels={channels} />
                 </div>
               </section>
+
+              {channels.length === 0 && (
+                <p style={{ color: "var(--text-3)" }}>
+                  这个站暂时没有可展示的渠道：站方状态页的渠道名和我们监测的模型对不上。
+                </p>
+              )}
 
               {channels.length > 0 && (
                 <section

@@ -1,7 +1,7 @@
 /** 站点人气：交流群链接/群人数、月访问量估算与全网排名（后端定时采集，公开只读）。
  *
  * 数据来自站点公开信息：群链接读站点 /api/status 与首页，Telegram 人数读 t.me 预览页，
- * 月访问量是第三方估算（hypestat，小站无数据），排名是 Tranco 全网榜。页面按来源如实标注，
+ * 月访问量与全网排名都来自 SimilarWeb（同一个响应；拿不到访问量再退 hypestat 估算）。页面按来源如实标注，
  * 拿不到就显示"暂无公开数据"，不编数字。 */
 
 import { apiGet } from "./api";
@@ -25,7 +25,9 @@ export interface SiteTraffic {
   /** 第三方估算的月访问量 */
   monthly_visits?: number;
   visits_source?: string;
-  /** Tranco 全网排名（覆盖前 100 万域名） */
+  /** SimilarWeb 自报的「较上月变化」（小数，-0.085 = 降 8.5%） */
+  visits_change?: number;
+  /** SimilarWeb 全球排名 */
   rank?: number;
   rank_source?: string;
   updated_at?: number;
@@ -72,6 +74,13 @@ export async function loadSitePopularityHistory(siteId: string): Promise<Popular
   } catch {
     return [];
   }
+}
+
+/** 排名来源展示名：排名值挂哪个来源就标哪个（换源过渡期旧值仍标 Tranco，不张冠李戴）。 */
+export function rankSourceLabel(source?: string | null): string {
+  if (source === "tranco") return "Tranco 榜";
+  if (source === "similarweb") return "SimilarWeb 榜";
+  return "公开排名";
 }
 
 /** 数量级缩写统一走 lib/format 的 formatCompact（9.5k / 134.7k / 1.2M），全站一套英文写法。 */
@@ -132,7 +141,7 @@ export function popularityBadge(popularity?: SitePopularity | null): PopularityB
       const withLink = group.url ? `，加群链接 ${group.url}` : "";
       return line ? `${line.replace("：", "：")}${withLink}` : group.url ? `交流群：${group.label}（${groupPlatformLabel(group.type)}，无公开人数）${withLink}` : null;
     }),
-    traffic.rank ? `全网排名：约第 ${formatCompact(traffic.rank)} 名（Tranco 榜）` : null,
+    traffic.rank ? `全网排名：约第 ${formatCompact(traffic.rank)} 名（${rankSourceLabel(traffic.rank_source)}）` : null,
   ].filter((part): part is string => part !== null);
   return { lines, title: parts.join("\n") };
 }
