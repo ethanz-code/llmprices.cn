@@ -5,9 +5,9 @@ chat_link（new-api 后台「聊天链接」配置，主源）与首页 HTML 里
 Telegram 公开群/频道的成员数从 t.me 预览页取（真实数字、无需登录），QQ 群没有
 公开人数接口，只存群链接与群号。
 
-「月访问量」没有覆盖小站的免费数据源（实测：SimilarWeb 公共端点被 CloudFront 拒、
-Cloudflare Radar 只给 >20 万档位、Tranco 只给排名）：能拿到第三方估算（hypestat）
-就存数字并标来源，拿不到就退回 Tranco 全网排名当热度信号，页面按来源如实标注。
+「月访问量」和「全网排名」都走 SimilarWeb 站内 JSON API（同一个响应里带 overview.globalRank
+当前排名与 ranking.globalRankHistory 近三个月列表），拿不到再退 hypestat 公开页估算；
+排名与访问量同一次查询取回，不单独打第三个数据源，页面按来源如实标注。
 
 落 documents.site_popularity（site_id → 载荷），单站两个来源都失败时保留旧数据；
 新采集拿不到的数字字段按字段回退旧值，不会因为一次网络抖动把已有数据清掉。
@@ -42,9 +42,6 @@ HOMEPAGE_SCAN_LIMIT = 400_000
 
 # 单站群链接上限：正常站最多几个，超出多是页面里的杂链接
 MAX_GROUPS_PER_SITE = 8
-
-# Tranco 有速率限制（实测 1.1s 间隔会偶发 429），两次查询之间留的间隔
-TRANCO_INTERVAL_SECONDS = 2.0
 
 # 交流群链接识别：站点把群链接放在 /api/status（chat_link / 导航链接）或首页 HTML 里。
 # 协议前缀可选：公告里常写裸域名（"加入 t.me/xxx"），命中后统一补 https://。
@@ -90,7 +87,7 @@ SW_FREEZE_SECONDS = 900.0
 SW_ERROR_COOLDOWN_SECONDS = 300.0
 SW_MAX_ATTEMPTS = 4
 
-# 外部源复查间隔：拿到值后 7 天复查一次（SimilarWeb 月更、Tranco 日更，周更足够）；
+# 外部源复查间隔：拿到值后 7 天复查一次（SimilarWeb 月更，周更足够）；
 # 确认过「上游没有这个站的数据」的按月复查（小站体量变化慢，别每轮都白烧出口额度）。
 VALUE_RECHECK_SECONDS = 7 * 86_400
 EMPTY_RECHECK_SECONDS = 30 * 86_400
@@ -256,42 +253,6 @@ def fetch_telegram_stats(url: str, client: httpx.Client) -> dict[str, Any]:
     return stats
 
 
-@dataclass(frozen=True)
-class RankResult:
-    """Tranco 一次查询的结局：settled=上游明确给了结论（含「没收录」）；查询失败不算结论。"""
-
-    rank: int | None = None
-    settled: bool = False
-
-
-def fetch_tranco_rank(host: str, client: httpx.Client) -> RankResult:
-    """Tranco 每日榜排名（聚合 DNS/流量榜的研究数据，覆盖前 100 万域名）。
-
-    200 且榜单里有值 → 有排名；200 但榜单为空 → 上游明确没收录（settled=True，
-    记一个月复查期，别每轮都来问一遍）；其他状态码/网络失败 → 没结论，下轮重试。
-    """
-    try:
-        response = client.get(f"https://tranco-list.eu/api/ranks/domain/{host}")
-    except httpx.HTTPError:
-        return RankResult()
-    if response.status_code != 200:
-        return RankResult()
-    try:
-        payload = response.json()
-    except ValueError:
-        return RankResult()
-    ranks = payload.get("ranks") if isinstance(payload, dict) else None
-    if not isinstance(ranks, list):
-        return RankResult()
-    if not ranks:
-        return RankResult(None, True)
-    first = ranks[0] if isinstance(ranks[0], dict) else {}
-    value = first.get("rank")
-    if isinstance(value, (int, float)):
-        return RankResult(int(value), True)
-    return RankResult()
-
-
 def fetch_visits_estimate(host: str, client: httpx.Client) -> int | None:
     """第三方月访问量估算（hypestat）；站点太小没有数据时返回 None。"""
     try:
@@ -331,14 +292,15 @@ class TrafficResult:
     blocked=出口被 WAF 限流 / error=网络层失败（后两种换个出口可以再试）。
 
     visits_change 是 SimilarWeb 自报的「较上月变化」（小数，-0.085 = 降 8.5%）；
-    rank_points 是它自带的月度全球排名历史 [(ISO 日期, 排名)]，给趋势图补历史点用
-    （只有绝对值可信；同一响应里的百分比序列是压缩刻度，反推不出绝对访问量）。
+    rank 是它给的当前全球排名，rank_points 是自带的月度排名历史 [(ISO 日期, 排名)]，
+    两者都是绝对值（同一响应里的访问量百分比序列是压缩刻度，反推不出绝对访问量）。
     """
 
     kind: str
     visits: int | None = None
     visits_change: float | None = None
     rank_points: tuple[tuple[str, int], ...] = ()
+    rank: int | None = None
 
     @property
     def settled(self) -> bool:
@@ -459,14 +421,18 @@ class SimilarWebClient:
         visits = overview.get("visitsTotalCount")
         change = traffic.get("visitsTotalCountChange")
         rank_points = _rank_history_points(ranking.get("globalRankHistory"))
+        global_rank = overview.get("globalRank")
+        rank = int(global_rank) if isinstance(global_rank, (int, float)) and global_rank > 0 else (rank_points[-1][1] if rank_points else None)
         if isinstance(visits, (int, float)) and 0 < visits < 1e12:
             return TrafficResult(
                 "ok",
                 int(visits),
                 float(change) if isinstance(change, (int, float)) else None,
                 rank_points,
+                rank,
             )
-        return TrafficResult("empty", rank_points=rank_points)  # 0 或缺字段：太小站点的占位，不算抓到数据
+        # 0 或缺字段：太小站点的占位，不算抓到数据；排名若单独有值仍算结论
+        return TrafficResult("empty", rank_points=rank_points, rank=rank)
 
     def seconds_until_budget(self, *, now: float | None = None) -> float | None:
         """出口池还要等多少秒才有可用额度（0=现在就有；没有池子返回 None）。
@@ -540,18 +506,24 @@ def visits_current(traffic: dict[str, Any], *, now: float) -> bool:
 
 
 def rank_current(traffic: dict[str, Any], *, now: float) -> bool:
-    """Tranco 排名已有结论且没到复查期。"""
+    """全网排名（SimilarWeb）已有结论且没到复查期。
+
+    来源不是 SimilarWeb 的旧排名（历史上排行用过 Tranco）算「没结论」：换源后自然重查一次，
+    不用人工回填。
+    """
     if not isinstance(traffic, dict):
+        return False
+    if traffic.get("rank") is not None and traffic.get("rank_source") != "similarweb":
         return False
     ttl = VALUE_RECHECK_SECONDS if traffic.get("rank") else EMPTY_RECHECK_SECONDS
     return _within(traffic.get("rank_checked_at"), ttl, now)
 
 
 def needs_query(entry: dict[str, Any] | None, *, now: float | None = None) -> bool:
-    """这个站还有没有值得打的外部源（SimilarWeb/Tranco）？管理页「待补」与整轮跳过都用它。
+    """这个站还有没有值得打的外部源（SimilarWeb）？管理页「待补」与整轮跳过都用它。
 
-    两个外部源各自结算：拿到值、或一个月内确认过上游没有这个站的数据，就算结了；
-    有值的按 7 天复查（SimilarWeb 月更、Tranco 日更，周更足够）。任一源没结就得查——
+    访问量与排名两个信号各自结算：拿到值、或一个月内确认过上游没有，就算结了；
+    有值的按 7 天复查（SimilarWeb 月更，周更足够）。任一信号没结就得查——
     限流环境里额度优先花在「还没数据」和「数据变旧」的站上，确认过没数据的不白跑。
     """
     if not isinstance(entry, dict):
@@ -573,9 +545,9 @@ def collect_site(
     """采集单站人气；站点接口、首页、已存公告三个来源全空时返回 None（保留旧数据）。
 
     notice_text 是 store 里该站最近一条公告正文：公告是群号的高产来源（"加入 QQ 群 …"），
-    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的写库数据：两个外部源（Tranco /
-    SimilarWeb）各自到复查期才重查（见 visits_current / rank_current），群链接仍照常扫描
-    （站点接口与首页本来就是本轮要打的，只省外部源）；force=True 无视复查期全查。
+    顺带扫描比再打一次公告接口便宜。previous 是该站上一轮的写库数据：访问量与排名同源于
+    SimilarWeb，两者各自按复查期判断要不要重查（见 visits_current / rank_current），
+    群链接仍照常扫描（站点接口与首页本来就是本轮要打的，只省外部源）；force=True 无视复查期全查。
     """
     page_url = site_homepage(spec) or ""
     origin = _origin(str((spec.network or {}).get("url") or "")) or _origin(page_url)
@@ -638,16 +610,16 @@ def fetch_traffic(
     want_visits: bool,
     want_rank: bool,
 ) -> dict[str, Any]:
-    """查两个外部源（SimilarWeb/hypestat 访问量、Tranco 排名），查哪几个由调用方指定。
+    """查 SimilarWeb（月访问量 + 全网排名一次取回，拿不到访问量再退 hypestat 估算）。
 
-    want_* 由调用方按「复查期 + 本轮是否已结算」算好（整轮采集见 collect_site，补采见
-    owed_sources）：这样补采只补还欠的源，不会把已结算的源重复查一遍白烧额度。
+    want_visits/want_rank 由调用方按「复查期 + 本轮是否已结算」算好（整轮采集见 collect_site，
+    补采见 owed_sources）：任一为真就打一次 SimilarWeb（两个信号同源同查询，省额度）。
     返回 traffic 片段（本轮的新结论）；都没查时返回空 dict。
     """
     traffic: dict[str, Any] = {}
-    if want_visits:
-        # 月访问量：SimilarWeb 站内 API 是主源（覆盖面广、真实统计；请求按出口池分散，
-        # 被限流的出口自动冻结换下一个），SW 没给值再退 hypestat 公开页估算（覆盖面小）；
+    if want_visits or want_rank:
+        # 月访问量与全网排名都来自 SimilarWeb 同一个响应（覆盖广、真实统计；请求按出口池分散，
+        # 被限流的出口自动冻结换下一个），SW 没给访问量再退 hypestat 公开页估算（覆盖面小）；
         # 上游明确没数据时记一次结论（一个月内不重查），查询失败则不记、下轮接着试
         result = similarweb.visits_with_retry(host, host_label) if similarweb is not None else None
         visits: int | None = None
@@ -663,23 +635,23 @@ def fetch_traffic(
                 traffic["visits_change"] = result.visits_change  # 「较上月」变化，展示用
         elif result is not None and result.settled:
             traffic["visits_checked_at"] = time.time()
-        if result is not None and result.rank_points:
-            # SimilarWeb 自带的月度排名历史：趋势图补历史点用（绝对值可信）
-            traffic["sw_rank_history"] = [list(point) for point in result.rank_points]
-    if want_rank:
-        # Tranco 有速率限制：两次查询之间拉开间隔（保证跨站点也生效）
-        time.sleep(TRANCO_INTERVAL_SECONDS)
-        rank = fetch_tranco_rank(host, client)
-        if rank.rank is not None:
-            traffic.update({"rank": rank.rank, "rank_source": "tranco", "rank_checked_at": time.time()})
-        elif rank.settled:
-            traffic["rank_checked_at"] = time.time()
+        if result is not None:
+            if result.rank is not None:
+                traffic.update({"rank": result.rank, "rank_source": "similarweb", "rank_checked_at": time.time()})
+            elif result.settled:
+                traffic["rank_checked_at"] = time.time()  # 上游明确没有排名：记结论，一个月内不重查
+            if result.rank_points:
+                # SimilarWeb 自带的月度排名历史：趋势图补历史点用（写入后不落库，见 _merge_traffic）
+                traffic["sw_rank_history"] = [list(point) for point in result.rank_points]
     return traffic
 
 
 def _merge_traffic(previous: dict[str, Any], fresh: dict[str, Any]) -> dict[str, Any]:
     """字段逐个合并：本轮拿到的覆盖旧的，拿不到的保留旧值（防一次抖动清空）；
-    每个源的「结论时间」跟值一起走，updated_at 只在数字真变化时刷新。"""
+    每个源的「结论时间」跟值一起走，updated_at 只在数字真变化时刷新。
+
+    历史序列（*_history）不落库：它们只在拿到的那一轮用来补种趋势点（record_points），
+    点表自己就是历史；旧版本存过的也在这里清掉。"""
     merged = dict(previous)
     refreshed = False
     for key in (
@@ -698,6 +670,8 @@ def _merge_traffic(previous: dict[str, Any], fresh: dict[str, Any]) -> dict[str,
         merged[key] = value
         if key in ("monthly_visits", "rank"):
             refreshed = True
+    for key in [key for key in merged if key.endswith("_history")]:
+        merged.pop(key)
     if refreshed:
         merged["updated_at"] = time.time()
     return merged
@@ -735,29 +709,38 @@ def _iso_day_stamp(day: str) -> float | None:
         return None
 
 
-def record_points(store, site_id: str, traffic: dict[str, Any], *, now: float | None = None) -> int:
+def record_points(
+    store,
+    site_id: str,
+    values: dict[str, Any],
+    fresh: dict[str, Any] | None = None,
+    *,
+    now: float | None = None,
+) -> int:
     """把当前有效的访问量/排名记成时序点（趋势图的数据源）。
 
-    一天一个点、同天再采到新值覆盖（一次采集里先拿旧值、补采拿新值是常态）；
-    SimilarWeb 自带的月度排名历史顺带补种（按它给的日期），图表一开始就有历史深度。
+    一天一个点、同天再采到新值覆盖（一次采集里先拿旧值、补采拿新值是常态）。
+    fresh 是本轮新拿到的 traffic 片段：里面可能带 SimilarWeb 自带的月度排名历史，
+    按它给的日期补种，图表一开始就有三个月深度。
     """
     at = now if now is not None else time.time()
     rows: list[dict[str, Any]] = [
         {
             "captured_at": at,
-            "visits": traffic.get("monthly_visits"),
-            "visits_source": traffic.get("visits_source") or "",
-            "rank": traffic.get("rank"),
-            "rank_source": traffic.get("rank_source") or "",
+            "visits": values.get("monthly_visits"),
+            "visits_source": values.get("visits_source") or "",
+            "rank": values.get("rank"),
+            "rank_source": values.get("rank_source") or "",
         }
     ]
-    for item in traffic.get("sw_rank_history") or []:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            continue
-        stamp = _iso_day_stamp(str(item[0]))
-        if stamp is None:
-            continue
-        rows.append({"captured_at": stamp, "visits": None, "visits_source": "", "rank": item[1], "rank_source": "similarweb"})
+    for key, source in (("sw_rank_history", "similarweb"),):
+        for item in (fresh or {}).get(key) or []:
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+            stamp = _iso_day_stamp(str(item[0]))
+            if stamp is None:
+                continue
+            rows.append({"captured_at": stamp, "visits": None, "visits_source": "", "rank": item[1], "rank_source": source})
     return store.append_popularity_points(site_id, rows)
 
 
@@ -768,7 +751,7 @@ def record_popularity(store, site_id: str, payload: dict[str, Any]) -> None:
     entry = _merge_payload(previous, payload)
     doc[site_id] = entry
     store.set_document(POPULARITY_DOC, doc)
-    record_points(store, site_id, entry.get("traffic") or {})
+    record_points(store, site_id, entry.get("traffic") or {}, payload.get("traffic") or {})
 
 
 def record_traffic(store, site_id: str, traffic: dict[str, Any]) -> None:
@@ -785,7 +768,7 @@ def record_traffic(store, site_id: str, traffic: dict[str, Any]) -> None:
     entry["traffic"] = _merge_traffic(previous.get("traffic") or {}, traffic)
     doc[site_id] = entry
     store.set_document(POPULARITY_DOC, doc)
-    record_points(store, site_id, entry["traffic"])
+    record_points(store, site_id, entry["traffic"], traffic)
 
 
 def remove_popularity(store, site_id: str) -> None:
@@ -946,7 +929,7 @@ def topup_pending(
             if fresh.get("rank"):
                 parts.append(f"全网排名 {fresh['rank']}")
             elif fresh.get("rank_checked_at"):
-                parts.append("Tranco 未收录")
+                parts.append("上游未收录该站排名")
             tasklog.emit(f"[{spec.id}] 补采：{'，'.join(parts)}")
         pending = pending_traffic(store, config, since=since, due=due)
         if progressed == 0:
@@ -993,7 +976,7 @@ def scan_popularity(
     """逐站采集一轮人气：全部站点（含未启用，选站要用），按管理页的「待补在前」顺序，
     单站失败记日志继续下一站。
 
-    每个外部源（Tranco / SimilarWeb）各自按复查期决定重查：有值 7 天、确认上游没数据 30 天；
+    SimilarWeb 的访问量与排名各自按复查期决定重查：有值 7 天、确认上游没数据 30 天；
     force=True（手动全量刷新）无视复查期逐站全查。SimilarWeb 请求按采集出口池分散
     （见 SimilarWebClient）：被限流的出口冻结换下一个；主轮跑完还剩没拿到结论的站，
     等出口额度回补自动补采（topup_pending，上限 POPULARITY_TOPUP_SECONDS），补不完的

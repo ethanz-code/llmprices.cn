@@ -1,6 +1,6 @@
 """站点人气：群链接/群号提取、Telegram 人数与访问量/排名解析、写库合并、接口与清理。
 
-不真发外部请求：httpx 全走 MockTransport，TRANCO_INTERVAL_SECONDS 压到 0 免等。
+不真发外部请求：httpx 全走 MockTransport，SimilarWeb 用假客户端替换。
 """
 import time
 from pathlib import Path
@@ -16,7 +16,6 @@ from llm_price_monitor.popularity import (
     collect_site,
     extract_groups,
     fetch_telegram_stats,
-    fetch_tranco_rank,
     fetch_visits_estimate,
     record_popularity,
     record_traffic,
@@ -121,7 +120,6 @@ def test_fetch_telegram_stats_skips_invite_links_and_failures():
 
 def test_collect_site_drops_dead_telegram_username(monkeypatch):
     """t.me 上不存在的用户名（Contact 占位页）不进群列表；正常抓取失败的保留（下轮还能补）。"""
-    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "t.me":
@@ -136,17 +134,6 @@ def test_collect_site_drops_dead_telegram_username(monkeypatch):
         payload = collect_site(_spec(), client)
     assert payload is not None
     assert [group["label"] for group in payload["groups"]] == ["@flaky_group"]
-
-
-def test_fetch_tranco_rank_parses_and_tolerates_failure():
-    """200 有值=排名；200 但榜单为空=上游明确没收录（settled）；查询失败不算结论。"""
-    payload = {"ranks": [{"date": "2026-10-13", "rank": 461591}]}
-    with _client(lambda request: httpx.Response(200, json=payload)) as client:
-        assert fetch_tranco_rank("302.ai", client) == pop.RankResult(461591, True)
-    with _client(lambda request: httpx.Response(429)) as client:
-        assert fetch_tranco_rank("302.ai", client) == pop.RankResult()  # 限流：下轮重试
-    with _client(lambda request: httpx.Response(200, json={"ranks": []})) as client:
-        assert fetch_tranco_rank("tokenage.ai", client) == pop.RankResult(None, True)
 
 
 def test_fetch_visits_estimate_parses_scale_and_handles_missing():
@@ -312,7 +299,6 @@ def _status_payload(chat_link: str) -> dict:
 
 
 def test_collect_site_scans_status_payload_and_homepage(monkeypatch):
-    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/status":
@@ -339,20 +325,18 @@ def test_collect_site_scans_status_payload_and_homepage(monkeypatch):
         },
         {"type": "qq", "url": "", "label": "QQ 群 12345678"},
     ]
-    assert {key: payload["traffic"][key] for key in ("rank", "rank_source", "monthly_visits", "visits_source")} == {
-        "rank": 88888,
-        "rank_source": "tranco",
+    # 没接 SimilarWeb 客户端时只有 hypestat 兜底的访问量；排名随 SimilarWeb 一起来，这里没有
+    assert {key: payload["traffic"][key] for key in ("monthly_visits", "visits_source")} == {
         "monthly_visits": 12_500,
         "visits_source": "hypestat",
     }
-    # 两个外部源都记了结论时间（复盘查期用）
-    assert payload["traffic"]["rank_checked_at"] > 0 and payload["traffic"]["visits_checked_at"] > 0
+    assert payload["traffic"]["visits_checked_at"] > 0
+    assert "rank" not in payload["traffic"]
     assert payload["checked_at"] > 0
 
 
 def test_collect_site_falls_back_to_notice_text(monkeypatch):
     """站点接口与首页都打不开时，已存公告里的群号仍能写库；公告也没有才返回 None。"""
-    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
 
     def dead(request: httpx.Request) -> httpx.Response:
         if request.url.host in {"tranco-list.eu", "hypestat.com"}:
@@ -428,7 +412,7 @@ def test_needs_query_settles_sources_separately():
             "visits_source": "similarweb",
             "visits_checked_at": fresh,
             "rank": 500_000,
-            "rank_source": "tranco",
+            "rank_source": "similarweb",
             "rank_checked_at": fresh,
         },
         "checked_at": fresh,
@@ -446,16 +430,17 @@ def test_needs_query_settles_sources_separately():
     assert pop.needs_query({"traffic": {"monthly_visits": 100, "visits_checked_at": fresh}, "checked_at": fresh}) is True
 
 
-def test_collect_site_rechecks_each_source_on_its_own_schedule(monkeypatch):
-    """collect_site：两个源都新鲜时不打外部；某一源到复查期只打那一源；force 全打。"""
-    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
+def test_collect_site_rechecks_traffic_on_schedule(monkeypatch):
+    """访问量与排名同源于 SimilarWeb：任一信号到复查期就打一次查询，两个信号都没到期就不打。"""
     now = time.time()
-    counts = {"tranco": 0, "hypestat": 0}
+    counts = {"hypestat": 0, "sw": 0}
+
+    class FakeSW:
+        def visits_with_retry(self, domain, label):
+            counts["sw"] += 1
+            return pop.TrafficResult("ok", 1234, 0.1, (("2026-07-01", 500_000),), 480_000)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "tranco-list.eu":
-            counts["tranco"] += 1
-            return httpx.Response(200, json={"ranks": [{"rank": 12345}]})
         if request.url.host == "hypestat.com":
             counts["hypestat"] += 1
             return httpx.Response(404)
@@ -466,25 +451,26 @@ def test_collect_site_rechecks_each_source_on_its_own_schedule(monkeypatch):
             "monthly_visits": 100,
             "visits_source": "similarweb",
             "visits_checked_at": now,
-            "rank": 500_000,
-            "rank_source": "tranco",
+            "rank": 480_000,
+            "rank_source": "similarweb",
             "rank_checked_at": now,
         },
         "checked_at": now,
     }
     with _client(handler) as client:
-        # 两个源都在复查期内：一个外部请求都不打（payload 不带 traffic，合并时保留旧值）
-        payload = collect_site(_spec(), client, previous=current)
+        # 两个信号都在复查期内：一次外部查询都不打
+        payload = collect_site(_spec(), client, previous=current, similarweb=FakeSW())
         assert payload is not None and payload["traffic"] == {}
-        assert counts == {"tranco": 0, "hypestat": 0}
-        # 访问量到复查期：只打访问量源（SimilarWeb 没接 → hypestat），Tranco 不动
+        assert counts == {"hypestat": 0, "sw": 0}
+        # 访问量到复查期：打一次 SimilarWeb（排名跟着一起刷新），不走 hypestat
         aged = {**current, "traffic": {**current["traffic"], "visits_checked_at": now - 8 * 86_400}}
-        payload = collect_site(_spec(), client, previous=aged)
-        assert counts == {"tranco": 0, "hypestat": 1}
-        # force：两个源都重查
-        payload = collect_site(_spec(), client, previous=current, force=True)
-        assert counts == {"tranco": 1, "hypestat": 2}
-        assert payload is not None and payload["traffic"]["rank"] == 12345
+        payload = collect_site(_spec(), client, previous=aged, similarweb=FakeSW())
+        assert counts == {"hypestat": 0, "sw": 1}
+        assert payload is not None and payload["traffic"]["monthly_visits"] == 1234
+        assert payload["traffic"]["rank"] == 480_000 and payload["traffic"]["rank_source"] == "similarweb"
+        # force：两个信号都重查（还是同一次查询）
+        payload = collect_site(_spec(), client, previous=current, force=True, similarweb=FakeSW())
+        assert counts == {"hypestat": 0, "sw": 2}
 
 
 def test_scan_order_pending_first():
@@ -587,7 +573,7 @@ def test_popularity_admin_orders_pending_first_and_flags_no_data(workspace: Path
 
 def test_manual_collect_endpoint_uses_popularity_job(workspace: Path, monkeypatch):
     """手动触发走人气任务体，结果进任务记录；force=全量刷新透传给任务体。"""
-    import llm_price_monitor.webapi.routes.collect as collect_routes
+    import llm_price_monitor.webapi.jobs as jobs
 
     captured: dict[str, bool] = {}
 
@@ -595,7 +581,8 @@ def test_manual_collect_endpoint_uses_popularity_job(workspace: Path, monkeypatc
         captured["force"] = force
         return lambda: {"sites": 1, "groups": 2, "visits": 1, "ranked": 1, "failed": 0, "skipped": 0}
 
-    monkeypatch.setattr(collect_routes, "popularity_scan_job", fake_job)
+    # 任务体统一登记在 webapi/job_registry，构建时经 jobs 模块取用：打桩打在 jobs 上
+    monkeypatch.setattr(jobs, "popularity_scan_job", fake_job)
     client = TestClient(_app(workspace))
     assert client.post("/api/setup", json={"username": "admin", "password": "s3cret"}).status_code == 200
     submitted = client.post("/api/collect/popularity", json={})
@@ -646,7 +633,6 @@ def test_scan_popularity_records_and_isolates_failures(tmp_path, monkeypatch):
     """整轮采集：成功的站写库，失败的站保留旧数据并计数，单站异常不打断。"""
     import llm_price_monitor.popularity as popularity
 
-    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
     # 不真发外部请求：SimilarWeb 轻客户端直连一律当作被拒（测试环境没有出口池）
     monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: None)
     monkeypatch.setattr(popularity.httpx, "get", lambda url, **kw: httpx.Response(403, text="blocked"))
@@ -676,15 +662,11 @@ def test_topup_pending_waits_for_budget_then_fills(tmp_path, monkeypatch):
     """补采：等出口额度回补（sleep 到回补点）把没结论的站补完，拿到结论的站出列。"""
     import llm_price_monitor.popularity as popularity
 
-    monkeypatch.setattr(pop, "TRANCO_INTERVAL_SECONDS", 0)
     # 只换掉 popularity 模块里的 time（别动全局 time 模块，免得影响其他测试的线程）
     import types
 
     slept: list[float] = []
     monkeypatch.setattr(popularity, "time", types.SimpleNamespace(time=time.time, sleep=slept.append))
-    # Tranco 直接给结论（明确没收录），让排名先结算，只剩访问量待补
-    monkeypatch.setattr(popularity, "fetch_tranco_rank", lambda host, client: popularity.RankResult(None, True))
-
     class FakeClient:
         """假出口池客户端：第一次没额度要等 30 秒，之后先被限流一次再成功。"""
 
@@ -709,13 +691,12 @@ def test_topup_pending_waits_for_budget_then_fills(tmp_path, monkeypatch):
         popularity.topup_pending(store, config, FakeClient(), client, stats)
     entry = store.get_document(POPULARITY_DOC)["demo"]
     assert entry["traffic"]["monthly_visits"] == 1234
-    assert entry["traffic"]["rank_checked_at"] > 0  # Tranco 明确没收录也算结论
+    assert entry["traffic"]["rank_checked_at"] > 0  # 上游这一轮没给排名，也算结论（settled）
     assert entry["traffic"]["visits_source"] == "similarweb"
     assert entry["checked_at"] == 1.0  # 补采不动站点侧取数时间
     assert entry["groups"][0]["label"] == "QQ 群 1"  # 也不动群链接
-    assert stats["topped_up"] == 2  # 两轮各写入一条新结论（先排名、后访问量）
-    assert slept[0] == 31.0  # 第一次等窗口回补（+1 秒余量）
-    assert all(seconds == 0 for seconds in slept[1:])  # 其余是 Tranco 的间隔 sleep（测试压到 0）
+    assert stats["topped_up"] == 1  # 被限流那轮不写，额度回补后写入一条新结论
+    assert slept == [31.0]  # 第一次等窗口回补（+1 秒余量）
 
 
 def test_popularity_points_upsert_by_day_and_cap(tmp_path, monkeypatch):
@@ -777,6 +758,8 @@ def test_record_popularity_writes_points_with_sw_rank_history(tmp_path):
     assert len(points) == 3
     assert points[0]["day"] == "2026-07-01" and points[0]["rank"] == 522094 and points[0]["rank_source"] == "similarweb"
     assert points[-1]["visits"] == 1234 and points[-1]["rank"] == 88
+    # 历史序列不落库（只在拿到的那一轮用来补种）
+    assert "sw_rank_history" not in store.get_document(POPULARITY_DOC)["demo"]["traffic"]
     # 补采（record_traffic）同样记点
     record_traffic(store, "demo", {"monthly_visits": 2345, "visits_source": "similarweb", "visits_checked_at": now, "rank": None, "rank_source": ""})
     assert store.popularity_points("demo")[-1]["visits"] == 2345
@@ -789,7 +772,7 @@ def test_similarweb_parse_captures_change_and_rank_history(monkeypatch):
     monkeypatch.setattr(popularity.egress, "effective_proxy", lambda: None)
     sw = pop.SimilarWebClient("test/1.0")
     payload = {
-        "overview": {"visitsTotalCount": 66918.0},
+        "overview": {"visitsTotalCount": 66918.0, "globalRank": 521_914},
         "traffic": {"visitsTotalCountChange": -0.085},
         "ranking": {
             "globalRankHistory": [
@@ -805,6 +788,7 @@ def test_similarweb_parse_captures_change_and_rank_history(monkeypatch):
         result = sw.visits_with_retry("a.test", "a")
     assert result.visits == 66918 and result.visits_change == -0.085
     assert result.rank_points == (("2026-07-01", 522094), ("2026-09-01", 521914))
+    assert result.rank == 521_914  # 当前全球排名（访问量与排名同一个响应）
 
 
 def test_pending_traffic_counts_unfinished_force_round(tmp_path):
